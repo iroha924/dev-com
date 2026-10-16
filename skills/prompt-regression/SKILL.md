@@ -7,6 +7,8 @@ metadata:
 
 # prompt-regression
 
+推奨の設定: gpt-6-luna・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ## 1. ケースと実行手段を確かめる
 
 - ケース: そのリポジトリの `prompt-cases/` などにある cases ファイル。形は `scripts/check_outputs.py` の冒頭の説明。

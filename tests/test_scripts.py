@@ -274,5 +274,72 @@ class CheckDraftConstraintsTest(unittest.TestCase):
         self.assertIn("2 回", out)
 
 
+
+class CodexStatusHookTest(unittest.TestCase):
+    SCRIPT = os.path.join(ROOT, "hooks", "codex_status.py")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def rollout(self, items):
+        path = os.path.join(self.tmp.name, "rollout.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            for item in items:
+                f.write(json.dumps(item) + "\n")
+        return path
+
+    def run_hook(self, stdin):
+        r = subprocess.run([sys.executable, self.SCRIPT], input=stdin, capture_output=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0)
+        return json.loads(r.stdout)["hookSpecificOutput"]
+
+    @staticmethod
+    def limits(used):
+        return {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+            "primary": {"used_percent": used, "window_minutes": 10080, "resets_at": 1792650928},
+            "secondary": {"used_percent": 12.0, "window_minutes": 300, "resets_at": 1792650928}}}}
+
+    def test_reports_latest_turn_and_limits(self):
+        path = self.rollout([
+            {"type": "turn_context", "payload": {"model": "gpt-6.1-sol", "effort": "medium"}},
+            self.limits(40.0),
+            {"type": "turn_context", "payload": {"model": "gpt-6-luna", "effort": "low"}},
+            self.limits(55.0),
+        ])
+        out = self.run_hook(json.dumps({"transcript_path": path, "hook_event_name": "UserPromptSubmit"}))
+        self.assertEqual(out["hookEventName"], "UserPromptSubmit")
+        text = out["additionalContext"]
+        self.assertIn("gpt-6-luna", text)
+        self.assertIn("effort low", text)
+        self.assertIn("週の枠 55% 使用", text)
+        self.assertIn("5 時間の枠 12% 使用", text)
+        self.assertNotIn("必ずそれを案内", text)
+
+    def test_active_model_from_input_wins(self):
+        path = self.rollout([{"type": "turn_context", "payload": {"model": "gpt-6.1-sol", "effort": "medium"}}])
+        text = self.run_hook(json.dumps({"transcript_path": path, "model": "gpt-6-luna"}))["additionalContext"]
+        self.assertIn("モデル gpt-6-luna", text)
+
+    def test_tight_limit_adds_the_reminder(self):
+        path = self.rollout([self.limits(85.0)])
+        self.assertIn("必ずそれを案内", self.run_hook(json.dumps({"transcript_path": path}))["additionalContext"])
+
+    def test_failures_still_exit_0(self):
+        for stdin in ("", "garbage", "[]", json.dumps({"transcript_path": os.path.join(self.tmp.name, "none.jsonl")})):
+            with self.subTest(stdin=stdin):
+                self.assertIn("不明", self.run_hook(stdin)["additionalContext"])
+
+    def test_broken_lines_and_tail_read(self):
+        codex_status = load("hooks/codex_status.py")
+        path = self.rollout([{"type": "turn_context", "payload": {"model": "old", "effort": "high"}}] * 50
+                            + [self.limits(30.0), {"type": "turn_context", "payload": {"model": "new", "effort": "low"}}])
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("{broken\n")
+        turn, limits = codex_status.latest_status(codex_status.read_tail_lines(path, tail_bytes=400))
+        self.assertEqual(turn["model"], "new")
+        self.assertEqual(limits["primary"]["used_percent"], 30.0)
+
+
 if __name__ == "__main__":
     unittest.main()

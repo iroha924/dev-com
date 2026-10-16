@@ -1,0 +1,128 @@
+"""Codex の UserPromptSubmit のフック。いまのモデル・effort・利用枠の使用率を 1 行で文脈に足す。
+
+Codex のモデルは、自分のモデル名・effort・利用枠の残りを見られない。AGENTS.md の「モデルと effort の案内」を
+実際の値で判断できるよう、その会話の rollout（transcript_path）から読んで渡す。
+
+読むもの（rollout は公開された仕様ではなく、Codex の内部の形式）:
+  - turn_context の model / effort: 直前のターンの設定
+  - event_msg の token_count の rate_limits: primary / secondary の used_percent・window_minutes・resets_at
+
+どんな失敗でも終了コード 0 で終わる。フックの失敗で依頼を止めないため。読めなかった値は「不明」と書く。
+出力は hookSpecificOutput.additionalContext の JSON（公式は素のテキストも受け付けるが、Codex で動作を確かめた形に揃える）。
+"""
+
+import datetime
+import json
+import os
+import sys
+
+TAIL_BYTES = 8 * 1024 * 1024
+WINDOW_NAMES = {300: "5 時間の枠", 10080: "週の枠"}
+# 使用率がこれ以上なら、軽い設定を優先して案内するよう添える。
+TIGHT_PERCENT = 80
+
+
+def read_tail_lines(path, tail_bytes=TAIL_BYTES):
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        start = max(0, size - tail_bytes)
+        f.seek(start)
+        data = f.read()
+    lines = data.split(b"\n")
+    if start > 0:
+        lines = lines[1:]  # 途中から読んだ最初の行は切れている
+    return lines
+
+
+def latest_status(lines):
+    """後ろから見て、最後の turn_context と、最後の rate_limits を返す。"""
+    turn = None
+    limits = None
+    for raw in reversed(lines):
+        if turn is not None and limits is not None:
+            break
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            item = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(item, dict):
+            continue
+        payload = item.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if turn is None and item.get("type") == "turn_context":
+            turn = payload
+        elif (
+            limits is None
+            and item.get("type") == "event_msg"
+            and payload.get("type") == "token_count"
+            and isinstance(payload.get("rate_limits"), dict)
+        ):
+            limits = payload["rate_limits"]
+    return turn, limits
+
+
+def describe_window(window):
+    if not isinstance(window, dict) or window.get("used_percent") is None:
+        return None
+    minutes = window.get("window_minutes")
+    name = WINDOW_NAMES.get(minutes, "%s 分の枠" % minutes if minutes else "枠")
+    text = "%s %d%% 使用" % (name, round(float(window["used_percent"])))
+    resets = window.get("resets_at")
+    if isinstance(resets, (int, float)):
+        at = datetime.datetime.fromtimestamp(resets).strftime("%m/%d %H:%M")
+        text += "（リセット %s）" % at
+    return text, float(window["used_percent"])
+
+
+def build_message(hook_input, turn, limits):
+    model = hook_input.get("model") or (turn or {}).get("model") or "不明"
+    effort = (turn or {}).get("effort") or "不明"
+    parts = ["モデル %s" % model, "effort %s（直前のターンの値）" % effort]
+    tight = False
+    windows = []
+    if isinstance(limits, dict):
+        for key in ("primary", "secondary"):
+            described = describe_window(limits.get(key))
+            if described:
+                windows.append(described[0])
+                tight = tight or described[1] >= TIGHT_PERCENT
+    parts.append(" / ".join(windows) if windows else "利用枠 不明")
+    line = "[利用状況] " + "、".join(parts) + "。"
+    line += "作業の段階が変わるなら、AGENTS.md の「モデルと effort の案内」に従って先に案内する。"
+    if tight:
+        line += "枠が残り少ないので、軽い設定（gpt-6-luna）で足りる段階は必ずそれを案内する。"
+    return line
+
+
+def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    try:
+        hook_input = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        hook_input = {}
+    if not isinstance(hook_input, dict):
+        hook_input = {}
+    turn = limits = None
+    path = hook_input.get("transcript_path")
+    if isinstance(path, str) and path:
+        try:
+            turn, limits = latest_status(read_tail_lines(path))
+        except OSError:
+            pass
+    try:
+        message = build_message(hook_input, turn, limits)
+    except Exception:  # 形の変わった値で落ちても、依頼は止めない
+        message = "[利用状況] 不明。作業の段階が変わるなら、AGENTS.md の「モデルと effort の案内」に従って先に案内する。"
+    event = hook_input.get("hook_event_name") or "UserPromptSubmit"
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -7,9 +7,13 @@
 
 [mcp_servers.ADO_SERVER]
 default_tools_approval_mode = "prompt"
+# 使うツールだけに絞る。MCP のツールの定義は毎回の文脈に入るので、使わないツールを外すとその分の利用枠が減る。
+# PR の作成やボードの更新に使っているツールは残す。名前は /mcp の一覧で確かめる。
+# enabled_tools = ["READ_TOOL_1", "READ_TOOL_2", "CREATE_PR_TOOL", "UPDATE_WORK_ITEM_TOOL"]
 
 [mcp_servers.ADO_SERVER.tools.READ_TOOL_1]
 approval_mode = "approve"
 
 [mcp_servers.ADO_SERVER.tools.READ_TOOL_2]
 approval_mode = "approve"
+

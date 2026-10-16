@@ -7,6 +7,8 @@ metadata:
 
 # prompt-lint
 
+推奨の設定: gpt-6-luna・low。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ## 流す
 
 ```powershell

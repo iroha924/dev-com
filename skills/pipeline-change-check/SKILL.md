@@ -7,6 +7,8 @@ metadata:
 
 # pipeline-change-check
 
+推奨の設定: gpt-6-luna・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ADO の読み取りは `ado` skill の手順に従う。**サーバーへ送るのは `ado.ps1 preview` だけ。**`write` でパイプラインを実行しない。
 YAML の解析器は自分で書かない。展開と構文の判定はサーバーに任せる。
 

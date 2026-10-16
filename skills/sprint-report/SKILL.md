@@ -7,6 +7,8 @@ metadata:
 
 # sprint-report
 
+推奨の設定: gpt-6-luna・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ADO の読み取りは `ado` skill の手順に従う。**このスキルは何も書き込まない。**
 Project と Team は、リポジトリの中なら `ado_context.py` と Team 一覧から決める。Team が複数あって決まらなければ聞く。
 

@@ -7,6 +7,8 @@ metadata:
 
 # ado
 
+推奨の設定: gpt-6-luna・low（読み書きだけのとき。呼び出し元の skill があれば、そちらの推奨に従う）。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ## 前提（2026-10-16 に一次情報で確認）
 
 - Azure DevOps Server 2020 の REST は **6.0 まで**。7.x のサンプルを api-version だけ書き換えても動く保証は無い。エンドポイントとバージョンは [references/endpoints.md](references/endpoints.md)。

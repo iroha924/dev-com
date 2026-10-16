@@ -7,6 +7,8 @@ metadata:
 
 # writing-quality
 
+推奨の設定: 社外向け・重要な文章は gpt-6.1-sol・medium、チャットの返信や短い文は gpt-6-luna・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ## この skill が防ぐ失敗
 
 | 失敗 | 読み手に起きること |

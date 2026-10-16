@@ -122,6 +122,19 @@ class SkillLayoutTest(unittest.TestCase):
             with self.subTest(path=os.path.relpath(path, ROOT)):
                 self.assertIsNone(fence, "閉じていないコードフェンスがある")
 
+    def test_each_skill_recommends_a_setting(self):
+        # AGENTS.md の「モデルと effort の案内」は、skill を使い始めるときにこの行と今の設定を比べる。
+        for name in skill_dirs():
+            text = read(os.path.join(SKILLS, name, "SKILL.md"))
+            with self.subTest(skill=name):
+                m = re.search(r"(?m)^推奨の設定: (.+)$", text)
+                self.assertIsNotNone(m, "推奨の設定の行が無い")
+                pairs = re.findall(r"(gpt-[\w.-]+)・(\w+)", m.group(1))
+                self.assertTrue(pairs, "モデル・effort の組が書かれていない")
+                for model, effort in pairs:
+                    self.assertIn(model, {"gpt-6-luna", "gpt-6.1-sol"})
+                    self.assertIn(effort, {"low", "medium", "high"})
+
     def test_referenced_scripts_exist(self):
         pattern = re.compile(r"\$HOME\\\.agents\\skills\\([\w-]+)\\scripts\\([\w.]+)")
         for path in markdown_files():
@@ -159,7 +172,17 @@ class AgentLayoutTest(unittest.TestCase):
                 except ImportError:
                     continue
                 data = tomllib.loads(text)
-                self.assertEqual(set(data), {"name", "description", "developer_instructions"})
+                # 子に効くキーのうち、このパッケージが使うものだけ（sandbox と承認は親を引き継ぎ、書いても効かない）。
+                self.assertLessEqual(set(data), {"name", "description", "developer_instructions", "model", "model_reasoning_effort"})
+                self.assertIn(data.get("model", "gpt-6-luna"), {"gpt-6-luna", "gpt-6.1-sol"})
+                self.assertIn(data.get("model_reasoning_effort", "medium"), {"low", "medium", "high"})
+
+
+    def test_reading_agents_use_the_light_model(self):
+        # 大量に読む役は luna に固定する。消すと、何もしなくても減っていた分が黙って戻る。
+        for name in ("researcher", "incident-evidence-analyst", "prose-reviewer"):
+            with self.subTest(agent=name):
+                self.assertRegex(read(os.path.join(AGENTS, name + ".toml")), r'(?m)^model = "gpt-6-luna"$')
 
 
 class PowerShellFilesTest(unittest.TestCase):

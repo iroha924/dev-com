@@ -7,6 +7,10 @@
     skills\<name>\       -> $HOME\.agents\skills\<name>\
     agents\<name>.toml   -> <CODEX_HOME>\agents\<name>.toml   (CODEX_HOME defaults to $HOME\.codex)
     AGENTS.md            -> <CODEX_HOME>\AGENTS.md
+    hooks\codex_status.py -> <CODEX_HOME>\hooks\hirata-codex\codex_status.py
+  and writes <CODEX_HOME>\hooks.json for that hook when no hooks.json exists yet. An existing
+  hooks.json is never changed, not even with -Force, because it may hold other hooks; the lines
+  to add are printed instead. Codex runs the hook only after you trust it in /hooks.
 
   A target that already exists with different content is left alone unless -Force is given.
   With -Force the old copy is moved to $HOME\.hirata-codex-backup\<timestamp>\ first. The backup
@@ -113,6 +117,41 @@ foreach ($file in (Get-ChildItem -LiteralPath (Join-Path $source 'agents') -Filt
 Write-Host "AGENTS.md -> $codexHome"
 Install-One (Join-Path $source 'AGENTS.md') (Join-Path $codexHome 'AGENTS.md')
 
+$hookScript = Join-Path (Join-Path (Join-Path $codexHome 'hooks') 'hirata-codex') 'codex_status.py'
+Write-Host "Hook    -> $hookScript"
+Install-One (Join-Path (Join-Path $source 'hooks') 'codex_status.py') $hookScript
+
+# The hook needs a real Python; the Microsoft Store stub under WindowsApps only opens the Store.
+$python = Get-Command python -ErrorAction SilentlyContinue
+$launcher = Get-Command py -ErrorAction SilentlyContinue
+$hookCommand = $null
+if ($python -and $python.Source -notmatch 'WindowsApps') {
+    $hookCommand = '"' + $python.Source + '" "' + $hookScript + '"'
+} elseif ($launcher) {
+    $hookCommand = '"' + $launcher.Source + '" -3 "' + $hookScript + '"'
+}
+
+$hooksJson = Join-Path $codexHome 'hooks.json'
+if (-not $hookCommand) {
+    Write-Host "skipped    $hooksJson  (Python was not found; install Python and rerun)"
+    $script:skipped++
+} elseif (Test-Path -LiteralPath $hooksJson) {
+    if ((Get-Content -LiteralPath $hooksJson -Raw) -match 'codex_status\.py') {
+        Write-Host "unchanged  $hooksJson  (already has the codex_status.py hook)"
+    } else {
+        Write-Host "skipped    $hooksJson  (exists; add this handler under hooks.UserPromptSubmit yourself):"
+        Write-Host ('  {"hooks": [{"type": "command", "command": ' + (ConvertTo-Json $hookCommand) + ', "timeout": 10}]}')
+        $script:skipped++
+    }
+} elseif ($script:cmdlet.ShouldProcess($hooksJson, 'write')) {
+    $handler = [ordered]@{ type = 'command'; command = $hookCommand; timeout = 10 }
+    $config = [ordered]@{ hooks = [ordered]@{ UserPromptSubmit = @([ordered]@{ hooks = @($handler) }) } }
+    $text = ConvertTo-Json -InputObject $config -Depth 6
+    # UTF-8 without a BOM: Windows PowerShell 5.1 Set-Content would add one.
+    [IO.File]::WriteAllText($hooksJson, $text, (New-Object System.Text.UTF8Encoding $false))
+    Write-Host "installed  $hooksJson  (open /hooks in Codex and trust the hook once)"
+}
+
 # Files copied from a zip or a download carry the "from the internet" mark, which blocks scripts.
 if (-not $WhatIfPreference -and [Environment]::OSVersion.Platform -eq 'Win32NT') {
     try {
@@ -127,8 +166,6 @@ if (-not $WhatIfPreference -and [Environment]::OSVersion.Platform -eq 'Win32NT')
 Write-Host ''
 Write-Host "PowerShell $($PSVersionTable.PSVersion)"
 
-$python = Get-Command python -ErrorAction SilentlyContinue
-$launcher = Get-Command py -ErrorAction SilentlyContinue
 if ($python -and $python.Source -notmatch 'WindowsApps') {
     Write-Host "python     $($python.Source)"
 } elseif ($launcher) {
@@ -149,5 +186,5 @@ Write-Host ''
 if ($script:skipped -gt 0) {
     Write-Host "$($script:skipped) item(s) were skipped because they already exist with different content."
 }
-Write-Host 'Restart Codex to load the skills and agents.'
+Write-Host 'Restart Codex to load the skills and agents, then open /hooks and trust the codex_status.py hook.'
 Write-Host 'For per-tool MCP approval, see config\mcp-approval.example.toml.'

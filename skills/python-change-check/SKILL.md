@@ -7,6 +7,8 @@ metadata:
 
 # python-change-check
 
+推奨の設定: 検査を流すまで gpt-6-luna・low、差分から拾うところから gpt-6-luna・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ## 1. 検査を探す
 
 上から順に探し、最初に見つかったものを正とする。

@@ -7,6 +7,8 @@ metadata:
 
 # root-cause
 
+推奨の設定: bisect を回すまで gpt-6-luna・low、原因のコミットを読んで説明するところから gpt-6.1-sol・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ## bisect は共有の作業ツリーで走らせない
 
 HEAD が過去のコミットへ動くので、**並行に走っている他の作業（エディタ、別の Codex）が別のバージョンのコードを読む。**

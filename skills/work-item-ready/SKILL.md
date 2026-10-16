@@ -7,6 +7,8 @@ metadata:
 
 # work-item-ready
 
+推奨の設定: gpt-6.1-sol・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+
 ADO の読み書きは `ado` skill の手順に従う。
 
 ## 1. 読む
