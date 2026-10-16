@@ -583,7 +583,8 @@ class Index:
             except OSError:
                 continue
             row = self.db.execute("SELECT size, mtime_ns, status FROM files WHERE path = ?", (path,)).fetchone()
-            retry = row and row["status"] == "zst_unreadable" and zstd is not None
+            # 読めなかった .zst が読めるようになった、または「原本なし」にしたファイルが戻ってきたら、読み直す
+            retry = row and ((row["status"] == "zst_unreadable" and zstd is not None) or row["status"] == "missing")
             if row and row["size"] == st.st_size and row["mtime_ns"] == st.st_mtime_ns and not retry:
                 if row["status"] == "zst_unreadable":
                     report["zst_unreadable"] += 1
@@ -613,8 +614,11 @@ class Index:
             report["updated"] += 1
         for path in memory_files(home):
             report["files"] += 1
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue  # 一覧を作った後に消された
             seen.add(path)
-            st = os.stat(path)
             row = self.db.execute("SELECT size, mtime_ns FROM files WHERE path = ?", (path,)).fetchone()
             if row and row["size"] == st.st_size and row["mtime_ns"] == st.st_mtime_ns:
                 continue
@@ -624,7 +628,8 @@ class Index:
                 continue
             self._replace(path, home, meta, messages, {}, st, "ok")
             report["updated"] += 1
-        # 原本が見つからなくなったファイル（archive への移動は別のパスで取り込み済み）
+        # 原本が見つからなくなったファイル（archive への移動は別のパスで取り込み済み）。
+        # memories は会話から作り直される要約で、Codex が消したものは古くなった要点なので、索引からも消す。
         for row in self.db.execute("SELECT path, thread_id, status FROM files WHERE codex_home = ?", (home,)).fetchall():
             if row["path"] in seen:
                 continue
@@ -634,7 +639,7 @@ class Index:
                 "SELECT path FROM files WHERE thread_id = ? AND codex_home = ? AND path != ? AND status IN ('ok', 'partial')",
                 (row["thread_id"], home, row["path"])).fetchall() if r["path"] in seen)
             with self.db:
-                if moved or row["status"] == "forgotten":
+                if moved or row["status"] == "forgotten" or (row["thread_id"] or "").startswith("memory:"):
                     self._delete_path(row["path"])
                     self.db.execute("DELETE FROM files WHERE path = ?", (row["path"],))
                 elif row["status"] != "missing":

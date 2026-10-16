@@ -659,6 +659,37 @@ class ReviewFindingsTest(_Base):
                            capture_output=True, encoding="utf-8", env=env)
         self.assertFalse(json.loads(r.stdout)["results"])  # B に残った本文も、子の会話のまま
 
+    def test_restored_file_is_no_longer_missing(self):
+        path = self.write(T1, paginated(T1, [("おおるり", "答え", None)]))
+        self.search("おおるり")
+        backup = path + ".bak"
+        shutil.move(path, backup)
+        self.assertTrue(any("原本が見つからない" in c for c in self.search("おおるり")["coverage"]))
+        shutil.move(backup, path)
+        self.assertFalse(any("原本が見つからない" in c for c in self.search("おおるり")["coverage"]))
+
+    def test_deleted_memory_leaves_the_index(self):
+        os.makedirs(os.path.join(self.home, "memories"))
+        mem = os.path.join(self.home, "memories", "old.md")
+        with open(mem, "w", encoding="utf-8") as f:
+            f.write("# 古い要点\n\nこまどり\n")
+        self.assertTrue(self.search("こまどり")["results"])
+        os.remove(mem)
+        out = self.search("こまどり")
+        self.assertFalse(out["results"])
+        self.assertFalse(any("原本が見つからない" in c for c in out["coverage"]), out["coverage"])
+
+    def test_memory_removed_during_ingest_does_not_crash(self):
+        os.makedirs(os.path.join(self.home, "memories"))
+        idx = self.idx()
+        saved = ss.memory_files
+        try:
+            ss.memory_files = lambda home: [os.path.join(home, "memories", "gone.md")]
+            idx.ingest(self.home)
+        finally:
+            ss.memory_files = saved
+            idx.close()
+
 
 class SemanticLayerTest(unittest.TestCase):
     """SudachiPy が入っている環境でだけ、単語の BM25 の経路を確かめる。"""
