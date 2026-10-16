@@ -259,12 +259,12 @@ flowchart LR
 ```
 
 - 取り込むのは、ユーザーの依頼・最終の回答（・途中の回答）と、Codex の memories が書いた要点のファイル。ツールやコマンドの出力、推論、AGENTS.md などの差し込みは入れない。シークレットらしい値（PAT の形、`Authorization`、`Bearer`、`password=`、URL の中の資格情報、秘密鍵）は伏せてから入れる。
-- 取り込みは検索のたびに、増えた・変わった記録だけ。元の記録は Codex のものが正で、索引は消しても `rebuild` で作り直せる。原本が消えた会話は、索引に残して「原本なし」と表示する。
+- 取り込みは検索のたびに、増えた・変わった記録だけ。元の記録は Codex のものが正で、索引は消しても `rebuild` で作り直せる。原本が消えた会話（`codex delete` で消したものも）は索引に残して検索し、出力のまとめに「原本が見つからない会話 N 本」と出す。検索から外すのは `forget`。
 - 圧縮された記録（`.jsonl.zst`）は Python 3.14 で読む。手元の Mac では、記録の約 85% が圧縮されていた。3.14 が無い Python で動いたときは、3.14（`py -3.14`、`python3.14`、`mise exec python@3.14`）を探して自分を起動し直す。見つからなければ、読めなかった数を出す。
 
 ### 方式と、評価で決めた理由
 
-`evals/session-search/` に評価の道具がある。持ち主の仕事に近いモックの会話 150 本と問い 120 件（同じ言葉・言い換え・2 文字の言葉・英語混じり・識別子・似た会話の見分け）と、手元の Mac の実際の会話 1,017 本から作った問い 60 件（リポジトリには入れていない）で比べた。正解の会話が何位に来るかで数える（R@1・R@10 は 1 位・10 位以内に入った割合、MRR は 1 / 順位の平均）。最後の 2 行は、組み込んだ `session_search.py` の検索そのものを測った値。
+`evals/session-search/` に評価の道具がある。持ち主の仕事に近いモックの会話 150 本と問い 120 件（同じ言葉・言い換え・2 文字の言葉・英語混じり・識別子・似た会話の見分け）と、手元の Mac の実際の会話 1,017 本から作った問い 60 件（リポジトリには入れていない）で比べた。正解の会話が何位に来るかで数える（R@1・R@10 は 1 位・10 位以内に入った割合、MRR は 1 / 順位の平均）。2 行目と 5 行目は、組み込んだ `session_search.py` の検索そのものを測った値。ほかの行は、評価の道具の中で各方式を単独で組んだ値。
 
 | 方法 | モック R@1 | モック R@10 | モック MRR | 実際 R@1 | 実際 R@10 | 実際 MRR |
 |---|---|---|---|---|---|---|
@@ -296,7 +296,7 @@ python "$HOME\.agents\skills\session-search\scripts\session_search.py" setup
 python "$HOME\.agents\skills\session-search\scripts\session_search.py" index
 ```
 
-- `setup` は `%LOCALAPPDATA%\hirata-codex\venv` に専用の環境を作る。元にする Python は 3.14 を優先する（圧縮された記録を読むため）。入れるバージョンは評価で使ったものに固定している（SudachiPy 0.7.0、sudachidict-core 20260723.1、sentence-transformers 6.1.0、transformers 5.18.0、tokenizers 0.23.2、torch 2.14.1、numpy 2.4.6。どれも 2026-10-01 より前の公開）。
+- `setup` は `%LOCALAPPDATA%\hirata-codex\venv` に専用の環境を作る。元にする Python は 3.14 を優先し、無ければ 3.13、3.11 の順に探す（3.14 でないと圧縮された記録を読めないので、そのときは注意を出す）。`--python` で指定したときは、それだけを使う。入れるバージョンは評価で使ったものに固定している（SudachiPy 0.7.0、sudachidict-core 20260723.1、sentence-transformers 6.1.0、transformers 5.18.0、tokenizers 0.23.2、torch 2.14.1、numpy 2.4.6。どれも 2026-10-01 より前の公開）。
 - モデル（`cl-nagoya/ruri-v3-130m`、Apache-2.0）は `%LOCALAPPDATA%\hirata-codex\models\ruri-v3-130m` に置く。会社のネットワークから Hugging Face に届かないときは、別の PC で `hf download cl-nagoya/ruri-v3-130m --local-dir <フォルダ>` で取ってきたフォルダを、そこに置けば使える（Hugging Face の取得には `huggingface.co` のほかに CDN のホストも要る）。
 - `index` は、取り込み・単語の区切り・埋め込みを全部済ませる。最初の一度は、会話の量によって数分〜数十分かかる。
 - 専用の環境があると、`session_search.py` は自動でその環境の Python で動き直す。
@@ -336,7 +336,7 @@ min_rate_limit_remaining_percent = 40
 - 「9 月に ECONNRESET の原因を調べたやつ、何だった？」（期間で絞る）
 - 「このリポジトリで前に `--no-verify` の話をした会話を出して」（作業フォルダで絞る）
 
-会話を検索に出したくないときは、`session_search.py forget <thread_id>`。Codex の記録そのものは消えない（消すなら `codex delete <thread_id>`）。`forget` は検索に出なくするところまでで、索引のファイルから痕跡を消すなら `rebuild` で作り直す。
+会話を検索に出したくないときは、`session_search.py forget <thread_id>`。Codex の記録そのものは消えない。逆に `codex delete` で Codex の記録を消しても索引には残るので、検索から外すのは `forget` で行う。`forget` は検索に出なくするところまでで、索引のファイルから痕跡を消すなら `rebuild` で作り直す（全文検索の表も作り直す）。
 
 ## skill の詳細
 

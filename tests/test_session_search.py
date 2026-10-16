@@ -45,7 +45,7 @@ def paginated(tid, turns, cwd="C:\\work\\ci", originator="codex-tui", agent=None
     return "\n".join(out) + "\n"
 
 
-class SessionSearchTest(unittest.TestCase):
+class _Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -77,6 +77,8 @@ class SessionSearchTest(unittest.TestCase):
         self.write(T2, paginated(T2, [("ＥＣＯＮＮＲＥＳＥＴ が出る", "原因はロードバランサーの idle timeout 60 秒だった。", None),
                                       ("障害の報告を書いて", "障害報告: 9/26 に証明書が切れた。", None)]))
 
+
+class SessionSearchTest(_Base):
     # 取り込み
 
     def test_reads_users_finals_and_skips_images(self):
@@ -198,6 +200,213 @@ class SessionSearchTest(unittest.TestCase):
         text = json.dumps(out, ensure_ascii=False)
         self.assertNotIn("abcd1234efgh", text)
         self.assertNotIn("hunter22", text)
+
+
+class ReviewFindingsTest(_Base):
+    """レビューで見つかった欠陥の再現（直す前のコードで落ちることを確かめた）。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_quoted_and_json_secrets_are_redacted(self):
+        for text, secret in [('password="correct horse battery staple"', "battery"),
+                             ("password = ' spaced secret'", "spaced"),
+                             ('{"Authorization": "Basic dXNlcjpwYXNz"}', "dXNlcjpwYXNz"),
+                             ('{"token": "abcd efgh ijkl"}', "efgh")]:
+            self.assertNotIn(secret, ss.redact(text), text)
+
+    def test_hex_hashes_are_not_redacted(self):
+        import hashlib
+        for h in (hashlib.sha384(b"x").hexdigest(), hashlib.sha512(b"x").hexdigest()[:80]):
+            self.assertEqual(ss.redact(h), h)
+
+    def test_unknown_element_appended_to_ok_file_still_updates(self):
+        path = self.write(T1, paginated(T1, [("最初の依頼", "最初の答え", None)]))
+        self.assertTrue(self.search("最初の依頼")["results"])
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(paginated(T1, [("後から足した依頼 ふくろう", "後の答え", [{"type": "audio", "data": "x"}])]).split("\n", 1)[1])
+        out = self.search("ふくろう")
+        self.assertTrue(out["results"])
+        self.assertTrue(any("形の分からない" in c for c in out["coverage"]), out["coverage"])
+
+    def test_unreadable_zst_is_retried_when_reader_appears(self):
+        path = self.write(T1, "x", suffix=".jsonl.zst")
+        idx = self.idx()
+        saved = ss.zstd
+        try:
+            ss.zstd = None
+            self.assertEqual(idx.ingest(self.home)["zst_unreadable"], 1)
+
+            class Fake:
+                @staticmethod
+                def decompress(_):
+                    return paginated(T1, [("圧縮の中の依頼", "答え", None)]).encode()
+            ss.zstd = Fake
+            report = idx.ingest(self.home)
+            self.assertEqual(report["zst_unreadable"], 0)
+            self.assertEqual(report["updated"], 1)
+        finally:
+            ss.zstd = saved
+            idx.close()
+
+    def test_forgotten_memory_stays_forgotten_after_update(self):
+        os.makedirs(os.path.join(self.home, "memories"))
+        mem = os.path.join(self.home, "memories", "notes.md")
+        with open(mem, "w", encoding="utf-8") as f:
+            f.write("# 決めたこと\n\nかもめの方針\n")
+        self.assertTrue(self.search("かもめ")["results"])
+        self.assertEqual(self.run_cli("forget", "memory:notes.md")[0], 0)
+        with open(mem, "a", encoding="utf-8") as f:
+            f.write("追記\n")
+        os.utime(mem, (1, 1))
+        self.search("かもめ")
+        idx = self.idx()
+        self.assertEqual(idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = 'memory:notes.md'").fetchone()[0], 0)
+        idx.close()
+
+    def _two_homes(self):
+        other = os.path.join(self.tmp.name, "codex2")
+        for h in (self.home, other):
+            os.makedirs(os.path.join(h, "memories"), exist_ok=True)
+            with open(os.path.join(h, "memories", "notes.md"), "w", encoding="utf-8") as f:
+                f.write("# メモ\n\nうみねこ %s\n" % os.path.basename(h))
+        self.write(T1, paginated(T1, [("ひみつの依頼 うみねこ", "答え", None)]))
+        self.search("うみねこ")
+        env = dict(self.env, CODEX_HOME=other)
+        subprocess.run([sys.executable, SCRIPT, "search", "--budget", "0", "うみねこ"], capture_output=True, env=env)
+        return other, env
+
+    def test_forget_is_scoped_to_codex_home(self):
+        other, env = self._two_homes()
+        subprocess.run([sys.executable, SCRIPT, "forget", "memory:notes.md"], capture_output=True, env=env)
+        kinds = [r["kind"] for r in self.search("うみねこ")["results"]]
+        self.assertIn("memory", kinds)
+
+    def test_show_is_scoped_to_codex_home(self):
+        other, env = self._two_homes()
+        r = subprocess.run([sys.executable, SCRIPT, "show", "%s/u1" % T1], capture_output=True, encoding="utf-8", env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("ひみつの依頼", r.stdout)
+
+    def test_cwd_filter_respects_folder_boundary(self):
+        self.write(T1, paginated(T1, [("やまびこ 本体", "答え", None)], cwd="C:\\work\\app"))
+        self.write(T2, paginated(T2, [("やまびこ 子", "答え", None)], cwd="C:\\work\\app\\child"))
+        self.write(T3, paginated(T3, [("やまびこ 古い", "答え", None)], cwd="C:\\work\\app-old"))
+        refs = {r["ref"].split("/")[0] for r in self.search("--cwd", "C:\\work\\app", "やまびこ")["results"]}
+        self.assertEqual(refs, {T1, T2})
+
+    def test_show_memory_in_subfolder(self):
+        os.makedirs(os.path.join(self.home, "memories", "rollout_summaries"))
+        with open(os.path.join(self.home, "memories", "rollout_summaries", "demo.md"), "w", encoding="utf-8") as f:
+            f.write("# 要点\n\nつばめの話\n")
+        ref = self.search("つばめ")["results"][0]["ref"]
+        code, out = self.run_cli("show", ref)
+        self.assertEqual(code, 0, out)
+        self.assertIn("つばめ", out)
+
+    def test_date_filter_with_fractional_seconds(self):
+        bound = ss._date_arg("2026-10-01")
+        frac = bound.replace("Z", ".123Z")
+        self.write(T1, paginated(T1, [("ひばり", "答え", None)], ts=frac))
+        self.assertTrue(self.search("--since", "2026-10-01", "ひばり")["results"])
+        self.assertFalse(self.search("--until", "2026-09-30", "ひばり")["results"])
+
+    def test_python_option_accepts_path_with_spaces(self):
+        d = os.path.join(self.tmp.name, "First Last")
+        os.makedirs(d)
+        exe = os.path.join(d, "python")
+        os.symlink(sys.executable, exe)
+        self.assertEqual(ss.python_command(exe), [exe])
+        self.assertEqual(ss.python_command("py -3.14"), ["py", "-3.14"])
+
+    def test_model_dir_needs_the_files(self):
+        os.makedirs(os.path.join(self.tmp.name, "data", "models", ss.EMBED_MODEL_DIR))
+        os.environ["HIRATA_CODEX_DATA"] = os.path.join(self.tmp.name, "data")
+        try:
+            self.assertFalse(ss.model_ready())
+        finally:
+            del os.environ["HIRATA_CODEX_DATA"]
+
+
+    def test_subagents_by_agent_type_and_source_are_hidden(self):
+        a = paginated(T1, [("子の依頼 とんび", "答え", None)]).replace('"agent_role": null', '"agent_type": "worker"')
+        b = paginated(T2, [("子の依頼 とんび", "答え", None)]).replace('"agent_role": null', '"source": {"subagent": "review"}')
+        self.write(T1, a)
+        self.write(T2, b)
+        self.assertFalse(self.search("とんび")["results"])
+        self.assertEqual(len(self.search("--include-agents", "とんび")["results"]), 2)
+
+    def test_legacy_without_turn_id_marks_every_final(self):
+        rows = [line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})]
+        for n in (1, 2, 3):
+            rows += [line("2026-09-01T01:00:00Z", "event_msg", {"type": "user_message", "message": "依頼%d" % n}),
+                     line("2026-09-01T01:00:00Z", "event_msg", {"type": "agent_message", "message": "答え%d" % n}),
+                     line("2026-09-01T01:00:00Z", "event_msg", {"type": "task_complete", "last_agent_message": "答え%d" % n})]
+        _, msgs, _ = ss.parse_rollout("x", ("\n".join(rows) + "\n").encode())
+        self.assertEqual([m["kind"] for m in msgs if m["text"].startswith("答え")], ["final"] * 3)
+
+    def test_two_files_of_one_thread_are_not_doubled(self):
+        text = paginated(T1, [("ひよどりの依頼", "答え", None)])
+        self.write(T1, text)
+        self.write(T1, text, sub=("archived_sessions",))
+        out = self.search("ひよどり")
+        self.assertEqual(len(out["results"]), 1)
+        idx = self.idx()
+        self.assertEqual(idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (T1,)).fetchone()[0], 2)
+        idx.close()
+
+    def test_rebuild_clears_words_of_forgotten_threads(self):
+        self.write(T1, paginated(T1, [("qzxjvwkp の話", "答え", None)]))
+        self.search("qzxjvwkp")
+        self.run_cli("forget", T1)
+        self.run_cli("rebuild")
+        self.search("別の言葉")
+        con = __import__("sqlite3").connect(self.db)
+        for table in ("msg_fts_data", "words_fts_data"):
+            try:
+                blobs = b"".join(r[0] or b"" for r in con.execute("SELECT block FROM %s" % table))
+            except Exception:
+                continue
+            self.assertNotIn(b"qzxjvwkp", blobs, table)
+            self.assertNotIn(b"xjv", blobs, table)
+        con.close()
+
+    def test_no_embedding_notice_without_the_environment(self):
+        self.basic_corpus()
+        out = self.search("再実行")
+        self.assertFalse(any("埋め込み" in c for c in out["coverage"]), out["coverage"])
+
+    def test_broken_venv_falls_back(self):
+        venv = ss.venv_python().replace(ss.data_dir(), os.path.join(self.tmp.name, "data"))
+        os.makedirs(os.path.dirname(venv))
+        with open(venv, "w") as f:
+            f.write("#!/bin/sh\nexit 103\n")
+        os.chmod(venv, 0o755)
+        self.basic_corpus()
+        env = dict(self.env)
+        env.pop("HIRATA_CODEX_SEARCH_REEXEC")
+        r = subprocess.run([sys.executable, SCRIPT, "search", "--json", "--budget", "0", "再実行"],
+                           capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(json.loads(r.stdout)["results"])
+
+    def test_one_thread_takes_at_most_three_slots(self):
+        self.write(T1, paginated(T1, [("かささぎ %d" % n, "かささぎの答え %d" % n, None) for n in range(5)]))
+        self.write(T2, paginated(T2, [("かささぎ 別", "答え", None)]))
+        refs = [r["ref"].split("/")[0] for r in self.search("--limit", "10", "かささぎ")["results"]]
+        self.assertEqual(refs.count(T1), ss.MAX_HITS_PER_THREAD)
+        self.assertIn(T2, refs)
+
+    def test_since_until_use_local_dates(self):
+        self.write(T1, paginated(T1, [("むくどり", "答え", None)], ts=ss._date_arg("2026-09-10").replace("Z", ".5Z")))
+        self.assertTrue(self.search("--since", "2026-09-10", "--until", "2026-09-10", "むくどり")["results"])
+        self.assertFalse(self.search("--until", "2026-09-09", "むくどり")["results"])
+        self.assertFalse(self.search("--since", "2026-09-11", "むくどり")["results"])
+
+    def test_forget_message_does_not_promise_codex_delete_removes_it(self):
+        self.basic_corpus()
+        code, out = self.run_cli("forget", T1)
+        self.assertNotIn("消すなら codex delete", out)
 
 
 class SemanticLayerTest(unittest.TestCase):

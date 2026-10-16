@@ -70,15 +70,18 @@ _SECRET_PATTERNS = [
     # 秘密鍵のブロック
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[REDACTED-PRIVATE-KEY]"),
     # Authorization ヘッダーと Bearer トークン
-    (re.compile(r"(?i)(authorization\s*[:=]\s*)(basic|bearer|ntlm|negotiate)?\s*[A-Za-z0-9._~+/=-]{8,}"), r"\1\2 [REDACTED]"),
+    (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)(basic|bearer|ntlm|negotiate)?\s*[A-Za-z0-9._~+/=-]{8,}"), r"\1\2 [REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
-    # password= / "password": "..." / $password = '...' / 接続文字列の Password=
+    # password= / "password": "..." / $password = '...' / 接続文字列の Password=。引用符があれば閉じるまで伏せる
+    (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)[\"']?\s*[:=]\s*)(\"[^\"\n]{1,200}\"|'[^'\n]{1,200}')"),
+     r"\1\"[REDACTED]\""),
     (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,]{4,})"), r"\1[REDACTED]"),
     # URL に埋め込まれた資格情報
     (re.compile(r"(?i)(https?://)[^\s/@:]+:[^\s/@]+@"), r"\1[REDACTED]@"),
     # Azure DevOps の PAT らしい長い英数字（旧形式は 52 文字の小文字と数字、新形式は 84 文字前後）
     (re.compile(r"(?<![A-Za-z0-9])[a-z2-7]{52}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
-    (re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9]{76,100}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
+    # 16 進だけの並び（SHA-384 などのハッシュ）は伏せない
+    (re.compile(r"(?<![A-Za-z0-9])(?=[A-Za-z0-9]*[g-zG-Z])[A-Za-z0-9]{76,100}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
 ]
 
 
@@ -124,6 +127,20 @@ def model_dir():
     return os.path.join(data_dir(), "models", EMBED_MODEL_DIR)
 
 
+def model_ready():
+    """モデルのフォルダに、読み込みに要るファイルが揃っているか（取得の途中で止まったフォルダを使わない）。"""
+    d = model_dir()
+    return all(os.path.exists(os.path.join(d, f)) for f in ("config.json", "modules.json", "model.safetensors"))
+
+
+def python_command(value):
+    """\"py -3.14\" のようなコマンドか、空白を含むかもしれない実行ファイルのパスを、引数の並びにする。"""
+    value = value.strip().strip('"')
+    if os.path.isfile(value):
+        return [value]
+    return value.split()
+
+
 def rollout_files(home):
     out = []
     for sub in ("sessions", "archived_sessions"):
@@ -152,7 +169,7 @@ REEXEC_ENV = "HIRATA_CODEX_SEARCH_REEXEC"
 
 def zstd_interpreters():
     if os.environ.get("HIRATA_CODEX_PYTHON"):
-        yield os.environ["HIRATA_CODEX_PYTHON"].split()
+        yield python_command(os.environ["HIRATA_CODEX_PYTHON"])
     if os.name == "nt":
         yield ["py", "-3.14"]
     yield ["python3.14"]
@@ -165,8 +182,15 @@ def maybe_reexec(home, argv):
         return None
     venv = venv_python()
     if os.path.exists(venv) and os.path.abspath(sys.executable) != os.path.abspath(venv):
-        env = dict(os.environ, **{REEXEC_ENV: venv})
-        return subprocess.run([venv, os.path.abspath(__file__)] + argv, env=env).returncode
+        # 元の Python を消した環境などで止まらないように、起動できるかを先に確かめる。だめならこの Python で続ける。
+        try:
+            usable = subprocess.run([venv, "-c", "import sqlite3"], stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=60).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            usable = False
+        if usable:
+            env = dict(os.environ, **{REEXEC_ENV: venv})
+            return subprocess.run([venv, os.path.abspath(__file__)] + argv, env=env).returncode
     if zstd is not None:
         return None
     if not any(p.endswith(".zst") for p in rollout_files(home)):
@@ -271,7 +295,12 @@ def parse_rollout(path, data):
             git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
             meta["branch"] = git.get("branch")
             meta["originator"] = payload.get("originator")
-            meta["agent"] = payload.get("agent_role") or payload.get("agent_path") or None
+            src = payload.get("source")
+            sub_agent = src.get("subagent") if isinstance(src, dict) else None
+            if sub_agent is not None and not isinstance(sub_agent, str):
+                sub_agent = "subagent"
+            meta["agent"] = (payload.get("agent_role") or payload.get("agent_path") or payload.get("agent_type")
+                             or sub_agent or None)
             meta["history_mode"] = payload.get("history_mode")
             meta["cli_version"] = payload.get("cli_version")
             meta.setdefault("started", ts)
@@ -311,15 +340,18 @@ def parse_rollout(path, data):
                 pending_task_complete.append((payload.get("turn_id") or turn_id, last, i, ts, cwd))
 
     # 最終の回答の印（phase=final_answer）が無いターンは、task_complete の last_agent_message を最終の回答にする。
+    # turn_id の無い古い記録は全部のターンが None になるので、ターンで済みかを見ず、その行より前の発言だけを見る。
     for tid, last, line_no, ts, tcwd in pending_task_complete:
-        if tid in finals_by_turn:
+        if tid is not None and tid in finals_by_turn:
             continue
         # 同じ本文の途中の回答があれば、それを最終の回答に格上げする（二重に持たない）。
         promoted = False
-        for msg in messages:
-            if msg["turn_id"] == tid and msg["kind"] == "commentary" and msg["text"].strip() == last.strip():
+        for msg in reversed(messages):
+            if (msg["turn_id"] == tid and msg["line"] < line_no and msg["text"].strip() == last.strip()
+                    and msg["kind"] in ("commentary", "final")):
                 msg["kind"] = "final"
                 promoted = True
+                break
         if not promoted:
             saved_turn, saved_cwd = turn_id, cwd
             turn_id, cwd = tid, tcwd
@@ -381,7 +413,7 @@ class Semantic:
     def embedder(self):
         if self._emb is None and self._emb_error is None:
             path = model_dir()
-            if not os.path.isdir(path):
+            if not model_ready():
                 self._emb_error = "モデルが無い（%s）。setup で取ってくる" % path
                 return None
             try:
@@ -456,6 +488,16 @@ class Index:
             CREATE TABLE IF NOT EXISTS word_done (message_id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS vectors (message_id INTEGER PRIMARY KEY, model TEXT, vec BLOB);
         """)
+        self._create_fts()
+        versions = dict(db.execute("SELECT key, value FROM meta").fetchall())
+        if versions.get("schema") != SCHEMA_VERSION or versions.get("extract") != EXTRACT_VERSION:
+            self.reset_extracted()
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)", (SCHEMA_VERSION,))
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('extract', ?)", (EXTRACT_VERSION,))
+            db.commit()
+
+    def _create_fts(self):
+        db = self.db
         if not self._has_table("words_fts"):
             try:
                 db.execute("CREATE VIRTUAL TABLE words_fts USING fts5(words, tokenize='unicode61 remove_diacritics 0')")
@@ -467,12 +509,8 @@ class Index:
             except sqlite3.OperationalError:
                 pass  # FTS5 か trigram が無い SQLite。instr() だけで検索する。
         db.commit()
-        versions = dict(db.execute("SELECT key, value FROM meta").fetchall())
-        if versions.get("schema") != SCHEMA_VERSION or versions.get("extract") != EXTRACT_VERSION:
-            self.reset_extracted()
-            db.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)", (SCHEMA_VERSION,))
-            db.execute("INSERT OR REPLACE INTO meta VALUES ('extract', ?)", (EXTRACT_VERSION,))
-            db.commit()
+        self.fts = self._has_table("msg_fts")
+        self.words = self._has_table("words_fts")
 
     def reset_extracted(self):
         """取り込んだ内容を捨てて、次の取り込みで全部を読み直させる。原本が読めない会話の分は残す。"""
@@ -496,7 +534,8 @@ class Index:
             except OSError:
                 continue
             row = self.db.execute("SELECT size, mtime_ns, status FROM files WHERE path = ?", (path,)).fetchone()
-            if row and row["size"] == st.st_size and row["mtime_ns"] == st.st_mtime_ns:
+            retry = row and row["status"] == "zst_unreadable" and zstd is not None
+            if row and row["size"] == st.st_size and row["mtime_ns"] == st.st_mtime_ns and not retry:
                 if row["status"] == "zst_unreadable":
                     report["zst_unreadable"] += 1
                 elif row["status"] == "partial":
@@ -520,10 +559,7 @@ class Index:
                 continue
             status = "partial" if counters["shape_errors"] else "ok"
             if status == "partial":
-                report["partial"] += 1
-                prev = self.db.execute("SELECT status FROM files WHERE path = ?", (path,)).fetchone()
-                if prev and prev["status"] == "ok":
-                    continue  # 前に問題なく読めた内容を、形の分からない読み直しで置き換えない
+                report["partial"] += 1  # 分かる部分は取り込み、形の分からない要素の数を出す
             self._replace(path, home, meta, messages, counters, st, status)
             report["updated"] += 1
         for path in memory_files(home):
@@ -534,6 +570,9 @@ class Index:
             if row and row["size"] == st.st_size and row["mtime_ns"] == st.st_mtime_ns:
                 continue
             meta, messages = parse_memory(path, home)
+            if meta["thread_id"] in forgotten:
+                self._record_file(path, home, meta, st, "forgotten", {}, {})
+                continue
             self._replace(path, home, meta, messages, {}, st, "ok")
             report["updated"] += 1
         # 原本が見つからなくなったファイル（archive への移動は別のパスで取り込み済み）
@@ -544,7 +583,7 @@ class Index:
                 "SELECT 1 FROM files WHERE thread_id = ? AND path != ? AND status IN ('ok','partial')",
                 (row["thread_id"], row["path"])).fetchone()
             with self.db:
-                if moved or row["status"] == "forgotten":
+                if moved or row["status"] in ("forgotten", "duplicate"):
                     self._delete_path(row["path"])
                     self.db.execute("DELETE FROM files WHERE path = ?", (row["path"],))
                 elif row["status"] != "missing":
@@ -580,10 +619,14 @@ class Index:
         with self.db:  # 1 ファイル 1 トランザクション。失敗したら前の内容が残る。
             self._delete_path(path)
             tid = meta["thread_id"]
-            # archive への移動: 同じ会話を前のパスで持っていれば、そちらを消す（パスの付け替え）。
-            for old in self.db.execute("SELECT path FROM files WHERE thread_id = ? AND path != ?", (tid, path)).fetchall():
-                if not os.path.exists(old["path"]):
-                    self._delete_path(old["path"])
+            # 同じ会話を別のパスで持っていれば、そちらを消す。archive への移動なら記録ごと、両方のファイルが
+            # あるなら（.jsonl と .jsonl.zst など）中身だけを消して duplicate にし、変わるまで読み直さない。
+            for old in self.db.execute("SELECT path FROM files WHERE thread_id = ? AND codex_home = ? AND path != ?",
+                                       (tid, home, path)).fetchall():
+                self._delete_path(old["path"])
+                if os.path.exists(old["path"]):
+                    self.db.execute("UPDATE files SET status = 'duplicate' WHERE path = ?", (old["path"],))
+                else:
                     self.db.execute("DELETE FROM files WHERE path = ?", (old["path"],))
             self.db.execute(
                 "INSERT INTO threads (thread_id, codex_home, cwd, branch, originator, agent, started) "
@@ -669,15 +712,26 @@ class Index:
     def forget(self, home, thread_id):
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO forgotten VALUES (?, ?, ?)", (home, thread_id, _now()))
-            for row in self.db.execute("SELECT path FROM files WHERE thread_id = ?", (thread_id,)).fetchall():
+            for row in self.db.execute("SELECT path FROM files WHERE thread_id = ? AND codex_home = ?",
+                                       (thread_id, home)).fetchall():
                 self._delete_path(row["path"])
                 self.db.execute("UPDATE files SET status = 'forgotten' WHERE path = ?", (row["path"],))
-            self.db.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
+            self.db.execute("DELETE FROM threads WHERE thread_id = ? AND codex_home = ?", (thread_id, home))
 
     def rebuild(self):
-        """取り込んだ内容を作り直す。forget の一覧と、原本が消えた会話の分は残す。"""
+        """取り込んだ内容を作り直す。forget の一覧と、原本が消えた会話の分は残す。
+
+        全文検索の表は、消した行の言葉が内部の区画に残ることがあるので、捨てて作り直す。
+        """
         with self.db:
-            self.db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'zst_unreadable')")
+            self.db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'zst_unreadable', 'duplicate')")
+            self.db.execute("DROP TABLE IF EXISTS msg_fts")
+            self.db.execute("DROP TABLE IF EXISTS words_fts")
+            self.db.execute("DELETE FROM word_done")
+        self._create_fts()
+        if self.fts:
+            with self.db:
+                self.db.execute("INSERT INTO msg_fts (rowid, norm) SELECT id, norm FROM messages")
         self.db.execute("VACUUM")
 
     # 検索
@@ -688,16 +742,16 @@ class Index:
         forgotten = self.forgotten(home)
         where = ["m.codex_home = ?", "m.kind IN (%s)" % ",".join("?" * len(kinds))]
         params = [home] + list(kinds)
-        if since:
-            where.append("m.ts >= ?")
+        if since:  # 小数秒や +00:00 の書き方の違いがあるので、文字列ではなく時刻として比べる
+            where.append("julianday(m.ts) >= julianday(?)")
             params.append(since)
         if until:
-            where.append("m.ts < ?")
+            where.append("julianday(m.ts) < julianday(?)")
             params.append(until)
-        if cwd:
-            where.append("(lower(m.cwd) = ? OR lower(m.cwd) LIKE ? ESCAPE '\\')")
+        if cwd:  # そのフォルダと、その下だけ（app を指定して app-old を含めない）
+            where.append("(lower(m.cwd) = ? OR lower(m.cwd) LIKE ? ESCAPE '\\' OR lower(m.cwd) LIKE ? ESCAPE '\\')")
             c = cwd.rstrip("/\\").lower()
-            params += [c, _like_escape(c) + "%"]
+            params += [c, _like_escape(c + "\\") + "%", _like_escape(c + "/") + "%"]
         if not include_agents:
             where.append("(t.agent IS NULL OR t.agent = '')")
         base_sql = ("FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id WHERE " + " AND ".join(where))
@@ -779,10 +833,10 @@ class Index:
         first = next((l.strip(" #") for l in row["text"].splitlines() if l.strip(" #")), "")
         return "（最初の依頼）" + (first[:40] + "…" if len(first) > 40 else first)
 
-    def turn_messages(self, thread_id, around_id, context):
+    def turn_messages(self, home, thread_id, around_id, context):
         rows = self.db.execute(
             "SELECT m.*, t.name, t.branch, t.originator FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id "
-            "WHERE m.thread_id = ? ORDER BY m.ts, m.line", (thread_id,)).fetchall()
+            "WHERE m.codex_home = ? AND m.thread_id = ? ORDER BY m.ts, m.line", (home, thread_id)).fetchall()
         turns = []
         for r in rows:
             if not turns or turns[-1][0] != (r["turn_id"] or r["msg_id"]):
@@ -848,7 +902,7 @@ def _local(ts):
 
 
 def parse_query(parts):
-    """空白で区切った語の AND と、"..." の語句。演算子は解釈しない。"""
+    """空白で区切った言葉と、"..." の語句に分ける。演算子は解釈しない（どれかを含めば候補になる）。"""
     text = " ".join(parts)
     terms = []
     i = 0
@@ -911,7 +965,9 @@ def open_index(args, update=True, sem=None, budget=None):
             report = idx.ingest(home)
             if sem is not None:
                 idx.fill_words(sem.tokenizer(), home)
-                report["embed_remaining"] = idx.fill_vectors(sem.embedder(), home, budget=budget)
+                encode = sem.embedder()
+                if encode is not None:
+                    report["embed_remaining"] = idx.fill_vectors(encode, home, budget=budget)
         except sqlite3.OperationalError as e:
             note = "索引を更新できなかった（%s）。前の索引で検索した" % e
     return idx, report, note
@@ -923,7 +979,8 @@ def coverage_lines(idx, home, report, note):
     if note:
         lines.append("注意: " + note)
     if cov["zst_unreadable"]:
-        lines.append("注意: 圧縮された記録 %d 本を読めなかった（Python 3.14 で流せば読める）" % cov["zst_unreadable"])
+        lines.append("注意: 圧縮された記録 %d 本を読めなかった（Python 3.14 が要る。専用の環境があるなら、"
+                     "setup --python で 3.14 を指定して作り直す）" % cov["zst_unreadable"])
     if cov["partial"] or cov["shape_errors"] or cov["bad_json"]:
         lines.append("注意: 形の分からない発言 %d 件・壊れた行 %d 行（%d 本のファイル）は検索に入っていない"
                      % (cov["shape_errors"], cov["bad_json"], cov["partial"]))
@@ -935,7 +992,9 @@ def coverage_lines(idx, home, report, note):
     if report and report["errors"]:
         lines.append("注意: 読めなかったファイル %d 本（%s ほか）" % (len(report["errors"]), report["errors"][0]))
     reexec = os.environ.get(REEXEC_ENV)
-    if reexec:
+    if reexec and os.path.abspath(reexec) == os.path.abspath(venv_python()):
+        lines.append("参考: 専用の環境（%s）で動かした" % reexec)
+    elif reexec:
         lines.append("参考: 圧縮された記録を読むため %s で動かした" % reexec)
     return lines
 
@@ -985,10 +1044,10 @@ def cmd_show(args):
     if "/" not in args.ref:
         print("参照は <thread_id>/<発言 ID> の形", file=sys.stderr)
         return 2
-    thread_id, msg_id = args.ref.split("/", 1)
+    thread_id, msg_id = args.ref.rsplit("/", 1)
     home = codex_home()
     idx, report, note = open_index(args)
-    turns = idx.turn_messages(thread_id, msg_id, args.context)
+    turns = idx.turn_messages(home, thread_id, msg_id, args.context)
     if thread_id in idx.forgotten(home) or turns is None:
         print("見つからない: %s" % args.ref, file=sys.stderr)
         return 1
@@ -1067,16 +1126,15 @@ def cmd_index(args):
 def cmd_setup(args):
     """専用の環境（SudachiPy、sentence-transformers、torch）を作り、ruri-v3-130m を取ってくる。"""
     target = os.path.dirname(os.path.dirname(venv_python()))
-    candidates = []
     if args.python:
-        candidates.append(args.python.split())
-    if os.name == "nt":
-        candidates += [["py", "-3.14"], ["py", "-3.13"], ["py", "-3.11"]]
-    candidates += [["python3.14"], ["mise", "exec", "python@3.14", "--", "python"], [sys.executable]]
+        candidates = [python_command(args.python)]  # 指定されたものだけを使う。使えなければ止まる
+    else:
+        candidates = ([["py", "-3.14"]] if os.name == "nt" else []) + [["python3.14"], ["mise", "exec", "python@3.14", "--", "python"]]
+        candidates += ([["py", "-3.13"], ["py", "-3.11"]] if os.name == "nt" else []) + [[sys.executable]]
     base = None
     for cmd in candidates:
         try:
-            ok = subprocess.run(cmd + ["-c", "import sys, sqlite3, venv; assert sys.version_info >= (3, 10)"],
+            ok = subprocess.run(cmd + ["-c", "import sys, sqlite3, venv; assert sys.version_info >= (3, 11)"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60).returncode == 0
         except (OSError, subprocess.SubprocessError):
             ok = False
@@ -1084,17 +1142,28 @@ def cmd_setup(args):
             base = cmd
             break
     if base is None:
-        print("Python 3.10 以上が見つからない", file=sys.stderr)
+        print("Python 3.11 以上が見つからない（%s）" % ("指定: " + args.python if args.python else "3.14 を優先して探した"),
+              file=sys.stderr)
         return 1
     print("専用の環境: %s（元の Python: %s）" % (target, " ".join(base)))
-    if not os.path.exists(venv_python()):
-        if subprocess.run(base + ["-m", "venv", target]).returncode != 0:
+    zstd_probe = ["-c", "import compression.zstd"]
+    base_zstd = subprocess.run(base + zstd_probe, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    if not base_zstd:
+        print("注意: この Python（3.14 より前）では、圧縮された記録（.jsonl.zst）を読めない。"
+              "3.14 を入れて setup --python で指定し直すと読める")
+    exists = os.path.exists(venv_python())
+    if exists and base_zstd and subprocess.run([venv_python()] + zstd_probe, stdout=subprocess.DEVNULL,
+                                               stderr=subprocess.DEVNULL).returncode != 0:
+        print("今の専用の環境は 3.14 より前の Python なので、3.14 で作り直す")
+        exists = False
+    if not exists:
+        if subprocess.run(base + ["-m", "venv", "--clear", target]).returncode != 0:
             return 1
     pip = [venv_python(), "-m", "pip", "install", "--disable-pip-version-check", "--only-binary", ":all:"]
     if subprocess.run(pip + SEMANTIC_REQUIREMENTS).returncode != 0:
         print("ライブラリを入れられなかった。会社のプロキシや PyPI のミラーの設定を確かめる", file=sys.stderr)
         return 1
-    if os.path.isdir(model_dir()):
+    if model_ready():
         print("モデルはすでにある: %s" % model_dir())
     else:
         code = ("from huggingface_hub import snapshot_download; "
@@ -1113,7 +1182,8 @@ def cmd_forget(args):
         print("索引に書けないので除外できない: %s" % note, file=sys.stderr)
         return 1
     idx.forget(codex_home(), args.thread_id)
-    print("除外した: %s（rollout は消していない。消すなら codex delete %s）" % (args.thread_id, args.thread_id))
+    print("除外した: %s（Codex の記録そのものは消していない。Codex の記録を消しても、この索引には残るので、"
+          "検索から外すのは forget で行う）" % args.thread_id)
     idx.close()
     return 0
 
@@ -1145,14 +1215,14 @@ def build_parser():
     p.add_argument("--db", help="索引のファイル（既定は %s）" % default_db_path())
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("search", help="検索する")
-    s.add_argument("terms", nargs="+", help="検索ワード（空白区切りの AND、\"...\" で語句。- で始まる言葉は、オプションを全部書いた後に -- を置き、その後ろに書く）")
+    s.add_argument("terms", nargs="+", help="検索ワード（どれかを含めば候補になり、多く含むほど上に来る。\"...\" で語句。- で始まる言葉は、オプションを全部書いた後に -- を置き、その後ろに書く）")
     s.add_argument("--since", help="この日から（YYYY-MM-DD、ローカルの日付）")
     s.add_argument("--until", help="この日まで（YYYY-MM-DD、その日を含む）")
     s.add_argument("--cwd", help="作業フォルダで絞る（下の階層も含む）。here で今のフォルダ")
     s.add_argument("--all-kinds", action="store_true", help="途中の回答も検索する")
     s.add_argument("--include-agents", action="store_true", help="子のエージェントの会話も検索する")
     s.add_argument("--question", help="持ち主が言った問いの文。埋め込みの検索に検索ワードと一緒に渡す")
-    s.add_argument("--limit", type=int, default=10)
+    s.add_argument("--limit", type=int, default=5)
     s.add_argument("--budget", type=float, default=DEFAULT_EMBED_BUDGET, help="検索の前に埋め込みを足す時間の上限（秒）")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_search)
