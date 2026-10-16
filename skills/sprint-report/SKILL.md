@@ -33,14 +33,15 @@ Project と Team は、リポジトリの中なら `ado_context.py` と Team 一
 
 集めるもの: Iteration の Work Item 全件（Team の `iterations/{iterationId}/workitems` で ID を取り、workitemsbatch で状態・種別・親を取る）、期間中に完了した PR と紐付く Work Item、未完了の Work Item のコメントと変更履歴、チームのキャパシティ（`capacities`、`teamdaysoff`、`teamsettings` の `workingDays`）。
 
-**スプリント中に足された Work Item** は、次の差で数える。初日のプランニングで入れたものは数えず、途中で足してから外したものは数える。
+**スプリント中に足された Work Item** は、次の差で数える。初日のプランニングで入れたものと、スプリントの終了後に入れたものは数えず、途中で足してから外したものは数える。
 
-1. Iteration の `path`（Team の Iteration 一覧の値）を P、`attributes.startDate` の日付の部分を開始日とする（`startDate` は日付だけの値で、時刻は意味を持たない）。初日の終わりの T0 は、開始日の翌日の 0 時（手元のタイムゾーン）を UTC にしたもの（日本時間なら前日の 15 時、`2026-10-13T15:00:00Z` の形）。
-2. A: 初日の終わりに Iteration にあったもの。Team のパスへ WIQL `SELECT [System.Id] FROM WorkItems WHERE [System.IterationPath] = '<P>' ASOF '<T0>'` を POST する。
-3. B: T0 より後に一度でも Iteration にいたもの。Reporting の `workitemrevisions?startDateTime=<T0>&fields=System.Id,System.IterationPath,System.WorkItemType` を最後まで取り、`System.IterationPath` が P のリビジョンを持つ ID を集める。
-4. 足されたもの = B − A。種別（PBI、バグ、タスク）ごとに数える。
+1. Iteration の `path`（Team の Iteration 一覧の値）を P、`attributes.startDate` と `finishDate` の日付の部分を開始日と終了日とする（どちらも日付だけの値で、時刻は意味を持たない）。初日の終わりの T0 は開始日の翌日の 0 時、終わりの T1 は終了日の翌日の 0 時を、手元のタイムゾーンから UTC にしたもの（日本時間なら前日の 15 時、`2026-10-13T15:00:00Z` の形）。
+2. チームの範囲: `teamsettings/teamfieldvalues` の `values[]` が、そのチームの Area のパス。`includeChildren` が true なら下の階層も含む。同じ Iteration を別のチームも使うので、Area で絞らないと他のチームの分が混ざる。
+3. A: 初日の終わりにチームの Iteration にあったもの。Team のパスへ WIQL `SELECT [System.Id] FROM WorkItems WHERE [System.IterationPath] = '<P>' AND (<Area の条件>) ASOF '<T0>'` を POST する。Area の条件は、値ごとに `[System.AreaPath] UNDER '<値>'`（`includeChildren` が true）か `[System.AreaPath] = '<値>'`（false）を `OR` でつなぐ。
+4. B: T0 から T1 までに一度でもチームの Iteration にいたもの。Reporting の `workitemrevisions?startDateTime=<T0>&fields=System.Id,System.IterationPath,System.AreaPath,System.WorkItemType,System.ChangedDate` を最後まで取り、`System.ChangedDate` が T1 より前で、`System.IterationPath` が P、`System.AreaPath` がチームの範囲に入るリビジョンを持つ ID を集める。
+5. 足されたもの = B − A。種別（PBI、バグ、タスク）ごとに数える。
 
-キャパシティは、メンバーごとの `activities[].capacityPerDay` の合計 ×（Iteration の稼働日 − そのメンバーの `daysOff` − チームの休日）を、チーム全体で足す。稼働日は、開始日から終了日までのうち `workingDays` の曜日に当たる日。
+キャパシティは、メンバーごとに「`activities[].capacityPerDay` の合計 × 働ける日の数」を求め、チーム全体で足す。働ける日は、開始日から終了日までの日のうち、`workingDays` の曜日に当たり、そのメンバーの `daysOff` の範囲にもチームの休日（`teamdaysoff`）の範囲にも入らない日。休みを日数で引き算しない（重なった日を二重に引き、土日も引いてしまう）。
 
 出すもの:
 

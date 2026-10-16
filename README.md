@@ -122,8 +122,8 @@ ADO を読み書きするための土台。他の skill は ADO に触れると�
 
 - daily の期間は、前の営業日の 0 時から（月曜なら金曜から）。祝日は考えないので、休み明けは期間を言うとよい。
 - スプリントゴールは ADO に標準の欄が無いので、聞かれるか、無いまま進む。
-- スプリント中に足された Work Item は、初日の終わりに Iteration にあったもの（WIQL の `ASOF`）と、その後に一度でも Iteration にいたもの（Reporting API のリビジョン）の差で数える。初日のプランニングで入れたものは数えず、途中で足してから外したものは数える。
-- キャパシティは、メンバーごとの 1 日の時間 ×（稼働日 − 個人の休み − チームの休日）の合計。稼働日はチームの設定の曜日から数える。
+- スプリント中に足された Work Item は、初日の終わりにチームの Iteration にあったもの（WIQL の `ASOF`）と、その後スプリントの終わりまでに一度でもいたもの（Reporting API のリビジョン）の差で数える。初日のプランニングで入れたもの、終了後に入れたもの、同じ Iteration を使う別のチームのもの（Area で分ける）は数えず、途中で足してから外したものは数える。
+- キャパシティは、メンバーごとの 1 日の時間 × 働ける日の数の合計。働ける日は、チームの稼働する曜日のうち、個人の休みにもチームの休日にも入らない日。
 - 個人ごとの件数や速さの比較は出さない。
 
 ### work-item-ready
@@ -249,7 +249,7 @@ Python の変更について、そのリポジトリが実際に使っている�
 - 9 つの基準（事実、要求、除外と制約、読み手の知識、用語、図と本文、目的と具体性、構成、語調）ごとに、合格 / 不合格 / 未検証 / 該当なし を付ける。点数は付けない。
 - Markdown とテキストは、同梱の `scripts/check_draft_constraints.py` で、空・テンプレートの見出しの欠け・字数・未記入の印（TODO など）・同じ段落の重複を機械で見る。
 - 複数の節がある文章、目安 500 字以上の文章、社外向けや障害・謝罪・大勢へ送る文章は、`prose-reviewer` を親の会話を引き継がせずに起動して、独立した文脈で判定させる。
-- 差分と CI から PR の本文を新しく下書きするときは、`$pr-evidence-pack` を使う（証拠を集める手順はそちらにある）。
+- PR の本文を新しく書くときは、`pr-evidence-pack` の手順で材料（差分、受け入れ条件、実行した検査、CI の結果）を集めてから書く。PR を作るところまで頼むなら `$pr-evidence-pack` を使う。
 - 送る前に下書きを見せて承認を取る。
 
 ### code-comments
@@ -265,7 +265,7 @@ git bisect で原因のコミットを探す。
 
 - 使い捨ての worktree で回す。作業中のフォルダで bisect すると、エディタや別の作業が過去のコードを読む。
 - 最初の good と bad の 2 点で、症状そのもので通る・落ちることを確かめてから進める。
-- 判定は .ps1 に書き、`git bisect run pwsh -NoProfile -File <判定.ps1>` で流す。`git bisect run` は判定のコマンドを PowerShell ではなく sh で起動するので、PowerShell の式をそのまま渡さない。
+- 判定は .ps1 に書き、`git bisect run pwsh -NoProfile -ExecutionPolicy Bypass -File <判定.ps1>` で流す。判定に使うコマンドが無いときは 128 で止める（PowerShell はコマンドが無くても先へ進み、黙って good になる）。`git bisect run` は判定のコマンドを PowerShell ではなく sh で起動するので、PowerShell の式をそのまま渡さない。
 - 未コミットの変更で起きる失敗を探すときは、差分を `git diff --binary --output=<ファイル>` で書き、判定の .ps1 の中で毎回「当てる → 判定する → 戻す」。一度だけ当てたままにすると、次のコミットへ進めない。PowerShell 5.1 と 7.3 以前はパイプと `>` で差分が壊れるので、`--output` を使う。
 
 ## custom agent
@@ -441,7 +441,7 @@ python -m unittest discover -s tests
 |---|---|
 | `tests/test_scripts.py` | Python スクリプト 6 本の動作 |
 | `tests/test_ado_ps1.py` | `ado.ps1` を手元の偽サーバーに向けて流し、送り先の制限・承認のハッシュ・Content-Type・拒否のときに送っていないことを確かめる。PowerShell が無ければ飛ばす |
-| `tests/test_layout.py` | 各 skill の形（名前と説明、説明の合計が 6,000 文字以内か、手動だけの skill の一覧と `openai.yaml` が合うか、SKILL.md が参照するスクリプトとリンクと agent があるか、**子を起動する手順に `fork_turns: "none"` があるか**）、agent の形、.ps1 が ASCII だけか |
+| `tests/test_layout.py` | 各 skill の形（名前と説明、説明の合計が 6,000 文字以内か、手動だけの skill の一覧と `openai.yaml` が合うか、SKILL.md が参照するスクリプトとリンクと agent があるか、**子を起動する段落ごとに `fork_turns: "none"` があるか**、description が YAML で途中で切れない書き方か、コードフェンスが正しく閉じているか）、agent の形、.ps1 が ASCII だけか |
 
 skill を足したり直したりしたら流す。`tests/test_layout.py` の一覧に足すものは次のとおり（足し忘れるとテストが落ちる）。
 

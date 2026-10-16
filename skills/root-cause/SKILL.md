@@ -12,18 +12,20 @@ metadata:
 HEAD が過去のコミットへ動くので、**並行に走っている他の作業（エディタ、別の Codex）が別のバージョンのコードを読む。**
 一時ディレクトリに worktree を作り、その中で回す。
 
+**以下の `C:\t\bisect-1` は、最初に決めた実際のパスに置き換えて、どのコマンドにもそのまま書く。**コマンドごとに新しいシェルで走るので、変数（`$wt` など）に入れても次のコマンドには残らない。
+判定の .ps1 と差分のファイルは、worktree の外の同じ場所に `C:\t\bisect-1.judge.ps1`、`C:\t\bisect-1.patch` の名前で置く。
+
 ```powershell
-$wt = Join-Path $env:TEMP ("bisect-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
-git worktree add --detach $wt HEAD
-git -C $wt bisect start <bad のコミット> <good のコミット>
-git -C $wt bisect run pwsh -NoProfile -File "$wt.judge.ps1"
-git -C $wt bisect log
-git -C $wt bisect reset
-git worktree remove --force $wt
+git worktree add --detach C:\t\bisect-1 HEAD
+git -C C:\t\bisect-1 bisect start <bad のコミット> <good のコミット>
+git -C C:\t\bisect-1 bisect run pwsh -NoProfile -ExecutionPolicy Bypass -File C:\t\bisect-1.judge.ps1
+git -C C:\t\bisect-1 bisect log
+git -C C:\t\bisect-1 bisect reset
+git worktree remove --force C:\t\bisect-1
 ```
 
-- Windows では、パスが長いと checkout が失敗することがある。`$env:TEMP` が深い場所なら、`C:\t` のような短い場所を使う。
-- `pwsh` が無ければ `powershell` に置き換える。
+- Windows では、パスが長いと checkout が失敗することがある。`C:\t` のような短い場所を使う。
+- `pwsh` が無ければ `powershell` に置き換える。`-ExecutionPolicy Bypass` は外さない（Windows のクライアントの既定の実行ポリシーは .ps1 を実行しない）。
 - worktree が消えないとき（判定で起動したサーバー、エディタ、ウイルス対策の検査がファイルをつかんでいる）は、そのプロセスを閉じてから `git worktree remove --force` をやり直す。それでも残れば、フォルダを消してから `git worktree prune` を流す。
 - 使い捨てなので、ログや持ち込んだ差分で汚れていても `--force` で消してよい。**消す前に、報告に要る観測（`bisect log`、判定の出力）を取り終えておく。**
 
@@ -34,10 +36,12 @@ PowerShell の式をそのまま渡すと動かないか、外側のシェルで
 
 - 終了コードの意味: 0 は good、1〜127（125 を除く）は bad、**125 は「このコミットは判定できない」で飛ばされる**、128 以上は bisect そのものが止まる。
 - スクリプトの最後で `exit` を明示する。ネイティブのコマンドの終了コードは `$LASTEXITCODE` に入る。
+- **判定に使うコマンドが見つからないときは、128 で止める。**PowerShell はコマンドが無くてもエラーを出して先へ進み、`$LASTEXITCODE` は前の値のままなので、黙って good と判定してしまう。
 - 中身は ASCII だけで書けば、PowerShell 5.1 でも 7 でも文字コードの問題が出ない。
 
 ```powershell
-# <worktree>.judge.ps1 の例: テストが通れば good、落ちれば bad
+# C:\t\bisect-1.judge.ps1 の例: テストが通れば good、落ちれば bad
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) { exit 128 }
 python -m pytest tests/test_retry.py -q
 if ($LASTEXITCODE -eq 0) { exit 0 } else { exit 1 }
 ```
@@ -46,7 +50,12 @@ if ($LASTEXITCODE -eq 0) { exit 0 } else { exit 1 }
 
 - worktree には**追跡されていないファイルが無い**（仮想環境、`.env`、ローカルの設定）。判定の前に用意する。
 - **最初の good と bad の 2 点で、症状そのもので通る・落ちることを確かめてから進める。**環境の理由で落ちるコミットを bad と判定すると、無関係なコミットを原因として返すことになる。
-  `git -C $wt checkout <コミット>` のあと、判定の .ps1 を手で流して終了コードを見る。
+  worktree の中へ移ってから流す。`git -C` は呼び出した側の場所を変えないので、そのまま流すと元の作業ツリーを判定してしまう。
+  ```powershell
+  git -C C:\t\bisect-1 checkout --detach <コミット>
+  Push-Location C:\t\bisect-1; pwsh -NoProfile -ExecutionPolicy Bypass -File C:\t\bisect-1.judge.ps1; "exit=$LASTEXITCODE"; Pop-Location
+  ```
+  `bisect start` の前に確かめる。
 
 ## 未コミットの変更で起きる失敗を探すとき
 
@@ -54,12 +63,13 @@ if ($LASTEXITCODE -eq 0) { exit 0 } else { exit 1 }
 
 1. 差分をファイルに書く。`git diff | git apply` のようにパイプで渡したり `>` で書いたりしない。PowerShell 5.1 と 7.3 以前は、ネイティブのコマンドどうしのパイプを文字列として扱い、5.1 の `>` は UTF-16 で書くので、差分が壊れる。`--output` ならどのバージョンでも壊れない。
    ```powershell
-   git diff HEAD --binary --output="$wt.patch"
+   git diff HEAD --binary --output=C:\t\bisect-1.patch
    ```
    追跡されていない新しいファイルは差分に入らない。判定の .ps1 の中で、当てる前に worktree へ写し、戻すときに消す。
 2. 判定の .ps1 で、当てる → 判定する → 戻す、の順にする。当てられないコミットは 125 で飛ばす。
    ```powershell
-   # <worktree>.judge.ps1
+   # C:\t\bisect-1.judge.ps1
+   if (-not (Get-Command python -ErrorAction SilentlyContinue)) { exit 128 }
    $patch = $PSCommandPath -replace '\.judge\.ps1$', '.patch'
    git apply $patch
    if ($LASTEXITCODE -ne 0) { exit 125 }

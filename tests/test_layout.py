@@ -29,10 +29,9 @@ def frontmatter(text):
 
 
 def markdown_files():
-    for root, _, files in os.walk(SKILLS):
-        for f in files:
-            if f.endswith(".md"):
-                yield os.path.join(root, f)
+    return sorted(
+        os.path.join(root, f) for root, _, files in os.walk(SKILLS) for f in files if f.endswith(".md")
+    )
 
 
 def skill_dirs():
@@ -93,12 +92,35 @@ class SkillLayoutTest(unittest.TestCase):
 
     def test_spawned_agents_do_not_fork_history(self):
         # spawn_agent の fork_turns は既定が "all" で、親の会話を全部引き継ぐ。子を起動する段落ごとに "none" を書く。
-        spawn = re.compile(r"custom agent の `[\w-]+`|agent_type: \"[\w-]+\"|spawn_agent")
+        # 起動する段落は「custom agent の `名前`」か「agent_type: "名前"」で役を名指しする。
+        spawn = re.compile(r"custom agent の `[\w-]+`|agent_type: \"[\w-]+\"")
+        checked = 0
         for path in markdown_files():
             for para in re.split(r"\n\s*\n", read(path)):
-                if spawn.search(para) and "を起動" in para:
+                if spawn.search(para):
+                    checked += 1
                     with self.subTest(path=os.path.relpath(path, ROOT), para=para[:60]):
                         self.assertIn('fork_turns: "none"', para, '子を起動する段落に fork_turns: "none" が無い')
+        # 検査の対象が 0 件になって黙って通るのを防ぐ（grill、writing-quality と review.md、pr-review-assist、incident-report）。
+        self.assertGreaterEqual(checked, 5)
+
+    def test_code_fences_are_well_formed(self):
+        # 閉じのつもりのフェンスの後ろに文字が続くと閉じにならず、後ろの見出しや表がコードとして表示される
+        # （CommonMark 4.5: 閉じは開きと同じ文字で同じ長さ以上、後ろは空白だけ）。入れ子のフェンスはこのリポジトリでは使わない。
+        fence_re = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+        for path in markdown_files() + [os.path.join(ROOT, "README.md"), os.path.join(ROOT, "AGENTS.md")]:
+            fence = None
+            for n, line in enumerate(read(path).splitlines(), 1):
+                m = fence_re.match(line)
+                if fence is None:
+                    if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                        fence = m.group(1)
+                elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                    with self.subTest(path=os.path.relpath(path, ROOT), line=n):
+                        self.assertEqual(m.group(2).strip(), "", "フェンスの中に、後ろに文字が続くフェンスの行がある")
+                    fence = None
+            with self.subTest(path=os.path.relpath(path, ROOT)):
+                self.assertIsNone(fence, "閉じていないコードフェンスがある")
 
     def test_referenced_scripts_exist(self):
         pattern = re.compile(r"\$HOME\\\.agents\\skills\\([\w-]+)\\scripts\\([\w.]+)")

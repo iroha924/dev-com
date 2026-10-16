@@ -6,7 +6,9 @@
 
 ```powershell
 python -c "import urllib.parse as u; print(u.quote('vstfs:///Build/Build/123', safe=''))"
-````ado.ps1` は api-version を付け忘れたら 6.0（`preview` は 6.0-preview.1）を足す。
+```
+
+`ado.ps1` は api-version を付け忘れたら 6.0（`preview` は 6.0-preview.1）を足す。
 preview のバージョンが要るものは表のバージョンを `-ApiVersion` で渡す。
 
 ## Work Item

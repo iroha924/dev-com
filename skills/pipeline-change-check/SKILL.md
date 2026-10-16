@@ -48,7 +48,7 @@ ADO preview '<project>/_apis/pipelines/<id>/runs' -BodyFile after.json -OutFile 
 
 | 見るもの | 理由 |
 |---|---|
-| ネットワークの再試行（`curl --retry`、`Invoke-WebRequest` のループ、`pip` の `--retries`）の最悪の合計時間が、ジョブの `timeoutInMinutes` の半分を超える | 相手が一度遅れただけでジョブがタイムアウトで止まり、成果物が残らない。curl なら合計は `(N+1) × max-time + 待ち時間の合計`。待ち時間は `--retry-delay D` があれば `N × D`、無ければ 1 秒から倍々（1, 2, 4…、10 分で頭打ち）の合計。`--retry-max-time` があればそれが上限 |
+| ネットワークの再試行（`curl --retry`、`Invoke-WebRequest` のループ、`pip` の `--retries`）の最悪の合計時間が、ジョブの `timeoutInMinutes` の半分を超える | 相手が一度遅れただけでジョブがタイムアウトで止まり、成果物が残らない。curl なら合計は `(N+1) × max-time + 待ち時間の合計`。待ち時間は `--retry-delay D` があれば `N × D`、無ければ 1 秒から倍々（1, 2, 4…、10 分で頭打ち）の合計。`--retry-max-time` は「次の再試行を始めるか」の期限で、始めた転送は `--max-time` まで続くので、上限は `--retry-max-time` + `--max-time` |
 | 失敗したら止める処理（`exit 1`、`failOnStderr`、`set -e`、`$ErrorActionPreference = 'Stop'`）を足したが、その経路を通すテストが無い | 書いただけでは、本当に止まるかは分からない。初めて止まるのが本番になる |
 | `powershell:` / `pwsh:` のステップで、`git` や `python` などのネイティブのコマンドの失敗を `$ErrorActionPreference = 'Stop'` で止めるつもりになっている | ネイティブのコマンドが 0 以外で終わっても、`$ErrorActionPreference` では止まらない。PowerShell 7.4 以降で `$PSNativeCommandUseErrorActionPreference = $true` にしたときだけ止まる（既定は `$false`）。それ以外は `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }` を書く |
 | CI で足した・変えた検査（lint、シークレットの検出）と、ローカルの手順やフックが別の道具・別の設定 | ローカルでは通るのに CI で落ちる、が繰り返される。揃えられないなら、その理由を YAML のコメントに書く |
