@@ -10,6 +10,11 @@ AGENTS = os.path.join(ROOT, "agents")
 
 # ado skill の「書く」の手順で ADO へ書き込む skill。名前で呼んだときだけ動くようにする。
 WRITE_SKILLS = {"pr-evidence-pack", "work-item-ready", "pr-review-assist", "incident-report"}
+# 書き込まないが、子を起動して何往復もする重い skill。
+MANUAL_SKILLS = WRITE_SKILLS | {"grill"}
+# 書き込みは本題ではなく、ユーザーが送るよう頼んだときだけ ado skill の「書く」へ渡す skill。自動で選ばれてよい。
+# 送る前のハッシュ付きの承認は ado.ps1 が強制する。
+AUTO_SKILLS_THAT_MAY_SEND = {"review-triage", "writing-quality"}
 
 
 def read(path):
@@ -20,6 +25,13 @@ def read(path):
 def frontmatter(text):
     m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
     return m.group(1) if m else None
+
+
+def markdown_files():
+    for root, _, files in os.walk(SKILLS):
+        for f in files:
+            if f.endswith(".md"):
+                yield os.path.join(root, f)
 
 
 def skill_dirs():
@@ -42,12 +54,36 @@ class SkillLayoutTest(unittest.TestCase):
         for name in skill_dirs():
             text = read(os.path.join(SKILLS, name, "SKILL.md"))
             yaml_path = os.path.join(SKILLS, name, "agents", "openai.yaml")
-            writes = name != "ado" and "「書く」" in text
+            writes = name != "ado" and name not in AUTO_SKILLS_THAT_MAY_SEND and "「書く」" in text
             with self.subTest(skill=name):
                 self.assertEqual(writes, name in WRITE_SKILLS, "WRITE_SKILLS と SKILL.md の書き込み手順の参照が食い違う")
                 if name in WRITE_SKILLS:
                     self.assertTrue(os.path.isfile(yaml_path))
                     self.assertIn("allow_implicit_invocation: false", read(yaml_path))
+
+    def test_descriptions_fit_the_initial_list(self):
+        # Codex は起動時に読む skill の一覧を文脈の 2%（分からなければ 8,000 文字）に収め、超えると description を短く切る
+        # （https://learn.chatgpt.com/docs/build-skills）。手元の他の skill の分を残すため、このパッケージは 6,000 文字まで。
+        total = 0
+        for name in skill_dirs():
+            fm = frontmatter(read(os.path.join(SKILLS, name, "SKILL.md")))
+            total += len(name) + len(re.search(r"(?m)^description: (.+)$", fm).group(1))
+        self.assertLessEqual(total, 6000)
+
+    def test_manual_skills_match_openai_yaml(self):
+        for name in skill_dirs():
+            yaml_path = os.path.join(SKILLS, name, "agents", "openai.yaml")
+            manual = os.path.isfile(yaml_path) and "allow_implicit_invocation: false" in read(yaml_path)
+            with self.subTest(skill=name):
+                self.assertEqual(manual, name in MANUAL_SKILLS)
+
+    def test_spawned_agents_do_not_fork_history(self):
+        # spawn_agent の fork_turns は既定が "all" で、親の会話を全部引き継ぐ。独立した文脈で読ませる箇所には "none" を書く。
+        for path in markdown_files():
+            text = read(path)
+            for m in re.finditer(r"custom agent の `([\w-]+)`|agent_type: \"([\w-]+)\"|`agent_type` \| `\"([\w-]+)\"`", text):
+                with self.subTest(path=os.path.relpath(path, ROOT), agent=m.group(0)):
+                    self.assertTrue('fork_turns: "none"' in text, '子を起動する手順に fork_turns: "none" が無い')
 
     def test_referenced_scripts_exist(self):
         pattern = re.compile(r"\$HOME\\\.agents\\skills\\([\w-]+)\\scripts\\([\w.]+)")
@@ -65,10 +101,12 @@ class SkillLayoutTest(unittest.TestCase):
 
     def test_agents_mentioned_by_skills_exist(self):
         agents = {os.path.splitext(f)[0] for f in os.listdir(AGENTS)}
-        for name in skill_dirs():
-            for m in re.finditer(r"custom agent の `([\w-]+)`", read(os.path.join(SKILLS, name, "SKILL.md"))):
-                with self.subTest(skill=name, agent=m.group(1)):
-                    self.assertIn(m.group(1), agents)
+        pattern = re.compile(r"custom agent の `([\w-]+)`|agent_type: \"([\w-]+)\"|`agent_type` \| `\"([\w-]+)\"`")
+        for path in markdown_files():
+            for m in pattern.finditer(read(path)):
+                name = next(g for g in m.groups() if g)
+                with self.subTest(path=os.path.relpath(path, ROOT), agent=name):
+                    self.assertIn(name, agents)
 
 
 class AgentLayoutTest(unittest.TestCase):

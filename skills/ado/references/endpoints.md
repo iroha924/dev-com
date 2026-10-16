@@ -1,7 +1,8 @@
 # Azure DevOps Server 2020 で使うエンドポイント（REST 6.0）
 
 公式の REST リファレンス（`?view=azure-devops-server-rest-6.0`）と 2026-10-16 に照合した。会社のサーバーでは未実行。
-パスは Collection URL からの相対。`ado.ps1` は api-version を付け忘れたら 6.0（`preview` は 6.0-preview.1）を足す。
+ページは `https://learn.microsoft.com/en-us/rest/api/azure/devops/<領域>/<操作>?view=azure-devops-server-rest-6.0`。
+パスは Collection URL からの相対。クエリの値に `:` や `/` を含むもの（`buildUri`、`artifactId`）は、Python の `urllib.parse.quote(値, safe="")` で URL エンコードしてから入れる。`ado.ps1` は api-version を付け忘れたら 6.0（`preview` は 6.0-preview.1）を足す。
 preview のバージョンが要るものは表のバージョンを `-ApiVersion` で渡す。
 
 ## Work Item
@@ -12,6 +13,7 @@ preview のバージョンが要るものは表のバージョンを `-ApiVersio
 | 一括取得 | POST `{project}/_apis/wit/workitemsbatch` | 6.0 | `query` モード。本文 `{"ids": [...], "fields": [...]}`。**ids は 200 件まで** |
 | 1 件取得 | GET `{project}/_apis/wit/workitems/{id}?$expand=relations` | 6.0 | 応答の `rev` を更新の test に使う |
 | 変更履歴 | GET `{project}/_apis/wit/workItems/{id}/updates` | 6.0 | `$top` / `$skip` |
+| 期間中の変更をまとめて | GET `{project}/_apis/wit/reporting/workitemrevisions?startDateTime=<ISO 8601>&fields=System.Id,System.State,System.AssignedTo,System.IterationPath,System.ChangedDate` | 6.0 | `startDateTime` より後のリビジョンだけが返る。`types` で種別を絞る。`isLastBatch` が false なら `continuationToken` で続きを取る |
 | コメント一覧・追加 | GET / POST `{project}/_apis/wit/workItems/{id}/comments` | 6.0-preview.3 | 本文 `{"text": "<p>...</p>"}`。**HTML で書く** |
 | 作成 | POST `{project}/_apis/wit/workitems/$Task` | 6.0 | JSON Patch（`application/json-patch+json`、ado.ps1 が自動で付ける）。パスは `$` を含むのでシングルクォート |
 | 更新 | PATCH `{project}/_apis/wit/workitems/{id}` | 6.0 | 先頭に `{"op":"test","path":"/rev","value":N}` |
@@ -35,8 +37,11 @@ preview のバージョンが要るものは表のバージョンを `-ApiVersio
 | Team 一覧 | GET `_apis/projects/{project}/teams` | 6.0 | サンプルは GUID。名前で通らなければ `_apis/projects/{project}` で ID を取る |
 | 現在の Iteration | GET `{project}/{team}/_apis/work/teamsettings/iterations?$timeframe=current` | 6.0 | `attributes.startDate` / `finishDate` |
 | Iteration の Work Item | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/workitems` | 6.0-preview.1 | `workItemRelations[]`。中身は workitemsbatch で取る |
+| キャパシティ | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/capacities` | 6.0 | メンバーごとの `activities[].capacityPerDay` と `daysOff[]`。合計は自分で足す |
+| チームの休日 | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/teamdaysoff` | 6.0 | `daysOff[]`（`start` / `end`） |
 
 WIQL では `@Me`、`@Today`、`@CurrentIteration`（Team を含むパスに POST したとき）が使える。
+`ASOF '<日時>'` を末尾に付けると、その時点の状態で問い合わせられる（スプリント開始時点に Iteration にあった Work Item と今の差で、途中で足されたものが分かる）。`EVER` は「一度でもその値だったことがある」。クエリの文は 32K 文字まで（[WIQL の構文、2020 版](https://learn.microsoft.com/en-us/azure/devops/boards/queries/wiql-syntax?view=azure-devops-2020)）。
 
 自分の ID: `_apis/connectionData` は REST リファレンスに載っておらず、6.0 でのバージョンが未確認。
 取れなければ、WIQL の `[System.AssignedTo] = @Me` で 1 件取り、`System.AssignedTo` の `id` を使う。
@@ -50,9 +55,10 @@ WIQL では `@Me`、`@Today`、`@CurrentIteration`（Team を含むパスに POS
 | 一覧 | GET `/pullrequests?searchCriteria.status=active&searchCriteria.reviewerId={id}` | 6.0 | `creatorId` も使える。status の既定は active |
 | 1 件 | GET `/pullrequests/{prId}` | 6.0 | `lastMergeSourceCommit` / `lastMergeTargetCommit`、`reviewers[].vote`（10 承認、5 提案付き承認、0 未投票、-5 作成者待ち、-10 却下） |
 | Iteration | GET `/pullrequests/{prId}/iterations` | 6.0 | `commonRefCommit` / `sourceRefCommit` / `targetRefCommit` |
-| Iteration の変更 | GET `/pullrequests/{prId}/iterations/{iterationId}/changes` | 6.0 | `changeEntries[].changeTrackingId`。`$top` 既定 100、最大 2000 |
+| Iteration の変更 | GET `/pullrequests/{prId}/iterations/{iterationId}/changes` | 6.0 | `changeEntries[].changeTrackingId`。`$top` 既定 100、最大 2000。`$compareTo=<前の iterationId>` でその Iteration からの変更だけ（既定 0 は共通の祖先から） |
 | スレッド一覧・作成 | GET / POST `/pullrequests/{prId}/threads` | 6.0 | 下の本文 |
 | 紐付く Work Item | GET `/pullrequests/{prId}/workitems` | 6.0 | |
+| ポリシーの評価 | GET `{project}/_apis/policy/evaluations?artifactId=vstfs:///CodeReview/CodeReviewId/{projectId}/{prId}` | 6.0-preview.1 | パスの前半は付けない。`projectId` は GUID（`_apis/projects/{project}` の `id`）。`status` は queued / running / approved / rejected / notApplicable / broken。`configuration.isBlocking` と `configuration.type.displayName` でどの決まりかが分かる |
 | 作成 | POST `/pullrequests` | 6.0 | `sourceRefName`、`targetRefName`、`title`、`description`、`workItemRefs`、`isDraft` |
 
 行に付けるスレッドの本文:
@@ -77,7 +83,10 @@ WIQL では `@Me`、`@Today`、`@CurrentIteration`（Team を含むパスに POS
 | 用途 | メソッドとパス | api-version | 注意 |
 |---|---|---|---|
 | ビルド一覧 | GET `{project}/_apis/build/builds?definitions={id}&branchName=refs/heads/x&statusFilter=completed&resultFilter=succeeded&queryOrder=finishTimeDescending&$top=1` | 6.0 | 最新を取るときは `queryOrder` を明示する |
-| ビルド 1 件 | GET `{project}/_apis/build/builds/{buildId}` | 6.0 | `sourceBranch`、`sourceVersion`（コミット）、`definition.id` |
+| ビルド 1 件 | GET `{project}/_apis/build/builds/{buildId}` | 6.0 | `sourceBranch`、`sourceVersion`（コミット）、`definition.id`、`uri` |
+| ビルドに入った変更 | GET `{project}/_apis/build/builds/{buildId}/changes` | 6.0 | コミットの `id`（SHA）・`author`・`message`。前のビルドからの差分のコミット |
+| ビルドのテスト実行 | GET `{project}/_apis/test/runs?buildUri=<ビルドの uri>` | 6.0 | `uri` は `vstfs:///Build/Build/{buildId}` の形 |
+| 失敗したテスト | GET `{project}/_apis/test/Runs/{runId}/results?outcomes=Failed` | 6.0 | `errorMessage`、`stackTrace`（1000 文字まで）、**`failingSince`**（いつ・どのビルドから落ち続けているか）。`$top` は最大 1000 |
 | タイムライン | GET `{project}/_apis/build/builds/{buildId}/timeline` | 6.0 | `records[]` の `result`（failed など）、`log.id`、`issues[]` |
 | ログ | GET `{project}/_apis/build/builds/{buildId}/logs/{logId}` | 6.0 | `-Accept text/plain` で取る。`startLine` / `endLine` |
 | YAML から定義を引く | GET `{project}/_apis/build/definitions?yamlFilename=<path>` | 6.0 | |

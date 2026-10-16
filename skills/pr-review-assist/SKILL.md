@@ -15,11 +15,12 @@ ADO の読み書きは `ado` skill の手順に従う。投票（承認・却下
 2. Iteration 一覧から最新（ユーザーが言えばその Iteration）を選び、`commonRefCommit`・`sourceRefCommit` と Iteration の ID を控える。
 3. `git fetch origin <sourceRefName> <targetRefName>` のあと、`git cat-file -e <sha>` で 2 つのコミットが手元にあるかを確かめる。無ければ（ブランチの削除や force push）そう報告して止まる。
 4. 差分は `git diff <commonRefCommit> <sourceRefCommit>`。ブランチの先端どうしの diff は使わない（PR 画面の差分と変わる）。
-5. `git merge-base --all <targetRefCommit> <sourceRefCommit>` が 2 つ以上返るときは、Iteration の変更一覧（`changes`）のファイルと差分のファイルを突き合わせ、ずれを報告に書く。
+5. 前に同じ PR をレビューしていて、その後の push だけを見たいときは、Iteration の変更一覧を `$compareTo=<前に見た iterationId>` で取ってファイルを絞り、差分は前に見た Iteration の `sourceRefCommit` から今の `sourceRefCommit` までを取る。全体を見直すかはユーザーに聞く。
+6. `git merge-base --all <targetRefCommit> <sourceRefCommit>` が 2 つ以上返るときは、Iteration の変更一覧（`changes`）のファイルと差分のファイルを突き合わせ、ずれを報告に書く。
 
 ## 2. 読ませる
 
-custom agent の `change-risk-reviewer` を起動し、次を渡す。
+custom agent の `change-risk-reviewer` を、`spawn_agent` に `agent_type: "change-risk-reviewer"`・`fork_turns: "none"` を付けて起動し、次を渡す。**`fork_turns` を省かない。**省くと既定の `"all"` で親の会話を全部引き継ぎ、独立して読ませる意味が無くなる。
 
 - PR のタイトル・説明、Work Item の受け入れ条件
 - `commonRefCommit` と `sourceRefCommit` の SHA、差分

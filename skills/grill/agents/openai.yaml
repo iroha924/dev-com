@@ -1,0 +1,6 @@
+interface:
+  display_name: "Grill"
+  short_description: "要件や設計を別の文脈の Codex と議論して合意を取る"
+  default_prompt: "Use $grill to discuss this requirement or design with design-challenger until we agree."
+policy:
+  allow_implicit_invocation: false

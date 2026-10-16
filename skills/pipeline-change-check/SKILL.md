@@ -1,6 +1,6 @@
 ---
 name: pipeline-change-check
-description: Azure Pipelines の YAML（azure-pipelines.yml とテンプレート）を変更したときに、Azure DevOps Server にテンプレートを展開させ（previewRun。ビルドは作られない）、変更前後の展開結果を比べて、ステージ・ジョブ・ステップ・条件・変数の変化と YAML の誤りを報告する。パイプラインの YAML を書いた・直したとき、PR を出す前に使う。
+description: Azure Pipelines の YAML（azure-pipelines.yml とテンプレート）を変更したときに、Azure DevOps Server にテンプレートを展開させ（previewRun。ビルドは作られない）、変更前後の展開結果を比べて、ステージ・ジョブ・ステップ・条件・変数の変化と YAML の誤りを報告する。あわせて、再試行の合計時間とタイムアウトの関係や、PR から動くジョブへのシークレットの渡し方を差分から拾う。パイプラインの YAML を書いた・直したとき、PR を出す前に使う。
 metadata:
   short-description: パイプライン YAML の展開結果を比べる
 ---
@@ -41,3 +41,14 @@ ADO preview '<project>/_apis/pipelines/<id>/runs' -BodyFile after.json -OutFile 
 - 報告するもの: 増えた・消えたステージ / ジョブ / ステップ、`condition` の変化、変数とテンプレートの引数の変化、意図していなさそうな変化。
 
 **確かめられるのは展開の結果まで。**タスクが実行時に成功するか、実行時の変数で条件がどう評価されるかは分からない。そう書き添える。
+
+## 4. 差分から拾う（直さず、指摘として出す）
+
+展開の結果では分からないが、YAML を読めば分かるもの。
+
+| 見るもの | 理由 |
+|---|---|
+| ネットワークの再試行（`curl --retry`、`Invoke-WebRequest` のループ、`pip` の `--retries`）の最悪の合計時間が、ジョブの `timeoutInMinutes` の半分を超える | 相手が一度遅れただけでジョブがタイムアウトで止まり、成果物が残らない。curl なら合計は `(N+1) × max-time + N × retry-delay` |
+| 失敗したら止める処理（`exit 1`、`failOnStderr`、`set -e`、`$ErrorActionPreference = 'Stop'`）を足したが、その経路を通すテストが無い | 書いただけでは、本当に止まるかは分からない。初めて止まるのが本番になる |
+| CI で足した・変えた検査（lint、シークレットの検出）と、ローカルの手順やフックが別の道具・別の設定 | ローカルでは通るのに CI で落ちる、が繰り返される。揃えられないなら、その理由を YAML のコメントに書く |
+| PR から起動するジョブに、書き込みの権限やシークレットの変数グループを渡している | PR の内容（スクリプト、テスト）がそのシークレットで動く |

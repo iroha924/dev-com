@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -205,6 +207,56 @@ class PreviewBodyTest(unittest.TestCase):
     def test_bad_param(self):
         with self.assertRaises(ValueError):
             preview_body.parse_params(["novalue"])
+
+
+class CheckDraftConstraintsTest(unittest.TestCase):
+    SCRIPT = os.path.join(ROOT, "skills", "writing-quality", "scripts", "check_draft_constraints.py")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def write(self, name, text, encoding="utf-8"):
+        path = os.path.join(self.tmp.name, name)
+        with open(path, "w", encoding=encoding, newline="") as f:
+            f.write(text)
+        return path
+
+    def run_check(self, *args):
+        r = subprocess.run([sys.executable, self.SCRIPT] + list(args), capture_output=True, encoding="utf-8")
+        return r.returncode, r.stdout + r.stderr
+
+    def test_ok_with_template(self):
+        tpl = self.write("tpl.md", "## 概要\n\n## 確認したこと\n")
+        draft = self.write("d.md", "## 概要\n\nretry を直す。\n\n## 確認したこと\n\nテストを流した。\n", encoding="utf-8-sig")
+        self.assertEqual(self.run_check(draft, "--template", tpl)[0], 0)
+
+    def test_missing_heading_and_over_limit(self):
+        tpl = self.write("tpl.md", "## 概要\n\n## 確認したこと\n")
+        draft = self.write("d.md", "## 概要\n\n" + "あ" * 50 + "\n")
+        code, out = self.run_check(draft, "--template", tpl, "--max-chars", "10")
+        self.assertEqual(code, 1)
+        self.assertIn("確認したこと", out)
+        self.assertIn("字数超過", out)
+
+    def test_heading_inside_fence_is_not_counted(self):
+        tpl = self.write("tpl.md", "## 概要\n")
+        draft = self.write("d.md", "```\n## 概要\n```\n")
+        self.assertEqual(self.run_check(draft, "--template", tpl)[0], 1)
+
+    def test_not_checked_is_exit_2(self):
+        self.assertEqual(self.run_check(self.write("d.html", "<p>x</p>"))[0], 2)
+        self.assertEqual(self.run_check(os.path.join(self.tmp.name, "none.md"))[0], 2)
+        with open(os.path.join(self.tmp.name, "sjis.md"), "wb") as f:
+            f.write("概要".encode("cp932"))
+        self.assertEqual(self.run_check(os.path.join(self.tmp.name, "sjis.md"))[0], 2)
+
+    def test_warnings_do_not_fail(self):
+        draft = self.write("d.md", "TODO 後で書く\n\n同じ段落\n\n同じ段落\n")
+        code, out = self.run_check(draft)
+        self.assertEqual(code, 0)
+        self.assertIn("TODO", out)
+        self.assertIn("2 回", out)
 
 
 if __name__ == "__main__":
