@@ -44,6 +44,7 @@ preview のバージョンが要るものは表のバージョンを `-ApiVersio
 | 現在の Iteration | GET `{project}/{team}/_apis/work/teamsettings/iterations?$timeframe=current` | 6.0 | `attributes.startDate` / `finishDate` |
 | Iteration の Work Item | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/workitems` | 6.0-preview.1 | `workItemRelations[]`。中身は workitemsbatch で取る |
 | チームの設定 | GET `{project}/{team}/_apis/work/teamsettings` | 6.0 | `workingDays`（稼働する曜日） |
+| チームの範囲 | GET `{project}/{team}/_apis/work/teamsettings/teamfieldvalues` | 6.0 | `field.referenceName`（ふつうは `System.AreaPath`）と `values[]`（`value`、`includeChildren`） |
 | キャパシティ | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/capacities` | 6.0 | メンバーごとの `activities[].capacityPerDay` と `daysOff[]`。合計は自分で足す |
 | チームの休日 | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/teamdaysoff` | 6.0 | `daysOff[]`（`start` / `end`） |
 
