@@ -7,7 +7,7 @@ metadata:
 
 # pr-evidence-pack
 
-推奨の設定: gpt-6-luna・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+推奨の設定: gpt-6.1-sol・medium（人に読まれる PR の本文を書くため）。比べ方は AGENTS.md の「モデルと effort の案内」
 
 ADO の読み書きは `ado` skill の手順に従う。既定は下書きまで。PR の作成は、ユーザーが作ると言ったときだけ。
 

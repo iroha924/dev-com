@@ -99,9 +99,9 @@ def build_message(hook_input, turn, limits, now=None):
                 tight = tight or (described[1] is not None and described[1] >= TIGHT_PERCENT)
     parts.append(" / ".join(windows) if windows else "利用枠 不明")
     line = "[利用状況] " + "、".join(parts) + "。"
-    line += "作業の段階が変わるなら、AGENTS.md の「モデルと effort の案内」に従って先に案内する。"
+    line += "この依頼に勧める設定と違うなら、AGENTS.md の「モデルと effort の案内」に従い、作業の前に案内する。"
     if tight:
-        line += "枠が残り少ないので、軽い設定（gpt-6-luna）で足りる段階は必ずそれを案内する。"
+        line += "枠が残り少ないので、gpt-6-luna で足りる依頼は必ずそれを案内する。"
     return line
 
 
@@ -127,7 +127,7 @@ def main():
     try:
         message = build_message(hook_input, turn, limits)
     except Exception:  # 形の変わった値で落ちても、依頼は止めない
-        message = "[利用状況] 不明。作業の段階が変わるなら、AGENTS.md の「モデルと effort の案内」に従って先に案内する。"
+        message = "[利用状況] 不明。この依頼に勧める設定と違うなら、AGENTS.md の「モデルと effort の案内」に従い、作業の前に案内する。"
     event = hook_input.get("hook_event_name") or "UserPromptSubmit"
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}))
     return 0

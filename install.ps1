@@ -130,18 +130,15 @@ if ($python -and $python.Source -notmatch 'WindowsApps') {
 } elseif ($launcher) {
     $pythonCall = @($launcher.Source, '-3')
 }
+. (Join-Path (Join-Path $source 'hooks') 'New-HookCommand.ps1')
 $hookCommand = $null
 if ($pythonCall) {
-    if ([Environment]::OSVersion.Platform -eq 'Win32NT') {
-        # Codex runs a hook through the session's shell: "pwsh/powershell -Command <command>" or "cmd /C <command>".
-        # A quoted path needs "&" in PowerShell but breaks cmd, so hand the call to powershell.exe as an
-        # encoded command, which both shells run the same way.
-        $quoted = @($pythonCall + $hookScript | ForEach-Object { if ($_ -eq '-3') { $_ } else { "'" + $_.Replace("'", "''") + "'" } })
-        $inner = '& ' + ($quoted -join ' ') + '; if ($null -eq $LASTEXITCODE) { exit 1 }; exit $LASTEXITCODE'
-        $hookCommand = 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
-    } else {
-        $hookCommand = (@($pythonCall + $hookScript) | ForEach-Object { if ($_ -eq '-3') { $_ } else { '"' + $_ + '"' } }) -join ' '
+    $onWindows = [Environment]::OSVersion.Platform -eq 'Win32NT'
+    $systemPowerShell = $null
+    if ($onWindows) {
+        $systemPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     }
+    $hookCommand = New-HookCommand -PythonCall $pythonCall -Script $hookScript -Windows:$onWindows -PowerShellPath $systemPowerShell
 }
 # The command may be encoded, so the handler carries a plain marker to recognize it on later runs.
 $hookMarker = 'hirata-codex usage status'
@@ -151,7 +148,9 @@ $script:hookReady = $false
 if (-not $hookCommand) {
     Write-Host "skipped    $hooksJson  (Python was not found; install Python and rerun)"
 } elseif (Test-Path -LiteralPath $hooksJson) {
-    if ((Get-Content -LiteralPath $hooksJson -Raw).Contains($hookMarker)) {
+    # Get-Content -Raw returns nothing for an empty file, so test before calling a method on it.
+    $existing = Get-Content -LiteralPath $hooksJson -Raw
+    if ($existing -and $existing.Contains($hookMarker)) {
         Write-Host "unchanged  $hooksJson  (already has the hirata-codex hook)"
         $script:hookReady = $true
     } else {
