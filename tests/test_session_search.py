@@ -314,8 +314,8 @@ class ReviewFindingsTest(_Base):
     def test_python_option_accepts_path_with_spaces(self):
         d = os.path.join(self.tmp.name, "First Last")
         os.makedirs(d)
-        exe = os.path.join(d, "python")
-        os.symlink(sys.executable, exe)
+        exe = os.path.join(d, "python.exe")
+        open(exe, "w").close()
         self.assertEqual(ss.python_command(exe), [exe])
         self.assertEqual(ss.python_command("py -3.14"), ["py", "-3.14"])
 
@@ -330,11 +330,19 @@ class ReviewFindingsTest(_Base):
 
     def test_subagents_by_agent_type_and_source_are_hidden(self):
         a = paginated(T1, [("子の依頼 とんび", "答え", None)]).replace('"agent_role": null', '"agent_type": "worker"')
-        b = paginated(T2, [("子の依頼 とんび", "答え", None)]).replace('"agent_role": null', '"source": {"subagent": "review"}')
-        self.write(T1, a)
-        self.write(T2, b)
+        b = paginated(T2, [("子の依頼 とんび", "答え", None)]).replace(
+            '"agent_role": null', '"source": {"subagent": {"thread_spawn": {"parent_thread_id": "%s"}}}' % T3)
+        c = paginated(T3, [("要約の依頼 とんび", "答え", None)]).replace('"agent_role": null', '"source": {"subagent": "compact"}')
+        for tid, text in ((T1, a), (T2, b), (T3, c)):
+            self.write(tid, text)
         self.assertFalse(self.search("とんび")["results"])
-        self.assertEqual(len(self.search("--include-agents", "とんび")["results"]), 2)
+        self.assertEqual(len(self.search("--include-agents", "とんび")["results"]), 3)
+
+    def test_review_sessions_are_searched_by_default(self):
+        # /review は持ち主が始めた会話。前に何を指摘されたかを探したいので、既定の検索に出す
+        self.write(T1, paginated(T1, [("レビューして はやぶさ", "指摘は 2 件", None)]).replace(
+            '"agent_role": null', '"source": {"subagent": "review"}'))
+        self.assertTrue(self.search("はやぶさ")["results"])
 
     def test_legacy_without_turn_id_marks_every_final(self):
         rows = [line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})]
@@ -351,9 +359,9 @@ class ReviewFindingsTest(_Base):
         self.write(T1, text, sub=("archived_sessions",))
         out = self.search("ひよどり")
         self.assertEqual(len(out["results"]), 1)
-        idx = self.idx()
-        self.assertEqual(idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (T1,)).fetchone()[0], 2)
-        idx.close()
+        self.assertEqual(len(self.search("--all-kinds", "ひよどり", "答え")["results"]), 2)
+        code, shown = self.run_cli("show", "%s/u1" % T1)
+        self.assertEqual(shown.count("ひよどりの依頼"), 2, shown)  # 見出しと本文に 1 回ずつ
 
     def test_rebuild_clears_words_of_forgotten_threads(self):
         self.write(T1, paginated(T1, [("qzxjvwkp の話", "答え", None)]))
@@ -407,6 +415,106 @@ class ReviewFindingsTest(_Base):
         self.basic_corpus()
         code, out = self.run_cli("forget", T1)
         self.assertNotIn("消すなら codex delete", out)
+
+    def test_revert_keeps_the_prefix_file_searchable(self):
+        # thread/revert は、thread ID を変えずに別の rollout ID のファイルを作り、前半は元のファイルに残す
+        R = "44444444-4444-4444-8444-444444444444"
+        self.write(T1, paginated(T1, [("ロメオの依頼", "答え1", None), ("シエラの依頼", "答え2", None)]))
+        self.search("ロメオ")
+        reverted = paginated(T1, [("タンゴの依頼", "答え3", None)]).replace('"history_mode": "paginated"',
+                                                                         '"history_mode": "paginated", "history_base": {"thread_id": "%s"}' % T1)
+        self.write(R, reverted)
+        for word in ("ロメオ", "タンゴ"):
+            self.assertTrue(self.search(word)["results"], word)
+
+    def test_newer_copy_wins_regardless_of_name_order(self):
+        self.write(T1, paginated(T1, [("パパの依頼", "答え", None), ("ケベックの依頼", "答え", None)]))
+        self.write(T1, paginated(T1, [("パパの依頼", "答え", None)]), sub=("archived_sessions",))
+        self.assertTrue(self.search("ケベック")["results"])
+        refs = [r["ref"] for r in self.search("--all-kinds", "パパの依頼")["results"]]
+        self.assertEqual(len(refs), len(set(refs)), refs)
+
+    def test_removing_one_copy_keeps_the_other(self):
+        text = paginated(T1, [("ロビンの依頼", "答え", None)])
+        a = self.write(T1, text)
+        self.write(T1, text, sub=("archived_sessions",))
+        self.search("ロビン")
+        os.remove(a)
+        out = self.search("ロビン")
+        self.assertEqual(len(out["results"]), 1)
+        self.assertFalse(any("原本が見つからない" in c for c in out["coverage"]), out["coverage"])
+
+    def test_redaction_keeps_quotes_and_handles_escapes(self):
+        self.assertEqual(ss.redact('{"password": "hunter22"}'), '{"password": "[REDACTED]"}')
+        self.assertEqual(ss.redact("$pwd = 'hunter22'"), "$pwd = '[REDACTED]'")
+        self.assertNotIn("tail", ss.redact('"password": "a\\"b-tail-secret"'))
+        self.assertNotIn("Hunter2", ss.redact("ConvertTo-SecureString 'Hunter2!pw' -AsPlainText -Force"))
+        self.assertNotIn("ghp_abcdefgh", ss.redact("Authorization: token ghp_abcdefghijklmnop"))
+
+    def test_memory_show_has_no_resume_command(self):
+        os.makedirs(os.path.join(self.home, "memories"))
+        with open(os.path.join(self.home, "memories", "n.md"), "w", encoding="utf-8") as f:
+            f.write("# 要点\n\nうぐいす\n")
+        code, out = self.run_cli("show", self.search("うぐいす")["results"][0]["ref"])
+        self.assertNotIn("codex resume", out)
+
+    def test_broken_venv_is_reported(self):
+        venv = os.path.join(self.tmp.name, "data", os.path.relpath(ss.venv_python(), ss.data_dir()))
+        os.makedirs(os.path.dirname(venv))
+        with open(venv, "w") as f:
+            f.write("#!/bin/sh\nexit 103\n")
+        os.chmod(venv, 0o755)
+        self.basic_corpus()
+        env = dict(self.env)
+        env.pop("HIRATA_CODEX_SEARCH_REEXEC")
+        r = subprocess.run([sys.executable, SCRIPT, "search", "--json", "--budget", "0", "再実行"],
+                           capture_output=True, encoding="utf-8", env=env)
+        self.assertTrue(any("専用の環境" in c and "setup" in c for c in json.loads(r.stdout)["coverage"]), r.stdout)
+
+    def test_embedder_needs_complete_model_folder(self):
+        os.makedirs(os.path.join(self.tmp.name, "data", "models", ss.EMBED_MODEL_DIR))
+        os.environ["HIRATA_CODEX_DATA"] = os.path.join(self.tmp.name, "data")
+        try:
+            sem = ss.Semantic()
+            self.assertIsNone(sem.embedder())
+            self.assertIn("モデルが無い", sem._emb_error)
+        finally:
+            del os.environ["HIRATA_CODEX_DATA"]
+
+    def test_default_limit_is_five(self):
+        for n in range(8):
+            tid = "5555555%d-5555-4555-8555-555555555555" % n
+            self.write(tid, paginated(tid, [("せきれい %d" % n, "答え", None)]))
+        self.assertEqual(len(self.search("せきれい")["results"]), 5)
+
+    def test_setup_prefers_314_and_uses_only_the_given_python(self):
+        order = ss.setup_candidates(None)
+        first_other = next(i for i, c in enumerate(order) if "3.14" not in " ".join(c))
+        self.assertTrue(all("3.14" in " ".join(c) for c in order[:first_other]))
+        self.assertGreater(first_other, 0)
+        self.assertEqual(ss.setup_candidates("py -3.13"), [["py", "-3.13"]])
+
+    def test_legacy_same_text_finals_in_two_turns(self):
+        rows = [line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})]
+        for n in (1, 2):
+            rows += [line("2026-09-01T01:00:00Z", "event_msg", {"type": "user_message", "message": "依頼%d" % n}),
+                     line("2026-09-01T01:00:00Z", "event_msg", {"type": "task_complete", "last_agent_message": "同じ答え"})]
+        _, msgs, _ = ss.parse_rollout("x", ("\n".join(rows) + "\n").encode())
+        self.assertEqual([m["kind"] for m in sorted(msgs, key=lambda m: m["line"])], ["user", "final", "user", "final"])
+
+    def test_old_index_is_migrated_and_reextracted(self):
+        self.write(T1, paginated(T1, [("移行の依頼 かいつぶり", "答え", None)], agent="worker"))
+        self.search("かいつぶり")
+        import sqlite3
+        con = sqlite3.connect(self.db)
+        con.execute("DROP TABLE threads")
+        con.execute("CREATE TABLE threads (thread_id TEXT PRIMARY KEY, codex_home TEXT, name TEXT, cwd TEXT, branch TEXT, "
+                    "originator TEXT, agent TEXT, started TEXT)")
+        con.execute("INSERT INTO threads VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL)", (T1, self.home))
+        con.execute("UPDATE meta SET value = '1'")
+        con.commit()
+        con.close()
+        self.assertFalse(self.search("かいつぶり")["results"])  # 取り込み直して、子の会話の印が戻る
 
 
 class SemanticLayerTest(unittest.TestCase):

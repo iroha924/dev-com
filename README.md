@@ -259,7 +259,7 @@ flowchart LR
 ```
 
 - 取り込むのは、ユーザーの依頼・最終の回答（・途中の回答）と、Codex の memories が書いた要点のファイル。ツールやコマンドの出力、推論、AGENTS.md などの差し込みは入れない。シークレットらしい値（PAT の形、`Authorization`、`Bearer`、`password=`、URL の中の資格情報、秘密鍵）は伏せてから入れる。
-- 取り込みは検索のたびに、増えた・変わった記録だけ。元の記録は Codex のものが正で、索引は消しても `rebuild` で作り直せる。原本が消えた会話（`codex delete` で消したものも）は索引に残して検索し、出力のまとめに「原本が見つからない会話 N 本」と出す。検索から外すのは `forget`。
+- 取り込みは検索のたびに、増えた・変わった記録だけ。元の記録は Codex のものが正で、索引は消しても `rebuild` で作り直せる。原本が消えた会話（`codex delete` で消したものも）は索引に残して検索し、出力のまとめに「原本が見つからない会話 N 本」と出す。検索から外すのは `forget`。同じ会話のファイルが複数ある（Codex の revert は、前半を元のファイルに残して別のファイルを作る）ときは両方を取り込み、同じ発言は 1 つにまとめて出す。
 - 圧縮された記録（`.jsonl.zst`）は Python 3.14 で読む。手元の Mac では、記録の約 85% が圧縮されていた。3.14 が無い Python で動いたときは、3.14（`py -3.14`、`python3.14`、`mise exec python@3.14`）を探して自分を起動し直す。見つからなければ、読めなかった数を出す。
 
 ### 方式と、評価で決めた理由
@@ -298,6 +298,7 @@ python "$HOME\.agents\skills\session-search\scripts\session_search.py" index
 
 - `setup` は `%LOCALAPPDATA%\hirata-codex\venv` に専用の環境を作る。元にする Python は 3.14 を優先し、無ければ 3.13、3.11 の順に探す（3.14 でないと圧縮された記録を読めないので、そのときは注意を出す）。`--python` で指定したときは、それだけを使う。入れるバージョンは評価で使ったものに固定している（SudachiPy 0.7.0、sudachidict-core 20260723.1、sentence-transformers 6.1.0、transformers 5.18.0、tokenizers 0.23.2、torch 2.14.1、numpy 2.4.6。どれも 2026-10-01 より前の公開）。
 - モデル（`cl-nagoya/ruri-v3-130m`、Apache-2.0）は `%LOCALAPPDATA%\hirata-codex\models\ruri-v3-130m` に置く。会社のネットワークから Hugging Face に届かないときは、別の PC で `hf download cl-nagoya/ruri-v3-130m --local-dir <フォルダ>` で取ってきたフォルダを、そこに置けば使える（Hugging Face の取得には `huggingface.co` のほかに CDN のホストも要る）。
+- `setup` はモデルの取得を毎回流す。揃っているファイルは取り直さないので、途中で止まったときは `setup` を流し直せば続きから埋まる。
 - `index` は、取り込み・単語の区切り・埋め込みを全部済ませる。最初の一度は、会話の量によって数分〜数十分かかる。
 - 専用の環境があると、`session_search.py` は自動でその環境の Python で動き直す。
 

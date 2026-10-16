@@ -32,9 +32,9 @@ import subprocess
 import sys
 import unicodedata
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 # 取り出し方・正規化・伏せ字を変えたら上げる。上がると全部を取り込み直す。
-EXTRACT_VERSION = "1"
+EXTRACT_VERSION = "2"
 
 try:
     from compression import zstd  # Python 3.14+（optional module）
@@ -58,6 +58,10 @@ EMBED_MODEL = "cl-nagoya/ruri-v3-130m"
 EMBED_MODEL_DIR = "ruri-v3-130m"
 QUERY_PREFIX = "検索クエリ: "
 DOC_PREFIX = "検索文書: "
+# ruri-v3-130m のフォルダに要るファイル（取得の途中で止まったフォルダを使わない）
+MODEL_FILES = ("config.json", "modules.json", "model.safetensors", "sentence_bert_config.json",
+               "config_sentence_transformers.json", "tokenizer.json", "tokenizer_config.json",
+               os.path.join("1_Pooling", "config.json"))
 # setup で入れる版。evals/session-search で評価したもの（どれも 2026-10-01 より前の公開）。
 SEMANTIC_REQUIREMENTS = [
     "sudachipy==0.7.0", "sudachidict-core==20260723.1", "sentence-transformers==6.1.0",
@@ -70,11 +74,15 @@ _SECRET_PATTERNS = [
     # 秘密鍵のブロック
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[REDACTED-PRIVATE-KEY]"),
     # Authorization ヘッダーと Bearer トークン
-    (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)(basic|bearer|ntlm|negotiate)?\s*[A-Za-z0-9._~+/=-]{8,}"), r"\1\2 [REDACTED]"),
+    (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)(basic|bearer|ntlm|negotiate|token)?\s*[A-Za-z0-9._~+/=-]{8,}"), r"\1\2 [REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
     # password= / "password": "..." / $password = '...' / 接続文字列の Password=。引用符があれば閉じるまで伏せる
-    (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)[\"']?\s*[:=]\s*)(\"[^\"\n]{1,200}\"|'[^'\n]{1,200}')"),
-     r"\1\"[REDACTED]\""),
+    # （\" のようなエスケープした引用符は、閉じる引用符と見なさない）
+    (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)[\"']?\s*[:=]\s*)"
+                r"(?:\"((?:[^\"\\\n]|\\.){1,200})\"|'((?:[^'\\\n]|\\.){1,200})')"),
+     lambda m: m.group(1) + ('"[REDACTED]"' if m.group(2) is not None else "'[REDACTED]'")),
+    # PowerShell の ConvertTo-SecureString '...' -AsPlainText
+    (re.compile(r"(?i)(ConvertTo-SecureString\s+(?:-String\s+)?)(\"[^\"\n]*\"|'[^'\n]*')"), r"\1'[REDACTED]'"),
     (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,]{4,})"), r"\1[REDACTED]"),
     # URL に埋め込まれた資格情報
     (re.compile(r"(?i)(https?://)[^\s/@:]+:[^\s/@]+@"), r"\1[REDACTED]@"),
@@ -130,7 +138,7 @@ def model_dir():
 def model_ready():
     """モデルのフォルダに、読み込みに要るファイルが揃っているか（取得の途中で止まったフォルダを使わない）。"""
     d = model_dir()
-    return all(os.path.exists(os.path.join(d, f)) for f in ("config.json", "modules.json", "model.safetensors"))
+    return all(os.path.exists(os.path.join(d, f)) for f in MODEL_FILES)
 
 
 def python_command(value):
@@ -165,6 +173,7 @@ def memory_files(home):
 # --- zstd を読める Python で起動し直す ------------------------------------------------------------------
 
 REEXEC_ENV = "HIRATA_CODEX_SEARCH_REEXEC"
+BROKEN_VENV_ENV = "HIRATA_CODEX_SEARCH_BROKEN_VENV"
 
 
 def zstd_interpreters():
@@ -191,6 +200,7 @@ def maybe_reexec(home, argv):
         if usable:
             env = dict(os.environ, **{REEXEC_ENV: venv})
             return subprocess.run([venv, os.path.abspath(__file__)] + argv, env=env).returncode
+        os.environ[BROKEN_VENV_ENV] = venv
     if zstd is not None:
         return None
     if not any(p.endswith(".zst") for p in rollout_files(home)):
@@ -295,10 +305,14 @@ def parse_rollout(path, data):
             git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
             meta["branch"] = git.get("branch")
             meta["originator"] = payload.get("originator")
+            # source.subagent: review は持ち主が /review で始めた会話なので子に数えない。thread_spawn（spawn_agent の子）、
+            # compact、memory_consolidation などは子に数える。
             src = payload.get("source")
             sub_agent = src.get("subagent") if isinstance(src, dict) else None
-            if sub_agent is not None and not isinstance(sub_agent, str):
-                sub_agent = "subagent"
+            if isinstance(sub_agent, dict):
+                sub_agent = next(iter(sub_agent), "subagent")
+            elif sub_agent == "review" or (sub_agent is not None and not isinstance(sub_agent, str)):
+                sub_agent = None if sub_agent == "review" else "subagent"
             meta["agent"] = (payload.get("agent_role") or payload.get("agent_path") or payload.get("agent_type")
                              or sub_agent or None)
             meta["history_mode"] = payload.get("history_mode")
@@ -346,9 +360,12 @@ def parse_rollout(path, data):
             continue
         # 同じ本文の途中の回答があれば、それを最終の回答に格上げする（二重に持たない）。
         promoted = False
-        for msg in reversed(messages):
-            if (msg["turn_id"] == tid and msg["line"] < line_no and msg["text"].strip() == last.strip()
-                    and msg["kind"] in ("commentary", "final")):
+        for msg in sorted(messages, key=lambda m: m["line"], reverse=True):  # 足した最終の回答は末尾に付くので、行の順に見る
+            if msg["turn_id"] != tid or msg["line"] >= line_no:
+                continue
+            if msg["kind"] == "user":
+                break  # このターンの依頼より前は、別のターン
+            if msg["text"].strip() == last.strip() and msg["kind"] in ("commentary", "final"):
                 msg["kind"] = "final"
                 promoted = True
                 break
@@ -468,6 +485,11 @@ class Index:
 
     def _create(self):
         db = self.db
+        db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        old_schema = dict(db.execute("SELECT key, value FROM meta").fetchall()).get("schema")
+        if old_schema == "1" and self._has_table("threads"):
+            # 1 → 2: threads を CODEX_HOME ごとに分ける。原本の消えた会話の名前や子の印を失わないよう、行を移す。
+            db.execute("ALTER TABLE threads RENAME TO threads_v1")
         db.executescript("""
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
             CREATE TABLE IF NOT EXISTS files (
@@ -476,8 +498,8 @@ class Index:
                 n_user INTEGER, n_commentary INTEGER, n_final INTEGER, n_memory INTEGER,
                 bad_json INTEGER, shape_errors INTEGER, skipped_elements INTEGER, ingested_at TEXT);
             CREATE TABLE IF NOT EXISTS threads (
-                thread_id TEXT PRIMARY KEY, codex_home TEXT, name TEXT, cwd TEXT, branch TEXT,
-                originator TEXT, agent TEXT, started TEXT);
+                thread_id TEXT, codex_home TEXT, name TEXT, cwd TEXT, branch TEXT,
+                originator TEXT, agent TEXT, started TEXT, PRIMARY KEY (codex_home, thread_id));
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY, codex_home TEXT, thread_id TEXT, path TEXT, line INTEGER,
                 msg_id TEXT, turn_id TEXT, seq INTEGER, ts TEXT, kind TEXT, cwd TEXT, text TEXT, norm TEXT);
@@ -488,6 +510,11 @@ class Index:
             CREATE TABLE IF NOT EXISTS word_done (message_id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS vectors (message_id INTEGER PRIMARY KEY, model TEXT, vec BLOB);
         """)
+        if self._has_table("threads_v1"):
+            db.execute("INSERT OR IGNORE INTO threads SELECT thread_id, codex_home, name, cwd, branch, originator, agent, "
+                       "started FROM threads_v1")
+            db.execute("DROP TABLE threads_v1")
+            db.commit()
         self._create_fts()
         versions = dict(db.execute("SELECT key, value FROM meta").fetchall())
         if versions.get("schema") != SCHEMA_VERSION or versions.get("extract") != EXTRACT_VERSION:
@@ -579,11 +606,9 @@ class Index:
         for row in self.db.execute("SELECT path, thread_id, status FROM files WHERE codex_home = ?", (home,)).fetchall():
             if row["path"] in seen:
                 continue
-            moved = self.db.execute(
-                "SELECT 1 FROM files WHERE thread_id = ? AND path != ? AND status IN ('ok','partial')",
-                (row["thread_id"], row["path"])).fetchone()
+            moved = any(_file_stem(p) == _file_stem(row["path"]) for p in seen if p != row["path"])
             with self.db:
-                if moved or row["status"] in ("forgotten", "duplicate"):
+                if moved or row["status"] == "forgotten":
                     self._delete_path(row["path"])
                     self.db.execute("DELETE FROM files WHERE path = ?", (row["path"],))
                 elif row["status"] != "missing":
@@ -619,18 +644,17 @@ class Index:
         with self.db:  # 1 ファイル 1 トランザクション。失敗したら前の内容が残る。
             self._delete_path(path)
             tid = meta["thread_id"]
-            # 同じ会話を別のパスで持っていれば、そちらを消す。archive への移動なら記録ごと、両方のファイルが
-            # あるなら（.jsonl と .jsonl.zst など）中身だけを消して duplicate にし、変わるまで読み直さない。
+            # archive への移動（同じファイル名で場所だけ変わった）なら、前の場所の分を消す。
+            # 同じ会話のファイルがほかにも残っているとき（thread/revert は前半を元のファイルに残す）は両方を持ち、
+            # 同じ発言は検索と show でまとめる。
             for old in self.db.execute("SELECT path FROM files WHERE thread_id = ? AND codex_home = ? AND path != ?",
                                        (tid, home, path)).fetchall():
-                self._delete_path(old["path"])
-                if os.path.exists(old["path"]):
-                    self.db.execute("UPDATE files SET status = 'duplicate' WHERE path = ?", (old["path"],))
-                else:
+                if _file_stem(old["path"]) == _file_stem(path) and not os.path.exists(old["path"]):
+                    self._delete_path(old["path"])
                     self.db.execute("DELETE FROM files WHERE path = ?", (old["path"],))
             self.db.execute(
                 "INSERT INTO threads (thread_id, codex_home, cwd, branch, originator, agent, started) "
-                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(thread_id) DO UPDATE SET cwd=excluded.cwd, "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(codex_home, thread_id) DO UPDATE SET cwd=excluded.cwd, "
                 "branch=excluded.branch, originator=excluded.originator, agent=excluded.agent, "
                 "started=COALESCE(threads.started, excluded.started)",
                 (tid, home, redact(meta.get("cwd")), redact(meta.get("branch")), meta.get("originator"),
@@ -661,7 +685,8 @@ class Index:
                 if isinstance(item, dict) and item.get("id") and isinstance(item.get("thread_name"), str):
                     names[item["id"]] = redact(item["thread_name"])
         with self.db:
-            self.db.executemany("UPDATE threads SET name = ? WHERE thread_id = ?", [(v, k) for k, v in names.items()])
+            self.db.executemany("UPDATE threads SET name = ? WHERE thread_id = ? AND codex_home = ?",
+                                [(v, k, home) for k, v in names.items()])
 
     def fill_words(self, tokenize, home):
         """単語に区切った本文を words_fts に入れる（まだのものだけ）。"""
@@ -724,7 +749,7 @@ class Index:
         全文検索の表は、消した行の言葉が内部の区画に残ることがあるので、捨てて作り直す。
         """
         with self.db:
-            self.db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'zst_unreadable', 'duplicate')")
+            self.db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'zst_unreadable')")
             self.db.execute("DROP TABLE IF EXISTS msg_fts")
             self.db.execute("DROP TABLE IF EXISTS words_fts")
             self.db.execute("DELETE FROM word_done")
@@ -754,7 +779,7 @@ class Index:
             params += [c, _like_escape(c + "\\") + "%", _like_escape(c + "/") + "%"]
         if not include_agents:
             where.append("(t.agent IS NULL OR t.agent = '')")
-        base_sql = ("FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id WHERE " + " AND ".join(where))
+        base_sql = ("FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id AND t.codex_home = m.codex_home WHERE " + " AND ".join(where))
         allowed = {r[0] for r in self.db.execute("SELECT m.id " + base_sql, params)}
         allowed -= {r[0] for r in self.db.execute(
             "SELECT id FROM messages WHERE thread_id IN (SELECT thread_id FROM forgotten WHERE codex_home = ?)", (home,))}
@@ -789,12 +814,15 @@ class Index:
             return [], 0, " + ".join(modes)
         placeholders = ",".join("?" * len(scores))
         rows = {r["id"]: r for r in self.db.execute(
-            "SELECT m.*, t.name, t.branch, t.originator FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id "
+            "SELECT m.*, t.name, t.branch, t.originator FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id AND t.codex_home = m.codex_home "
             "WHERE m.id IN (%s)" % placeholders, list(scores))}
         ranked = sorted(scores.items(), key=lambda x: (-x[1], -(_ts_num(rows[x[0]]["ts"]))))
-        per_thread, out = {}, []
+        per_thread, out, seen_keys = {}, [], set()
         for mid, score in ranked:
             r = rows[mid]
+            if _dedupe_key(r) in seen_keys:  # 同じ会話の別のファイルにある同じ発言
+                continue
+            seen_keys.add(_dedupe_key(r))
             n = per_thread.get(r["thread_id"], 0)
             if n >= MAX_HITS_PER_THREAD:
                 continue
@@ -835,10 +863,13 @@ class Index:
 
     def turn_messages(self, home, thread_id, around_id, context):
         rows = self.db.execute(
-            "SELECT m.*, t.name, t.branch, t.originator FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id "
+            "SELECT m.*, t.name, t.branch, t.originator FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id AND t.codex_home = m.codex_home "
             "WHERE m.codex_home = ? AND m.thread_id = ? ORDER BY m.ts, m.line", (home, thread_id)).fetchall()
-        turns = []
+        turns, seen_keys = [], set()
         for r in rows:
+            if _dedupe_key(r) in seen_keys:
+                continue
+            seen_keys.add(_dedupe_key(r))
             if not turns or turns[-1][0] != (r["turn_id"] or r["msg_id"]):
                 turns.append([(r["turn_id"] or r["msg_id"]), []])
             turns[-1][1].append(r)
@@ -857,6 +888,16 @@ class Index:
             "shape_errors": q("SELECT COALESCE(SUM(shape_errors),0) FROM files WHERE codex_home=?", (home,)).fetchone()[0],
             "last_ingest": q("SELECT MAX(ingested_at) FROM files WHERE codex_home=?", (home,)).fetchone()[0],
         }
+
+
+def _file_stem(path):
+    """rollout-...-<id>.jsonl と、その圧縮（.jsonl.zst）を同じものとして比べる名前。"""
+    name = os.path.basename(path)
+    return name[:-4] if name.endswith(".zst") else name
+
+
+def _dedupe_key(r):
+    return (r["thread_id"], r["msg_id"], r["kind"], r["norm"])
 
 
 def _ts_num(ts):
@@ -991,6 +1032,9 @@ def coverage_lines(idx, home, report, note):
                      % report["embed_remaining"])
     if report and report["errors"]:
         lines.append("注意: 読めなかったファイル %d 本（%s ほか）" % (len(report["errors"]), report["errors"][0]))
+    if os.environ.get(BROKEN_VENV_ENV):
+        lines.append("注意: 専用の環境（%s）が起動できないので、標準ライブラリだけの方式で探した。"
+                     "setup で作り直せる" % os.environ[BROKEN_VENV_ENV])
     reexec = os.environ.get(REEXEC_ENV)
     if reexec and os.path.abspath(reexec) == os.path.abspath(venv_python()):
         lines.append("参考: 専用の環境（%s）で動かした" % reexec)
@@ -1052,7 +1096,8 @@ def cmd_show(args):
         print("見つからない: %s" % args.ref, file=sys.stderr)
         return 1
     first = turns[0][1][0]
-    print("スレッド: %s（%s）  開き直す: codex resume %s" % (idx.display_name(thread_id, first["name"]), first["cwd"] or "-", thread_id))
+    resume = "" if thread_id.startswith("memory:") else "  開き直す: codex resume %s" % thread_id
+    print("スレッド: %s（%s）%s" % (idx.display_name(thread_id, first["name"]), first["cwd"] or "-", resume))
     for _, msgs in turns:
         for m in msgs:
             text = m["text"]
@@ -1123,16 +1168,21 @@ def cmd_index(args):
     return 0
 
 
+def setup_candidates(python=None):
+    """setup の元にする Python の候補。指定があればそれだけ。無ければ 3.14 を先に、3.13、3.11、今の Python の順。"""
+    if python:
+        return [python_command(python)]
+    nt = os.name == "nt"
+    first = ([["py", "-3.14"]] if nt else []) + [["python3.14"], ["mise", "exec", "python@3.14", "--", "python"]]
+    rest = ([["py", "-3.13"], ["py", "-3.11"]] if nt else []) + [[sys.executable]]
+    return first + rest
+
+
 def cmd_setup(args):
     """専用の環境（SudachiPy、sentence-transformers、torch）を作り、ruri-v3-130m を取ってくる。"""
     target = os.path.dirname(os.path.dirname(venv_python()))
-    if args.python:
-        candidates = [python_command(args.python)]  # 指定されたものだけを使う。使えなければ止まる
-    else:
-        candidates = ([["py", "-3.14"]] if os.name == "nt" else []) + [["python3.14"], ["mise", "exec", "python@3.14", "--", "python"]]
-        candidates += ([["py", "-3.13"], ["py", "-3.11"]] if os.name == "nt" else []) + [[sys.executable]]
     base = None
-    for cmd in candidates:
+    for cmd in setup_candidates(args.python):
         try:
             ok = subprocess.run(cmd + ["-c", "import sys, sqlite3, venv; assert sys.version_info >= (3, 11)"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60).returncode == 0
@@ -1151,11 +1201,18 @@ def cmd_setup(args):
     if not base_zstd:
         print("注意: この Python（3.14 より前）では、圧縮された記録（.jsonl.zst）を読めない。"
               "3.14 を入れて setup --python で指定し直すと読める")
-    exists = os.path.exists(venv_python())
-    if exists and base_zstd and subprocess.run([venv_python()] + zstd_probe, stdout=subprocess.DEVNULL,
-                                               stderr=subprocess.DEVNULL).returncode != 0:
-        print("今の専用の環境は 3.14 より前の Python なので、3.14 で作り直す")
-        exists = False
+    # 今の環境が、選んだ Python と同じバージョンで、起動できるときだけ使い続ける。違えば作り直す。
+    version = ["-c", "import sys; print(sys.version_info[:2])"]
+    want = subprocess.run(base + version, capture_output=True, text=True).stdout.strip()
+    exists = False
+    if os.path.exists(venv_python()):
+        try:
+            have = subprocess.run([venv_python()] + version, capture_output=True, text=True, timeout=60).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            have = ""
+        exists = have == want
+        if not exists:
+            print("今の専用の環境（%s）を、選んだ Python で作り直す" % (have or "起動できない"))
     if not exists:
         if subprocess.run(base + ["-m", "venv", "--clear", target]).returncode != 0:
             return 1
@@ -1163,12 +1220,13 @@ def cmd_setup(args):
     if subprocess.run(pip + SEMANTIC_REQUIREMENTS).returncode != 0:
         print("ライブラリを入れられなかった。会社のプロキシや PyPI のミラーの設定を確かめる", file=sys.stderr)
         return 1
-    if model_ready():
-        print("モデルはすでにある: %s" % model_dir())
-    else:
-        code = ("from huggingface_hub import snapshot_download; "
-                "snapshot_download(%r, local_dir=%r)" % (EMBED_MODEL, model_dir()))
-        if subprocess.run([venv_python(), "-c", code]).returncode != 0:
+    # 取得は毎回流す（揃っているファイルは取り直さない。途中で止まった分はここで埋まる）
+    code = ("from huggingface_hub import snapshot_download; "
+            "snapshot_download(%r, local_dir=%r)" % (EMBED_MODEL, model_dir()))
+    if subprocess.run([venv_python(), "-c", code]).returncode != 0:
+        if model_ready():
+            print("モデルを取りに行けなかったが、%s に揃っているのでそれを使う" % model_dir())
+        else:
             print("モデルを取ってこられなかった。別の PC で取ってきたフォルダを %s に置けば使える（README）" % model_dir(),
                   file=sys.stderr)
             return 1
