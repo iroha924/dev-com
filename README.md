@@ -1,0 +1,410 @@
+# hirata-codex
+
+Windows の Codex で使う、グローバルな skill 11 個・custom agent 2 つ・AGENTS.md のパッケージ。
+スクラム（1 週間スプリント）と、オンプレの Azure DevOps Server 2020（以下 ADO）での Work Item・PR・パイプラインの作業、
+プロンプト類（md / txt / json）と Python の変更の確認を手伝う。外部 OSS は使わず、Python の標準ライブラリと Windows 標準の PowerShell だけで動く。
+
+- [動き方](#動き方)
+- [一覧](#一覧)
+- [スプリントの中での使いどころ](#スプリントの中での使いどころ)
+- [skill の詳細](#skill-の詳細)
+- [custom agent](#custom-agent)
+- [AGENTS.md](#agentsmd)
+- [インストール](#インストール)
+- [ADO への接続と書き込み](#ado-への接続と書き込み)
+- [更新と削除](#更新と削除)
+- [テスト](#テスト)
+- [うまくいかないとき](#うまくいかないとき)
+- [前提にした事実](#前提にした事実)
+- [確かめていないこと](#確かめていないこと)
+- [判断の記録](#判断の記録)
+
+## 動き方
+
+- **skill**: Codex が読む作業の手順書（`SKILL.md`）と、手順の中で使うスクリプトのまとまり。
+- **custom agent**: 親の Codex とは別の文脈で、決まった役（レビュー、ログの整理）を担う子の Codex。設定は TOML 1 ファイル。
+- **AGENTS.md**: Codex が毎回読む、作業の決まりごと。
+
+**どれもバックグラウンドや定期実行では動かない。**Codex に話しかけたときに、Codex がその場で読み込んで使う。
+「自動」は、依頼の内容から Codex が skill を選ぶことを指す。
+
+| 種類 | いつ読み込まれるか | 呼び方 |
+|---|---|---|
+| AGENTS.md | Codex を起動するたびに、毎回必ず | 何もしなくてよい |
+| skill（自動でも動くもの） | 依頼が skill の説明に当てはまると Codex が判断したとき。名前で呼んでもよい | 「CI が落ちた」のように普通に頼む。確実に使わせたいときは `$ci-failure-triage` |
+| skill（手動だけのもの） | 名前で呼んだときだけ | `$pr-review-assist PR #123 をレビューして` |
+| custom agent | skill の手順が起動を指示したとき、またはユーザーが名指ししたとき | 通常は skill 経由。直接なら「change-risk-reviewer にこの差分を見せて」 |
+
+- Codex は起動時に各 skill の名前と説明だけを読み、使うと決めたときに本文（SKILL.md）を読む。
+- `/skills` で、読み込まれている skill の一覧が見られる。
+- **`ado` 以外で ADO に書き込む 4 つ（`pr-evidence-pack`・`work-item-ready`・`pr-review-assist`・`incident-report`）は、手動でしか動かないようにしてある**（各 skill の `agents/openai.yaml` の `policy.allow_implicit_invocation: false`）。
+  グローバルの skill はどのプロジェクトでも候補に上がるので、関係ない作業中に書き込みの手順が始まらないようにするため。
+  土台の `ado` は読み取りにも使うので自動でも選ばれるが、書き込みには毎回、下のハッシュ付きの承認が要る。
+- 手動だけの skill の中でも、ADO への書き込みは毎回、対象と本文を見せて承認を取ってから送る（[ADO への接続と書き込み](#ado-への接続と書き込み)）。
+
+## 一覧
+
+| 名前 | 種類 | 起動 | ADO | 使う場面 |
+|---|---|---|---|---|
+| [`ado`](#ado) | skill | 自動 | 読む・書く | ADO に触れるすべての作業の土台。他の skill もこれに従う |
+| [`sprint-report`](#sprint-report) | skill | 自動 | 読む | デイリーの準備、スプリントレビューと振り返りの材料 |
+| [`work-item-ready`](#work-item-ready) | skill | 手動 | 読む・書く | プランニング・リファインメントの前、着手の直前 |
+| [`pr-evidence-pack`](#pr-evidence-pack) | skill | 手動 | 読む・書く | PR を作るとき |
+| [`pr-review-assist`](#pr-review-assist) | skill | 手動 | 読む・書く | 他人の PR のレビュー、自分の PR の出す前の確認 |
+| [`ci-failure-triage`](#ci-failure-triage) | skill | 自動 | 読む | CI が落ちたとき |
+| [`pipeline-change-check`](#pipeline-change-check) | skill | 自動 | 読む（展開の確認） | パイプラインの YAML を変えたとき |
+| [`prompt-lint`](#prompt-lint) | skill | 自動 | 使わない | プロンプト類を書いた・直した直後 |
+| [`prompt-regression`](#prompt-regression) | skill | 自動 | 使わない | プロンプト変更を PR にする前 |
+| [`python-change-check`](#python-change-check) | skill | 自動 | 使わない | Python を変更した後、PR の前 |
+| [`incident-report`](#incident-report) | skill | 手動 | 読む・書く | 障害の後のまとめ、ポストモーテム |
+| [`change-risk-reviewer`](#change-risk-reviewer) | agent | `pr-review-assist` から | 使わない | 差分を独立した文脈で読むレビュアー |
+| [`incident-evidence-analyst`](#incident-evidence-analyst) | agent | `incident-report` から | 使わない | 障害のログを大量に読んで整理する |
+
+「ADO: 読む・書く」の skill でも、書き込みはユーザーが頼んだときだけ行う。既定は下書きまで。
+
+## スプリントの中での使いどころ
+
+| タイミング | 使うもの | 例 |
+|---|---|---|
+| 毎朝のデイリー前 | `sprint-report`（daily） | 「デイリーの準備をして」 |
+| スプリントプランニング・リファインメント | `work-item-ready` | `$work-item-ready #1234 と #1235 を着手できる状態か見て` |
+| 着手の直前 | `work-item-ready` | `$work-item-ready #1234 を始める前に足りないものを出して` |
+| プロンプトを書いた・直した直後 | `prompt-lint` | 「変更したプロンプトを検査して」 |
+| Python を変更した後 | `python-change-check` | 「この変更の検査を流して」 |
+| パイプラインの YAML を変えた後 | `pipeline-change-check` | 「azure-pipelines.yml の変更で展開結果がどう変わるか見て」 |
+| プロンプト変更の PR の前 | `prompt-regression` | 「このプロンプト変更で代表ケースが壊れていないか見て」 |
+| PR を作るとき | `pr-evidence-pack` | `$pr-evidence-pack 今のブランチの PR を下書きして` |
+| レビューを頼まれたとき | `pr-review-assist` | `$pr-review-assist PR #123 をレビューして` |
+| CI が落ちたとき | `ci-failure-triage` | 「ビルド 4567 が落ちた原因を切り分けて」 |
+| 障害の後 | `incident-report` | `$incident-report このログからポストモーテムを書いて` |
+| 金曜のスプリントレビュー・振り返り前 | `sprint-report`（review） | 「今スプリントのまとめと振り返りの材料を出して」 |
+
+## skill の詳細
+
+各 skill の手順そのものは `skills/<名前>/SKILL.md` にある。ここでは何をして何を返すかだけを書く。
+
+### ado
+
+ADO を読み書きするための土台。他の skill は ADO に触れるとき、この手順に従う。
+
+- **経路**: ADO の MCP（Codex に外部のツールを足す仕組み。入れていなくてもよい）が入っていて読み取りが通ればそれを使い、通らなければ同梱の `ado.ps1`（PowerShell の小さな REST クライアント）を使う。
+  **書き込みは MCP が使えても常に `ado.ps1` から送る**（承認の手順を 1 本にするため）。
+  Microsoft 公式の Azure DevOps MCP は Services 専用で、オンプレの Server 2020 には繋がらない（[前提にした事実](#前提にした事実)）。
+- **同梱**
+  - `scripts/ado.ps1`: `get` / `query` / `preview` / `write` の 4 つのモード（[ADO への接続と書き込み](#ado-への接続と書き込み)）
+  - `scripts/ado_context.py`: `git remote` の URL から Collection・Project・Repo を割り出す
+  - `references/endpoints.md`: Server 2020（REST 6.0）で使うエンドポイントと api-version の表
+- **決めごと**: api-version は 6.0 系を使う。Work Item のコメントは HTML で書く（Server 2020 は Markdown のコメントに対応していない）。PR のコメントは Markdown でよい。
+
+### sprint-report
+
+スプリントの状況を読み取り専用でまとめる。**何も書き込まない。**
+
+| モード | 集めるもの | 返すもの |
+|---|---|---|
+| daily | 自分の Work Item の前の営業日からの変更、自分がレビュアーで未投票の PR、自分の PR への投票、その PR のブランチで失敗したビルド | デイリーで話す 3 行（昨日 / 今日 / 困っていること）、停滞の候補、取得した範囲 |
+| review | 現在の Iteration の Work Item 全件、期間中に完了した PR、未完了の Work Item のコメントと履歴 | ゴールに対する成果、デモの順番の案、未完了とその理由、振り返りの材料（着手から完了までの日数、PR のマージまでの日数など） |
+
+- daily の期間は、前の営業日の 0 時から（月曜なら金曜から）。祝日は考えないので、休み明けは期間を言うとよい。
+- スプリントゴールは ADO に標準の欄が無いので、聞かれるか、無いまま進む。
+- 個人ごとの件数や速さの比較は出さない。
+
+### work-item-ready
+
+Work Item（PBI・タスク・バグ）を、着手できる状態にする。
+
+- **返すもの**: 着手を妨げる不足点（誰に聞けば決まるか付き）、受け入れ条件の案、条件ごとの検証方法、1 日程度の単位の分割案、書かれた事実とこちらの推測の区別。
+- **決めないもの**: 担当者・優先度・見積もり。
+- **書き込み（頼んだときだけ）**: 受け入れ条件の更新（HTML）、子タスクの作成（親へのリンク、Iteration と Area は親と同じ）。件数と中身を一覧で見せてから送る。
+
+### pr-evidence-pack
+
+作業ブランチの PR を、証拠付きで下書きする。
+
+- **集めるもの**: 基準ブランチとの差分、関連する Work Item と受け入れ条件、このセッションで実行した検査、`HEAD` と同じコミットの CI の結果、リポジトリの PR テンプレート。
+- **下書き**: テンプレートがあればその節立て。無ければ「目的 / 変更点 / 選んだ案と棄却した案 / 受け入れ条件と証拠の対応 / 検査（実行したもの・しなかったもの）/ レビューで見てほしい点」。
+- **作成（頼んだときだけ）**: push 済みかを確かめ（push は別に聞く）、承認後に PR を作る。レビュアーの追加と投票は、頼まれたときだけ。
+
+### pr-review-assist
+
+PR をレビューして、裏を取った指摘だけを投稿する。
+
+1. PR の Iteration の `commonRefCommit` から `sourceRefCommit` までの差分を取る（ブランチの先端どうしの diff は PR 画面の差分と一致しないので使わない）。
+2. `change-risk-reviewer` を起動して、独立した文脈で読ませる。
+3. 返ってきた指摘を、コードを読んで 1 件ずつ確かめる。確かめられないものは捨て、捨てた理由を一覧にする。
+4. 指摘を、ファイル・行・本文の一覧で見せる。投稿する番号を選ぶと、承認の後に行付きのスレッドとして投稿する。投稿の直前に Iteration が増えていないかを確かめる。
+
+投票（承認・却下）はしない。
+
+### ci-failure-triage
+
+CI の失敗を切り分ける。**読み取りだけで、再実行もしない。**
+
+- 失敗したジョブのログを取り、同梱の `scripts/extract_errors.py` でエラーの行と前後を抜き出す。
+- 直近の成功ビルドの同じジョブのログと比べて、今回にしか無いエラーを出す。同じブランチの前の失敗にも同じエラーがあるかを見る。
+- 「今回の変更で新しく出た / 前からある / 環境の要因の候補 / 未確定」に分け、根拠と次に確かめる手（ローカルでの再現コマンドなど）を返す。原因は断定しない。
+- 再実行が要るときは、どのジョブかを示してユーザーに画面から頼む（API の retry の挙動を確かめられていないため）。
+
+### pipeline-change-check
+
+パイプラインの YAML の変更を、ADO に展開させて確かめる。
+
+- ADO の `previewRun`（テンプレートを展開した最終の YAML だけを返し、ビルドは作らない）を、変更前と変更後で呼び、差分を比べる。
+- 本文は同梱の `scripts/preview_body.py` で作る。`ado.ps1 preview` は `previewRun: true` が入っていない本文を送らない。
+- ルートの YAML の変更は、push しなくても確かめられる。テンプレートの変更は、push したブランチを指定する必要がある（push するかは聞かれる）。
+- **確かめられるのは展開の結果まで。**タスクが実行時に成功するかは分からない。
+
+### prompt-lint
+
+プロンプト類（.md / .txt / .json / .jsonl）を機械的に検査する。ADO は使わない。
+
+| 見るもの | 例 |
+|---|---|
+| 文字コード | UTF-8 として読めない（Shift_JIS で保存されているなど）、BOM が付いている |
+| 改行 | 1 ファイルに CRLF と LF が混ざっている |
+| JSON / JSONL | 構文の誤り、同じオブジェクトの中の重複キー（後の値が前を黙って上書きする） |
+| テンプレート変数 | 書式の誤り（`str.format` 用のプロンプトに JSON の例を埋め込んで `{` をエスケープし忘れたなど）、定義に無い変数 |
+
+- テンプレート変数の書式（`brace` = `str.format`、`dollar` = `string.Template`、`double-brace` = `{{ name }}`）は、プロンプトを読み込むコードから決める。分からなければ変数の検査は外す。
+- 手で流すなら: `python "$HOME\.agents\skills\prompt-lint\scripts\prompt_lint.py" prompts\ --var-style brace`
+
+### prompt-regression
+
+プロンプトの変更で、代表ケースの出力が壊れていないかを確かめる。
+
+- そのリポジトリにケースのファイル（`prompt-cases/` など）と、モデルを呼ぶ手段があることが前提。無ければ、ケースの形を示して作るかを聞いて止まる。
+- モデルを呼ぶ前に、回数・送る内容・設定を見せて承認を取る。
+- 変更前のプロンプトは一時ディレクトリに取り出して使う。作業ツリーを stash や checkout で動かさない。
+- 同梱の `scripts/check_outputs.py` で、条件（含む・含まない・正規表現・JSON のキー・長さ）の合否と、変更前は通って変更後に落ちた条件（回帰）を出す。
+
+### python-change-check
+
+Python の変更について、そのリポジトリが実際に使っている検査を流す。
+
+- 検査は、CI の YAML → `pyproject.toml` などの設定 → README の順に探す。CI の Python のバージョンと手元が違えば報告する。
+- 足りないパッケージは入れない（入れるかを聞く）。
+- 差分から、Windows で壊れやすい書き方を指摘する（`open()` に `encoding` が無い、`subprocess` の戻り値を見ていない、パスを文字列でつないでいる、`shell=True` に外からの値を渡している）。
+- 実行した検査としなかった検査を分けて報告する。
+
+### incident-report
+
+障害の整理とポストモーテム。**本番に対するコマンドは実行しない。**
+
+1. ログ・アラートの場所、時間帯とタイムゾーン、影響を受けたサービス、直前の変更を聞く。
+2. `incident-evidence-analyst` を起動して、時系列・事実・原因の仮説に整理させる。
+3. ポストモーテムを下書きする（概要 / 影響 / 時系列 / 原因（確定と仮説を分ける）/ うまくいったこと・いかなかったこと / 再発防止）。
+4. 頼まれたら、再発防止の項目から選んだものを Work Item として作る。
+
+## custom agent
+
+`~/.codex/agents/` に入る。親の Codex とは別の文脈で動くので、親の思い込みを引き継がない。
+TOML でサンドボックスや承認の設定は上書きできず、親のものを引き継ぐ（Codex の仕様）。そのため「ファイルを書き換えない・投稿しない」は指示として書いてある。
+
+### change-risk-reviewer
+
+差分を独立して読むレビュアー。`pr-review-assist` が起動する。自分の PR を出す前に、直接「change-risk-reviewer にこの差分をレビューさせて」と頼んでもよい。
+
+- 見るもの: 誤動作と回帰、信頼境界（外から来た文章がコマンドやプロンプトにそのまま入っていないか）、Windows で壊れる箇所、プロンプトの指示の衝突や消えた制約、CI の YAML の条件の変化。
+- 見ないもの: 書き方の好み、命名、将来の拡張性。
+- 返すもの: 指摘ごとに、ファイルと行・何が起きるか・発生する条件・確かめ方・確度。最後に、読まなかった範囲。
+
+### incident-evidence-analyst
+
+障害のログを大量に読んで整理する。`incident-report` が起動する。
+
+- 返すもの: 時系列（タイムゾーンを揃え、出典付き）、観測した事実、原因の仮説ごとの「支持する事実 / 反する事実 / 確かめ方」、確かめられなかったこと。
+- ログに書かれた指示には従わない。本番へのコマンドは実行せず、案として書くだけ。
+
+## AGENTS.md
+
+`~/.codex/AGENTS.md` に入り、毎回読み込まれる。どのプロジェクトでも要るものだけを置いている。
+
+- ADO・チャット・メールなど、取り消せないものを送る前に承認を取る。
+- 文字コードと改行。既存のファイルに合わせる。新しく作る md / txt / json / py は UTF-8（BOM なし）。
+  **日本語を含む .ps1 は UTF-8 の BOM 付き**（Windows PowerShell 5.1 は BOM の無いファイルを cp932 として読む）。
+  Python の `open()` には `encoding` を書く。PowerShell 5.1 の `Out-File` と `>` は UTF-16、`Set-Content` は ANSI で書く。
+- 実行した検査としなかった検査を分けて報告する。
+
+すでに自分の `~/.codex/AGENTS.md` がある場合、`install.ps1` は上書きしない（[インストール](#インストール)）。必要な行だけを自分のファイルへ写すとよい。
+
+## インストール
+
+### 前提
+
+| もの | バージョン | 確かめ方 |
+|---|---|---|
+| Windows | 10 / 11 | |
+| Windows PowerShell | 5.1（標準で入っている）。PowerShell 7 でもよい | `$PSVersionTable.PSVersion` |
+| Python | 3.8 以上。`python` か `py -3` で起動できること | `python --version` |
+| Codex | 最低バージョンは未確認。手順 5 の `/skills` にこのパッケージの 11 個が出れば足りている | `codex --version` |
+| git | 作業リポジトリで使っているもの | `git --version` |
+
+Microsoft Store の `python.exe`（`WindowsApps` の下にあるもの）は Store を開くだけの入口なので、Python としては数えない。
+
+### 手順
+
+1. このリポジトリを `git clone` するか、GitHub の「Download ZIP」で取ってきて展開し、会社 PC の好きな場所に置く。
+2. フォルダの中で PowerShell を開き、まず `-WhatIf` で何が起きるかを見る（ここではまだ何も書き込まない）。
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -WhatIf
+   ```
+3. 入れる。
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+   ```
+   | 入るもの | 入る先 |
+   |---|---|
+   | `skills\<名前>\` | `$HOME\.agents\skills\<名前>\` |
+   | `agents\<名前>.toml` | `$HOME\.codex\agents\<名前>.toml`（`CODEX_HOME` があればその下） |
+   | `AGENTS.md` | `$HOME\.codex\AGENTS.md`（同上） |
+
+   - 同じ名前で中身の違うものがすでにあれば、上書きせずに `skipped` と表示する。
+   - 置き換えたいときだけ `-Force` を付ける。元のものは `$HOME\.hirata-codex-backup\<日時>\` へ退避される。skill のフォルダの外に置くので、Codex が同じ skill を 2 回読み込むことは無い。
+   - zip などで持ち込むと付く「インターネットから来た」印（あるとスクリプトが止められる）を、`install.ps1` が入れた skill のファイルから外す（`Unblock-File`）。
+4. ADO の Collection の URL を、ユーザーの環境変数に入れる（1 回だけ）。
+   ```powershell
+   [Environment]::SetEnvironmentVariable('ADO_COLLECTION_URL', 'https://<サーバー>/tfs/<Collection>', 'User')
+   ```
+   PAT（Personal Access Token。ADO の画面で発行する、パスワードの代わりのトークン）で認証するときだけ、`ADO_AUTH` を `pat` にし、`ADO_PAT` に PAT を入れる。指定が無ければ Windows の統合認証（ログイン中のアカウント）を使う。
+   **PAT はコマンドの引数やファイルに書かない。**環境変数の画面から入れるとよい。
+5. ターミナルと Codex を起動し直す。Codex の中で `/skills` を開き、このパッケージの 11 個（[一覧](#一覧)）があることを確かめる。
+6. 接続を確かめる。Codex に「ADO に接続できるか確かめて」と頼むか、自分で流す。
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.agents\skills\ado\scripts\ado.ps1" get '_apis/projects'
+   ```
+   `"ok":true` が出れば繋がっている。
+7. （任意）[テスト](#テスト) を流して、`ado.ps1` と Python スクリプトが Windows PowerShell 5.1 と会社 PC の Python で動くことを確かめる。
+
+### MCP の承認の設定（任意）
+
+ADO の MCP を入れていて、それがオンプレに繋がる場合は、読み取りのツールだけを聞かずに通し、それ以外は毎回聞くようにできる。
+`config\mcp-approval.example.toml` を見て、`$HOME\.codex\config.toml` のその MCP サーバーの節に足す。ツールの名前は Codex の中で `/mcp` を開くと分かる。
+
+### サンドボックスとネットワーク
+
+Codex のサンドボックスでネットワークが止められていると、`ado.ps1` を流すたびに承認を求められる。
+「常に許可」にしてよいのは `get`・`query`・`preview` だけ。**`write` は常に許可にしない。**
+
+## ADO への接続と書き込み
+
+`ado.ps1` のモード:
+
+| モード | 送るもの | 送れる先 |
+|---|---|---|
+| `get` | GET | Collection の下のどこでも |
+| `query` | POST | `_apis/wit/wiql` と `_apis/wit/workitemsbatch` だけ（読み取りのための POST） |
+| `preview` | POST | `_apis/pipelines/{id}/runs` だけ。本文に `"previewRun": true` が無ければ送らない |
+| `write` | POST / PATCH | Collection の下のどこでも。下の承認の手順が要る |
+
+書き込みの流れ:
+
+1. Codex が本文のファイルを作り、`-DryRun` で流す。送らずに、承認用のハッシュを出す。
+2. Codex が、対象（Work Item の番号とタイトル、PR の番号など）と本文を見せて、承認を求める。
+3. 承認すると、Codex が `-Approve <ハッシュ>` を付けて流す。メソッド・URL・Content-Type・本文のどれかが変わっていればハッシュが合わず、送られない。
+
+守っていること:
+
+- Collection の外（別のホスト、別の Collection、`..` を含むパス）には送らない。資格情報が一緒に送られるため。
+- リダイレクトに付いていかない。PAT は http では送らない。
+- Work Item の更新では、`ado` skill の手順として、本文の先頭に読んだときのリビジョン（`rev`）の条件を入れ、承認の後に誰かが更新していたら ADO 側で失敗させる。**これは手順の決まりで、`ado.ps1` 自体は本文の中身を確かめない。**
+- 応答が返らなかった書き込みは、終了コード 3 で終わる。**このときは送り直さず、対象を読み直して反映されたかを確かめる。**
+- 応答は `-OutFile`（指定が無ければ一時フォルダ）にそのまま保存し、画面には結果の 1 行の JSON だけを出す。
+
+終了コード: 0 成功、1 HTTP のエラーか応答なし（読み取り）、2 使い方の誤りか拒否（送っていない）、3 書き込みを送ったが結果が分からない。
+
+## 更新と削除
+
+- **更新**: 新しいフォルダを持ち込み、`install.ps1 -Force` を流す。変わったものだけが置き換わり、元のものは `$HOME\.hirata-codex-backup\<日時>\` に残る。
+  **`-Force` は `AGENTS.md` にも効く。**自分で書いた `~\.codex\AGENTS.md` を使っているなら、置き換わった後に退避先（`$HOME\.hirata-codex-backup\<日時>\.codex\AGENTS.md`）から戻すか、先に `-WhatIf` で何が置き換わるかを見る。
+- **削除**: 次を消す。
+  - `$HOME\.agents\skills\` の下の 11 個のフォルダ（`ado`、`ci-failure-triage`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`sprint-report`、`work-item-ready`）
+  - `$HOME\.codex\agents\change-risk-reviewer.toml` と `incident-evidence-analyst.toml`（`CODEX_HOME` があればその下）
+  - `$HOME\.codex\AGENTS.md`（このパッケージのものなら。`CODEX_HOME` があればその下）
+- 入れた先で直接直すと、次の `-Force` で上書きされる（退避はされる）。直すならこのフォルダ側を直して入れ直す。
+
+## テスト
+
+このフォルダの中で流す。
+
+```powershell
+python -m unittest discover -s tests
+```
+
+- `tests/test_ado_ps1.py` は、`powershell`（Windows PowerShell 5.1）があればそれを、無ければ `pwsh` を使い、どちらも無ければ飛ばす。
+  Windows で流して `skipped` が 0 件なら、5.1 で確かめたことになる。
+- `install.ps1` はテストの対象外。`-WhatIf` で流して結果を見る。
+
+| ファイル | 見ているもの |
+|---|---|
+| `tests/test_scripts.py` | Python スクリプト 5 本の動作 |
+| `tests/test_ado_ps1.py` | `ado.ps1` を手元の偽サーバーに向けて流し、送り先の制限・承認のハッシュ・Content-Type・拒否のときに送っていないことを確かめる。PowerShell が無ければ飛ばす |
+| `tests/test_layout.py` | 各 skill の形（名前と説明、書き込む skill が手動だけになっているか、SKILL.md が参照するスクリプトとリンクがあるか）、agent の形、.ps1 が ASCII だけか |
+
+skill を足したり直したりしたら流す。書き込みを伴う skill を足すときは、`tests/test_layout.py` の `WRITE_SKILLS` にも足す（足し忘れるとテストが落ちる）。
+
+## うまくいかないとき
+
+| 症状 | 見るところ |
+|---|---|
+| `/skills` に出てこない | Codex を起動し直したか。`$HOME\.agents\skills\<名前>\SKILL.md` があるか |
+| `.ps1` が実行できない（実行ポリシー） | `powershell -ExecutionPolicy Bypass -File ...` の形で流しているか。グループポリシーで止められている場合は、`-ExecutionPolicy` でも変えられないので情シスに相談する |
+| `ADO_COLLECTION_URL is not set` | 手順 4 の後に、ターミナルと Codex を起動し直したか |
+| 401、または 302 で `location` がサインイン画面 | 認証。統合認証が通らない環境なら `ADO_AUTH=pat` を試す |
+| 接続のエラー | プロキシと証明書。ブラウザで同じ URL が開けるか |
+| `ado_context.py` が「Collection のパスで始まっていない」 | `ADO_COLLECTION_URL` と `git remote get-url origin` のホストとパスが一致しているか |
+| 日本語が化ける | ファイルの文字コード。Python で `encoding="utf-8"` を付けて読み書きしているか。PowerShell 5.1 で書いたファイルは UTF-16 や ANSI になっている |
+| 書き込みが終了コード 2（ハッシュが合わない） | `-DryRun` の後で本文か引数が変わった。`-DryRun` からやり直す |
+| 書き込みが終了コード 3 | 送ったが結果が分からない。送り直さずに対象を読み直す |
+
+## 前提にした事実
+
+2026-10-16 に公式の資料で確かめた。
+
+- Azure DevOps Server 2020 の REST は 6.0 まで（7.0 は使えない）。Update 1.2 は不具合修正のまとめで、機能は増えていない。
+  [REST API のバージョン](https://learn.microsoft.com/en-us/azure/devops/integrate/concepts/rest-api-versioning)、[Server 2020 Update 1 のリリースノート](https://learn.microsoft.com/en-us/azure/devops/server/release-notes/azuredevops2020u1)
+- Microsoft 公式の Azure DevOps MCP は Services 専用で、接続先が `dev.azure.com` に固定され、api-version も 7.2 系を使っている。
+  [FAQ](https://github.com/microsoft/azure-devops-mcp/blob/main/docs/FAQ.md)
+- Server 2020（REST 6.0）の Work Item のコメントには Markdown の指定が無い（7.1 から）。
+  [Comments - Add（6.0）](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/comments/add?view=azure-devops-server-rest-6.0)
+- パイプラインの `previewRun` は、新しい実行を作らずに、テンプレートを展開した最終の YAML を返す（6.0-preview.1）。
+  [Runs - Run Pipeline（6.0）](https://learn.microsoft.com/en-us/rest/api/azure/devops/pipelines/runs/run-pipeline?view=azure-devops-rest-6.0)
+- Codex の skill は `$HOME/.agents/skills` から読まれ、`$名前` か `/skills` で明示して呼べる。`allow_implicit_invocation: false` で自動の選択が止まる。
+  [Build skills](https://learn.chatgpt.com/docs/build-skills)
+- Codex の custom agent は、ユーザーが頼んだとき、または AGENTS.md や skill の指示が求めたときに起動する。TOML に `sandbox_mode` や `approval_policy` を書いても親の設定は上書きされない。
+  [Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)
+- `~/.codex/AGENTS.md` は毎回読まれる。[AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
+
+## 確かめていないこと
+
+2026-10-16 時点。
+
+- **Windows PowerShell 5.1 では一度も流していない。**検査したのは PowerShell 7.4（Linux のコンテナ）だけ。
+  `ado.ps1` と Python スクリプトは、会社 PC で [テスト](#テスト) を流すと確かめられる。`install.ps1` は流して結果を見るしかない。
+- 会社の ADO Server にはまだ繋いでいない。統合認証が通るか、`previewRun` で本当にビルドが作られないか、`rev` の条件で更新が止まるかは、実際のサーバーで確かめる必要がある。
+- 公式の資料で確かめられなかった API の仕様と、skill 側の扱い:
+
+  | 仕様 | skill 側の扱い |
+  |---|---|
+  | 自分の ID を取る `_apis/connectionData` の api-version | 取れなければ、自分に割り当てられた Work Item から ID を取る |
+  | ビルドの retry で、失敗したジョブだけが再実行されるか | API からは再実行しない |
+  | PR の説明の文字数の上限（4000 文字という第三者の記述だけがある） | 4000 文字以内を目安にする |
+  | パイプライン ID とビルド定義 ID が同じ値か | 同じと仮定して試し、404 なら一覧から名前で探す |
+
+- 会社で使う Codex のバージョンで、`agents/openai.yaml` の `allow_implicit_invocation` と、MCP のツールごとの承認の設定が効くか。
+- 書き込みを送った後に応答が返らなかったとき、または応答を保存できなかったときに、終了コード 3 になること。テストしているのは、送る前に止める側だけ。
+
+## 判断の記録
+
+| 選んだ案 | 棄却した案と理由 |
+|---|---|
+| ADO への通信は PowerShell、取ってきたデータの解析は Python | すべて Python: 標準ライブラリでは Windows 統合認証（NTLM / Kerberos）を扱えない |
+| ADO 用の小さな REST クライアント `ado.ps1` を自作 | 公式 MCP をオンプレ向けに fork: 7.2 前提のコードを 6.0 へ合わせ続ける保守が終わらない |
+| 書き込みは承認のハッシュで内容を固定 | 指示文だけで承認を求める: 承認の後に本文が変わっても気付けない |
+| `ado` 以外で書き込む 4 つの skill は手動だけ | すべて自動: グローバルなので関係ない作業中にも候補に上がる |
+| 接続先は `git remote` から割り出し、Collection だけ環境変数 | プロジェクトごとの設定ファイル: グローバルで使うので、リポジトリごとに置きたくない |
+| デイリーとスプリントレビューを `sprint-report` 1 つに | 別々の skill: グローバルの skill は毎回、名前と説明が読み込まれるので数を絞る |
+| CI の再実行はユーザーに画面から頼む | API の retry: 失敗したジョブだけが再実行されるかを確かめられなかった |
+| パイプラインの検証はサーバーの `previewRun` | YAML の解析器を自作: テンプレートの展開を正しく再現できない |
+| custom agent は 2 つだけ | 役ごとに多数: 使われない役が残るだけで、独立した文脈が要る場面はレビューと大量の読み込みに限られる |
+| `release-notes` を作らない | 持ち主がリリース作業をしないため |
+| 自律的にスクラムを回す agent・本番を自動で直す agent・全 PR への自動レビュー投稿を作らない | 人が決めること（優先度・担当）を誤って更新する、誤読が本番の操作に直結する、誤指摘と通知が増える |

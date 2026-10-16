@@ -1,0 +1,15 @@
+# ADO の MCP サーバーを使う場合の、ツールごとの承認の設定例。
+# ~/.codex/config.toml の、その MCP サーバーの節に足す。ADO_SERVER と READ_TOOL_* は実際の名前に置き換える。
+# 実際のツール名は Codex の中で /mcp を開くと一覧で見られる。
+#
+# 読み取りのツールだけを個別に approve（聞かずに通す）にして、それ以外は毎回聞く。
+# "writes" モードは read-only の印が付いていないツールを全部止めるので、印の無い実装では読み取りまで毎回聞かれる。
+
+[mcp_servers.ADO_SERVER]
+default_tools_approval_mode = "prompt"
+
+[mcp_servers.ADO_SERVER.tools.READ_TOOL_1]
+approval_mode = "approve"
+
+[mcp_servers.ADO_SERVER.tools.READ_TOOL_2]
+approval_mode = "approve"

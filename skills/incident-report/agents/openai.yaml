@@ -1,0 +1,6 @@
+interface:
+  display_name: "Incident Report"
+  short_description: "障害の整理とポストモーテム"
+  default_prompt: "Use $incident-report to write up the incident from these logs."
+policy:
+  allow_implicit_invocation: false

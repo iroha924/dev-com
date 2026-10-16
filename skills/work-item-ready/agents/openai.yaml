@@ -1,0 +1,6 @@
+interface:
+  display_name: "Work Item Ready"
+  short_description: "Work Item を着手できる状態にする"
+  default_prompt: "Use $work-item-ready to review work item #1234 before I start."
+policy:
+  allow_implicit_invocation: false
