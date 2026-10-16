@@ -6,6 +6,7 @@ Codex のモデルは、自分のモデル名・effort・利用枠の残りを�
 読むもの（rollout は公開された仕様ではなく、Codex の内部の形式）:
   - turn_context の model / effort: そのターンの設定（Codex はフックを呼ぶ前に、そのターンの turn_context を書く）
   - event_msg の token_count の rate_limits: primary / secondary の used_percent・window_minutes・resets_at
+  - 先頭の session_meta の originator: codex_exec なら、人が返事をできない非対話の実行
 
 どんな失敗でも終了コード 0 で終わる。フックの失敗で依頼を止めないため。読めなかった値は「不明」と書く。
 出力は hookSpecificOutput.additionalContext の JSON（公式は素のテキストも受け付けるが、Codex で動作を確かめた形に揃える）。
@@ -35,6 +36,22 @@ def read_tail_lines(path, tail_bytes=TAIL_BYTES):
     if start > 0:
         lines = lines[1:]  # 途中から読んだ最初の行は切れている
     return lines
+
+
+NON_INTERACTIVE_ORIGINATORS = {"codex_exec"}
+
+
+def read_originator(path):
+    """rollout の 1 行目（session_meta）の originator。読めなければ None。"""
+    with open(path, "rb") as f:
+        first = f.readline(1024 * 1024)
+    try:
+        item = json.loads(first.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if isinstance(item, dict) and item.get("type") == "session_meta" and isinstance(item.get("payload"), dict):
+        return item["payload"].get("originator")
+    return None
 
 
 def latest_status(lines):
@@ -84,7 +101,7 @@ def describe_window(window, now):
     return text, float(window["used_percent"])
 
 
-def build_message(hook_input, turn, limits, now=None):
+def build_message(hook_input, turn, limits, now=None, originator=None):
     now = datetime.datetime.now().timestamp() if now is None else now
     model = hook_input.get("model") or (turn or {}).get("model") or "不明"
     effort = (turn or {}).get("effort") or "不明"
@@ -99,6 +116,9 @@ def build_message(hook_input, turn, limits, now=None):
                 tight = tight or (described[1] is not None and described[1] >= TIGHT_PERCENT)
     parts.append(" / ".join(windows) if windows else "利用枠 不明")
     line = "[利用状況] " + "、".join(parts) + "。"
+    if originator in NON_INTERACTIVE_ORIGINATORS:
+        # 人が返事をできないので、止めて案内すると処理がそこで終わってしまう。
+        return line + "非対話の実行（%s）なので、設定の切り替えの案内はせずに進める。" % originator
     line += "この依頼に勧める設定と違うなら、AGENTS.md の「モデルと effort の案内」に従い、作業の前に案内する。"
     if tight:
         line += "枠が残り少ないので、gpt-6-luna で足りる依頼は必ずそれを案内する。"
@@ -117,15 +137,16 @@ def main():
     # spawn された子でもフックは走る（入力に agent_id が入る）。子は案内しないので、何も足さない。
     if hook_input.get("agent_id"):
         return 0
-    turn = limits = None
+    turn = limits = originator = None
     path = hook_input.get("transcript_path")
     if isinstance(path, str) and path:
         try:
             turn, limits = latest_status(read_tail_lines(path))
+            originator = read_originator(path)
         except OSError:
             pass
     try:
-        message = build_message(hook_input, turn, limits)
+        message = build_message(hook_input, turn, limits, originator=originator)
     except Exception:  # 形の変わった値で落ちても、依頼は止めない
         message = "[利用状況] 不明。この依頼に勧める設定と違うなら、AGENTS.md の「モデルと effort の案内」に従い、作業の前に案内する。"
     event = hook_input.get("hook_event_name") or "UserPromptSubmit"

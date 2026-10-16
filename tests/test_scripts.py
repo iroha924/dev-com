@@ -335,6 +335,17 @@ class CodexStatusHookTest(unittest.TestCase):
         self.assertNotIn("95%", text)
         self.assertNotIn("必ずそれを案内", text)
 
+    def test_non_interactive_runs_are_told_not_to_stop(self):
+        meta = {"type": "session_meta", "payload": {"id": "t1", "originator": "codex_exec", "source": "exec"}}
+        path = self.rollout([meta, self.limits(85.0)])
+        text = self.run_hook(json.dumps({"transcript_path": path}))["additionalContext"]
+        self.assertIn("非対話の実行", text)
+        self.assertNotIn("作業の前に案内する", text)
+        self.assertNotIn("必ずそれを案内", text)
+        meta["payload"]["originator"] = "codex-tui"
+        path = self.rollout([meta, self.limits(10.0)])
+        self.assertIn("作業の前に案内する", self.run_hook(json.dumps({"transcript_path": path}))["additionalContext"])
+
     def test_subagents_get_nothing(self):
         r = subprocess.run([sys.executable, self.SCRIPT], input=json.dumps({"agent_id": "a1", "agent_type": "researcher"}),
                            capture_output=True, encoding="utf-8")
