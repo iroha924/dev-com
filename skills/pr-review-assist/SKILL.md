@@ -1,6 +1,6 @@
 ---
 name: pr-review-assist
-description: Azure DevOps Server の他人の PR（または自分の PR の出す前の確認）をレビューする。PR の差分を正しい基準で取り、change-risk-reviewer に独立した文脈で読ませ、裏を取った指摘だけを行番号付きの下書きにし、承認後にスレッドとして投稿する。「PR #123 をレビューして」と言われたときに使う。
+description: Azure DevOps Server の他人の PR（または自分の PR の出す前の確認）をレビューする。PR の差分を正しい基準で取り、change-risk-reviewer に独立した文脈で読ませ、裏を取った指摘だけを行番号付きの下書きにし、承認後にスレッドとして投稿する。「PR 123 をレビューして」と言われたときに使う。
 metadata:
   short-description: PR のレビューと指摘の投稿
 ---
@@ -20,7 +20,7 @@ ADO の読み書きは `ado` skill の手順に従う。投票（承認・却下
 
 ## 2. 読ませる
 
-custom agent の `change-risk-reviewer` を、`spawn_agent` に `agent_type: "change-risk-reviewer"`・`fork_turns: "none"` を付けて起動し、次を渡す。**`fork_turns` を省かない。**省くと既定の `"all"` で親の会話を全部引き継ぎ、独立して読ませる意味が無くなる。
+custom agent の `change-risk-reviewer` を、`spawn_agent` に `agent_type: "change-risk-reviewer"`・`fork_turns: "none"`・`task_name: "pr_review"`（2 回目からは末尾を変える）を付けて起動し、`wait_agent` に `timeout_ms: 600000` を渡して待つ。渡すものは次のとおり。**`fork_turns` を省かない。**省くと既定の `"all"` で親の会話を全部引き継ぎ、独立して読ませる意味が無くなる。
 
 - PR のタイトル・説明、Work Item の受け入れ条件
 - `commonRefCommit` と `sourceRefCommit` の SHA、差分

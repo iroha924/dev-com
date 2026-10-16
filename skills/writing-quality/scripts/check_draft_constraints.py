@@ -27,7 +27,7 @@ from pathlib import Path
 
 # closing sequence（`## 概要 ##`）は CommonMark では見出し名に入らない。
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$")
-FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 # 有限の固定リストにする。山括弧や HTML コメントを「プレースホルダーらしきもの」として
 # 拾い始めると、塞ぐ面に終端が無くなり、本文中の正当な表記を誤検出する。
@@ -45,17 +45,16 @@ def headings(text: str) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
     fence: str | None = None
     for line in text.splitlines():
-        if m := FENCE.match(line):
-            token = m.group(1)[0]
-            if fence is None:
-                fence = token
-            elif fence == token:
-                fence = None
+        m = FENCE.match(line)
+        if fence is None:
+            if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                fence = m.group(1)
+            elif h := HEADING.match(line):
+                out.append((len(h.group(1)), h.group(2)))
             continue
-        if fence is not None:
-            continue
-        if h := HEADING.match(line):
-            out.append((len(h.group(1)), h.group(2)))
+        # 閉じるのは、開いたものと同じ文字で同じ長さ以上、後ろが空白だけの行（CommonMark 4.5）。
+        if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
+            fence = None
     return out
 
 
@@ -97,14 +96,14 @@ def load(path: Path, role: str) -> tuple[str, str] | None:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("draft", type=Path)
     ap.add_argument("--template", type=Path, help="この見出しが下書きに揃っているかを見る")
     ap.add_argument("--max-chars", type=int, help="ユーザーが明示した上限のときだけ渡す")
     args = ap.parse_args()
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
 
     loaded = load(args.draft, "下書き")
     if loaded is None:

@@ -13,7 +13,8 @@ WRITE_SKILLS = {"pr-evidence-pack", "work-item-ready", "pr-review-assist", "inci
 # 書き込まないが、子を起動して何往復もする重い skill。
 MANUAL_SKILLS = WRITE_SKILLS | {"grill"}
 # 書き込みは本題ではなく、ユーザーが送るよう頼んだときだけ ado skill の「書く」へ渡す skill。自動で選ばれてよい。
-# 送る前のハッシュ付きの承認は ado.ps1 が強制する。
+# 書き込みの手順を持つ ado skill 自体が自動で選ばれるので、この 2 つを手動にしても書き込みの経路は減らない。
+# 送る前に人が承認することを機械で止めるのは、ado.ps1 の write を常に許可にしていないときの Codex の承認だけ。
 AUTO_SKILLS_THAT_MAY_SEND = {"review-triage", "writing-quality"}
 
 
@@ -61,13 +62,26 @@ class SkillLayoutTest(unittest.TestCase):
                     self.assertTrue(os.path.isfile(yaml_path))
                     self.assertIn("allow_implicit_invocation: false", read(yaml_path))
 
+    def test_description_is_a_safe_plain_scalar(self):
+        # 引用符の無い YAML の値では、" #" から後ろがコメントとして消え、": " は読み込みの失敗になる。
+        for name in skill_dirs():
+            fm = frontmatter(read(os.path.join(SKILLS, name, "SKILL.md")))
+            desc = re.search(r"(?m)^description: (.+)$", fm).group(1)
+            with self.subTest(skill=name):
+                self.assertNotIn(" #", desc)
+                self.assertNotIn(": ", desc)
+                self.assertNotRegex(desc, r"^[\[\]{}>|*&!%@`'\"#,?:-]")
+
     def test_descriptions_fit_the_initial_list(self):
         # Codex は起動時に読む skill の一覧を文脈の 2%（分からなければ 8,000 文字）に収め、超えると description を短く切る
         # （https://learn.chatgpt.com/docs/build-skills）。手元の他の skill の分を残すため、このパッケージは 6,000 文字まで。
+        # 一覧の 1 行は「- 名前: 説明 (file: パス)」の形で、パスも数に入る。パスは長めの Windows のホームで見積もる。
         total = 0
         for name in skill_dirs():
             fm = frontmatter(read(os.path.join(SKILLS, name, "SKILL.md")))
-            total += len(name) + len(re.search(r"(?m)^description: (.+)$", fm).group(1))
+            desc = re.search(r"(?m)^description: (.+)$", fm).group(1)
+            path = "C:\\Users\\%s\\.agents\\skills\\%s\\SKILL.md" % ("x" * 20, name)
+            total += len("- %s: %s (file: %s)\n" % (name, desc, path))
         self.assertLessEqual(total, 6000)
 
     def test_manual_skills_match_openai_yaml(self):
@@ -78,18 +92,19 @@ class SkillLayoutTest(unittest.TestCase):
                 self.assertEqual(manual, name in MANUAL_SKILLS)
 
     def test_spawned_agents_do_not_fork_history(self):
-        # spawn_agent の fork_turns は既定が "all" で、親の会話を全部引き継ぐ。独立した文脈で読ませる箇所には "none" を書く。
+        # spawn_agent の fork_turns は既定が "all" で、親の会話を全部引き継ぐ。子を起動する段落ごとに "none" を書く。
+        spawn = re.compile(r"custom agent の `[\w-]+`|agent_type: \"[\w-]+\"|spawn_agent")
         for path in markdown_files():
-            text = read(path)
-            for m in re.finditer(r"custom agent の `([\w-]+)`|agent_type: \"([\w-]+)\"|`agent_type` \| `\"([\w-]+)\"`", text):
-                with self.subTest(path=os.path.relpath(path, ROOT), agent=m.group(0)):
-                    self.assertTrue('fork_turns: "none"' in text, '子を起動する手順に fork_turns: "none" が無い')
+            for para in re.split(r"\n\s*\n", read(path)):
+                if spawn.search(para) and "を起動" in para:
+                    with self.subTest(path=os.path.relpath(path, ROOT), para=para[:60]):
+                        self.assertIn('fork_turns: "none"', para, '子を起動する段落に fork_turns: "none" が無い')
 
     def test_referenced_scripts_exist(self):
         pattern = re.compile(r"\$HOME\\\.agents\\skills\\([\w-]+)\\scripts\\([\w.]+)")
-        for name in skill_dirs():
-            for m in pattern.finditer(read(os.path.join(SKILLS, name, "SKILL.md"))):
-                with self.subTest(skill=name, ref=m.group(0)):
+        for path in markdown_files():
+            for m in pattern.finditer(read(path)):
+                with self.subTest(path=os.path.relpath(path, ROOT), ref=m.group(0)):
                     self.assertTrue(os.path.isfile(os.path.join(SKILLS, m.group(1), "scripts", m.group(2))))
 
     def test_relative_links_exist(self):

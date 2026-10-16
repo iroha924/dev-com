@@ -2,7 +2,11 @@
 
 公式の REST リファレンス（`?view=azure-devops-server-rest-6.0`）と 2026-10-16 に照合した。会社のサーバーでは未実行。
 ページは `https://learn.microsoft.com/en-us/rest/api/azure/devops/<領域>/<操作>?view=azure-devops-server-rest-6.0`。
-パスは Collection URL からの相対。クエリの値に `:` や `/` を含むもの（`buildUri`、`artifactId`）は、Python の `urllib.parse.quote(値, safe="")` で URL エンコードしてから入れる。`ado.ps1` は api-version を付け忘れたら 6.0（`preview` は 6.0-preview.1）を足す。
+パスは Collection URL からの相対。クエリの値に `:` `/` `+` を含むもの（`buildUri`、`artifactId`、`startDateTime`）は、URL エンコードしてから入れる（`+` はそのままだと空白として読まれる）。PowerShell からは、外側をダブルクォート、内側をシングルクォートにする（PowerShell 5.1 と 7.2 以前は、ネイティブのコマンドへ渡す引数の中のダブルクォートを落とす）。
+
+```powershell
+python -c "import urllib.parse as u; print(u.quote('vstfs:///Build/Build/123', safe=''))"
+````ado.ps1` は api-version を付け忘れたら 6.0（`preview` は 6.0-preview.1）を足す。
 preview のバージョンが要るものは表のバージョンを `-ApiVersion` で渡す。
 
 ## Work Item
@@ -13,7 +17,7 @@ preview のバージョンが要るものは表のバージョンを `-ApiVersio
 | 一括取得 | POST `{project}/_apis/wit/workitemsbatch` | 6.0 | `query` モード。本文 `{"ids": [...], "fields": [...]}`。**ids は 200 件まで** |
 | 1 件取得 | GET `{project}/_apis/wit/workitems/{id}?$expand=relations` | 6.0 | 応答の `rev` を更新の test に使う |
 | 変更履歴 | GET `{project}/_apis/wit/workItems/{id}/updates` | 6.0 | `$top` / `$skip` |
-| 期間中の変更をまとめて | GET `{project}/_apis/wit/reporting/workitemrevisions?startDateTime=<ISO 8601>&fields=System.Id,System.State,System.AssignedTo,System.IterationPath,System.ChangedDate` | 6.0 | `startDateTime` より後のリビジョンだけが返る。`types` で種別を絞る。`isLastBatch` が false なら `continuationToken` で続きを取る |
+| 期間中の変更をまとめて | GET `{project}/_apis/wit/reporting/workitemrevisions?startDateTime=<ISO 8601>&fields=System.Id,System.State,System.AssignedTo,System.IterationPath,System.ChangedDate` | 6.0 | `startDateTime` より後のリビジョンだけが返る。日時は UTC の `Z` 付きで書き、URL エンコードする。`types` で種別を絞る。**続きは応答の本文の `continuationToken` で取る。**2 回目からは `startDateTime` を外し、`continuationToken=<本文の値>` と `fields` だけのパスを自分で組み立てて取る（公式: `startDateTime` は continuationToken と一緒に使えない）。`ado.ps1` の `-ContinuationToken` は応答のヘッダーの値を使うものなので、ここでは使わない。`isLastBatch` が true になるまで続ける |
 | コメント一覧・追加 | GET / POST `{project}/_apis/wit/workItems/{id}/comments` | 6.0-preview.3 | 本文 `{"text": "<p>...</p>"}`。**HTML で書く** |
 | 作成 | POST `{project}/_apis/wit/workitems/$Task` | 6.0 | JSON Patch（`application/json-patch+json`、ado.ps1 が自動で付ける）。パスは `$` を含むのでシングルクォート |
 | 更新 | PATCH `{project}/_apis/wit/workitems/{id}` | 6.0 | 先頭に `{"op":"test","path":"/rev","value":N}` |
@@ -37,11 +41,12 @@ preview のバージョンが要るものは表のバージョンを `-ApiVersio
 | Team 一覧 | GET `_apis/projects/{project}/teams` | 6.0 | サンプルは GUID。名前で通らなければ `_apis/projects/{project}` で ID を取る |
 | 現在の Iteration | GET `{project}/{team}/_apis/work/teamsettings/iterations?$timeframe=current` | 6.0 | `attributes.startDate` / `finishDate` |
 | Iteration の Work Item | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/workitems` | 6.0-preview.1 | `workItemRelations[]`。中身は workitemsbatch で取る |
+| チームの設定 | GET `{project}/{team}/_apis/work/teamsettings` | 6.0 | `workingDays`（稼働する曜日） |
 | キャパシティ | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/capacities` | 6.0 | メンバーごとの `activities[].capacityPerDay` と `daysOff[]`。合計は自分で足す |
 | チームの休日 | GET `{project}/{team}/_apis/work/teamsettings/iterations/{iterationId}/teamdaysoff` | 6.0 | `daysOff[]`（`start` / `end`） |
 
 WIQL では `@Me`、`@Today`、`@CurrentIteration`（Team を含むパスに POST したとき）が使える。
-`ASOF '<日時>'` を末尾に付けると、その時点の状態で問い合わせられる（スプリント開始時点に Iteration にあった Work Item と今の差で、途中で足されたものが分かる）。`EVER` は「一度でもその値だったことがある」。クエリの文は 32K 文字まで（[WIQL の構文、2020 版](https://learn.microsoft.com/en-us/azure/devops/boards/queries/wiql-syntax?view=azure-devops-2020)）。
+`ASOF '<日時>'` を末尾に付けると、その時点の状態で問い合わせられる。時刻を書かなければ 0 時、タイムゾーンを書かなければ手元の PC のタイムゾーンで読まれる（公式）ので、UTC の `Z` 付きで書く。使い方の例は `sprint-report` の review。`EVER` は「一度でもその値だったことがある」。クエリの文は 32K 文字まで（[WIQL の構文（2020 のページ）](https://learn.microsoft.com/en-us/azure/devops/boards/queries/wiql-syntax?view=azure-devops-2020)）。
 
 自分の ID: `_apis/connectionData` は REST リファレンスに載っておらず、6.0 でのバージョンが未確認。
 取れなければ、WIQL の `[System.AssignedTo] = @Me` で 1 件取り、`System.AssignedTo` の `id` を使う。
@@ -84,7 +89,7 @@ WIQL では `@Me`、`@Today`、`@CurrentIteration`（Team を含むパスに POS
 |---|---|---|---|
 | ビルド一覧 | GET `{project}/_apis/build/builds?definitions={id}&branchName=refs/heads/x&statusFilter=completed&resultFilter=succeeded&queryOrder=finishTimeDescending&$top=1` | 6.0 | 最新を取るときは `queryOrder` を明示する |
 | ビルド 1 件 | GET `{project}/_apis/build/builds/{buildId}` | 6.0 | `sourceBranch`、`sourceVersion`（コミット）、`definition.id`、`uri` |
-| ビルドに入った変更 | GET `{project}/_apis/build/builds/{buildId}/changes` | 6.0 | コミットの `id`（SHA）・`author`・`message`。前のビルドからの差分のコミット |
+| ビルドに入った変更 | GET `{project}/_apis/build/builds/{buildId}/changes` | 6.0 | コミットの `id`（SHA）・`author`・`message`。公式の説明は「ビルドに紐付く変更」だけで、どのビルドからの差分かは書かれていない。間のビルドが落ちていると全部は出ないことがあるので、`git log` でも確かめる |
 | ビルドのテスト実行 | GET `{project}/_apis/test/runs?buildUri=<ビルドの uri>` | 6.0 | `uri` は `vstfs:///Build/Build/{buildId}` の形 |
 | 失敗したテスト | GET `{project}/_apis/test/Runs/{runId}/results?outcomes=Failed` | 6.0 | `errorMessage`、`stackTrace`（1000 文字まで）、**`failingSince`**（いつ・どのビルドから落ち続けているか）。`$top` は最大 1000 |
 | タイムライン | GET `{project}/_apis/build/builds/{buildId}/timeline` | 6.0 | `records[]` の `result`（failed など）、`log.id`、`issues[]` |
@@ -102,3 +107,5 @@ WIQL では `@Me`、`@Today`、`@CurrentIteration`（Team を含むパスに POS
 - `logs/{id}` を `application/json` で取ったときの応答の形
 - パイプライン ID とビルド定義 ID が同じ値であること（同じとして扱っているが、公式の明記は見ていない）
 - PR の説明の文字数の上限（4000 文字という第三者の記述だけがある）
+- WIQL の `ASOF` に `2026-10-13T15:00:00Z` の形（UTC の `Z` 付き）を書いたときに、Server 2020 がそのとおり読むか
+- Reporting の `workitemrevisions` で、2 回目以降に `startDateTime` を外して `continuationToken` だけで取る形が、Server 2020 で期待どおりに続きを返すか

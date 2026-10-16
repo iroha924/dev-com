@@ -9,7 +9,7 @@ import json
 import os
 import subprocess
 import sys
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 
 class ContextError(Exception):
@@ -19,9 +19,17 @@ class ContextError(Exception):
 def _split(url):
     parts = urlsplit(url.strip())
     if not parts.scheme or not parts.hostname:
-        raise ContextError("URL として読めない: %s" % url)
+        raise ContextError("URL として読めない: %s" % redact(url))
     segments = [unquote(s) for s in parts.path.split("/") if s]
     return parts.hostname.lower(), segments
+
+
+def redact(url):
+    """URL に埋め込まれた資格情報（https://user:PAT@host）を落とす。出力やエラーの文面に PAT を出さないため。"""
+    parts = urlsplit(url.strip())
+    if "@" not in parts.netloc:
+        return url.strip()
+    return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
 
 
 def resolve(remote, collection_url):
@@ -40,7 +48,7 @@ def resolve(remote, collection_url):
         )
     rest = remote_segs[len(prefix):]
     if "_git" not in rest:
-        raise ContextError("remote に /_git/ が無い。Azure Repos の URL ではない: %s" % remote)
+        raise ContextError("remote に /_git/ が無い。Azure Repos の URL ではない: %s" % redact(remote))
     i = rest.index("_git")
     before, after = rest[:i], rest[i + 1:]
     if after and after[0] in ("_full", "_optimized"):
@@ -55,7 +63,7 @@ def resolve(remote, collection_url):
         "repo": repo,
         "project_path": quote(project, safe=""),
         "repo_path": quote(repo, safe=""),
-        "remote": remote,
+        "remote": redact(remote),
     }
 
 

@@ -1,10 +1,10 @@
 # 独立のレビュー
 
-Step 5 の 2 段目で、custom agent の `prose-reviewer` を起動するときの依頼の形と、返す形。
+Step 5 の 2 段目で `prose-reviewer` に頼むときの、依頼の形と返す形。
 
 ## 起動のしかた
 
-`spawn_agent` を `agent_type: "prose-reviewer"`、`fork_turns: "none"`、`message` に下の「渡すもの」を入れて呼び、`wait_agent` で返答を待つ。
+`spawn_agent` を `agent_type: "prose-reviewer"`、`fork_turns: "none"`、`task_name: "prose_review"`（2 回目からは末尾を変える。英小文字・数字・`_` だけ）、`message` に下の「渡すもの」を入れて呼び、`wait_agent` に `timeout_ms: 600000` を渡して返答を待つ。
 **`fork_turns` を省かない。**省くと既定の `"all"` になり、親の会話を全部引き継ぐ。
 
 ## 渡すもの

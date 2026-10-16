@@ -15,7 +15,7 @@ metadata:
 
 ## 2. 読ませる
 
-custom agent の `incident-evidence-analyst` を、`spawn_agent` に `agent_type: "incident-evidence-analyst"`・`fork_turns: "none"` を付けて起動し（省くと親の会話を全部引き継ぎ、大量のログを読む作業を親の文脈から切り離せない）、ファイルの一覧・時間帯・タイムゾーン・直前の変更を渡す。返ってくるのは時系列、観測した事実、原因の仮説と、それぞれを確かめる方法。
+custom agent の `incident-evidence-analyst` を、`spawn_agent` に `agent_type: "incident-evidence-analyst"`・`fork_turns: "none"`・`task_name: "incident_evidence"` を付けて起動し、`wait_agent` に `timeout_ms: 600000` を渡して待つ（省くと親の会話を全部引き継ぎ、大量のログを読む作業を親の文脈から切り離せない）、ファイルの一覧・時間帯・タイムゾーン・直前の変更を渡す。返ってくるのは時系列、観測した事実、原因の仮説と、それぞれを確かめる方法。
 
 ## 3. ポストモーテムを下書きする
 

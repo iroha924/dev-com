@@ -36,6 +36,13 @@ class AdoContextTest(unittest.TestCase):
         ctx = ado_context.resolve(COLL + "/_git/Tools", COLL)
         self.assertEqual((ctx["project"], ctx["repo"]), ("Tools", "Tools"))
 
+    def test_credentials_in_remote_are_not_echoed(self):
+        ctx = ado_context.resolve("https://me:SECRET@tfs.example.local/tfs/DefaultCollection/P/_git/R", COLL)
+        self.assertNotIn("SECRET", json.dumps(ctx))
+        with self.assertRaises(ado_context.ContextError) as cm:
+            ado_context.resolve("https://me:SECRET@tfs.example.local/tfs/DefaultCollection/P/R", COLL)
+        self.assertNotIn("SECRET", str(cm.exception))
+
     def test_userinfo_and_case_are_ignored(self):
         ctx = ado_context.resolve("https://me@TFS.example.local/tfs/defaultcollection/P/_git/R", COLL + "/")
         self.assertEqual((ctx["project"], ctx["repo"]), ("P", "R"))
@@ -243,6 +250,14 @@ class CheckDraftConstraintsTest(unittest.TestCase):
         tpl = self.write("tpl.md", "## 概要\n")
         draft = self.write("d.md", "```\n## 概要\n```\n")
         self.assertEqual(self.run_check(draft, "--template", tpl)[0], 1)
+
+    def test_heading_inside_longer_fence_is_not_counted(self):
+        # 閉じるフェンスは、開いたものと同じ文字で同じ長さ以上、後ろは空白だけ（CommonMark 4.5）。
+        tpl = self.write("tpl.md", "## 概要\n")
+        draft = self.write("d.md", "````markdown\n```python\n## 概要\n```\n````\n")
+        self.assertEqual(self.run_check(draft, "--template", tpl)[0], 1)
+        draft2 = self.write("d2.md", "```\n``` not a close\n## 概要\n```\n")
+        self.assertEqual(self.run_check(draft2, "--template", tpl)[0], 1)
 
     def test_not_checked_is_exit_2(self):
         self.assertEqual(self.run_check(self.write("d.html", "<p>x</p>"))[0], 2)
