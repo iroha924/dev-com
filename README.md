@@ -247,8 +247,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    q["持ち主: 前に〇〇って<br/>何て決めたっけ？"] --> x["Codex（session-search）<br/>検索語を選ぶ"]
-    x --> s["session_search.py search<br/>--question 問いの文 + 検索語"]
+    q["持ち主: 前に〇〇って<br/>何て決めたっけ？"] --> x["Codex（session-search）<br/>検索ワードを選ぶ"]
+    x --> s["session_search.py search<br/>--question 問いの文 + 検索ワード"]
     r[("Codex の会話の記録<br/>sessions / archived_sessions<br/>memories")] -- "増えた分だけ取り込む" --> idx[("索引 sessions.sqlite<br/>%LOCALAPPDATA%\\hirata-codex")]
     s --> idx
     idx --> bm["単語の BM25<br/>（SudachiPy）"]
@@ -264,18 +264,18 @@ flowchart LR
 
 ### 方式と、評価で決めた理由
 
-`evals/session-search/` に評価の道具がある。持ち主の仕事に近いモックの会話 150 本と問い 120 件（同じ語・言い換え・2 文字の語・英語混じり・識別子・似た会話の見分け）と、手元の Mac の実際の会話 1,017 本から作った問い 60 件（リポジトリには入れていない）で比べた。正解の会話が何位に来るかで数える（R@1・R@10 は 1 位・10 位以内に入った割合、MRR は 1 / 順位の平均）。最後の 2 行は、組み込んだ `session_search.py` の検索そのものを測った値。
+`evals/session-search/` に評価の道具がある。持ち主の仕事に近いモックの会話 150 本と問い 120 件（同じ言葉・言い換え・2 文字の言葉・英語混じり・識別子・似た会話の見分け）と、手元の Mac の実際の会話 1,017 本から作った問い 60 件（リポジトリには入れていない）で比べた。正解の会話が何位に来るかで数える（R@1・R@10 は 1 位・10 位以内に入った割合、MRR は 1 / 順位の平均）。最後の 2 行は、組み込んだ `session_search.py` の検索そのものを測った値。
 
 | 方法 | モック R@1 | モック R@10 | モック MRR | 実際 R@1 | 実際 R@10 | 実際 MRR |
 |---|---|---|---|---|---|---|
-| trigram・すべての語を含む（最初の作り） | 0.333 | 0.367 | 0.350 | 0.483 | 0.517 | 0.500 |
-| trigram の BM25・どれかの語を含む（専用の環境が無いときの方式） | 0.617 | 0.925 | 0.733 | 0.617 | 0.833 | 0.695 |
+| trigram・すべての単語を含む（最初の作り） | 0.333 | 0.367 | 0.350 | 0.483 | 0.517 | 0.500 |
+| trigram の BM25・どれかの単語を含む（専用の環境が無いときの方式） | 0.617 | 0.925 | 0.733 | 0.617 | 0.833 | 0.695 |
 | SudachiPy の単語の BM25 | 0.717 | 0.975 | 0.818 | 0.750 | 0.933 | 0.810 |
-| ruri-v3-130m の埋め込み（問いの文 + 検索語） | 0.783 | 0.975 | 0.865 | 0.800 | 0.983 | 0.873 |
+| ruri-v3-130m の埋め込み（問いの文 + 検索ワード） | 0.783 | 0.975 | 0.865 | 0.800 | 0.983 | 0.873 |
 | **単語の BM25 + 埋め込み（RRF、k=60）。既定の方式** | **0.800** | **1.000** | **0.883** | **0.867** | **0.983** | **0.918** |
 
-- 埋め込みは言い換えの問いに強く、単語の BM25 は識別子や 2 文字の語に強い。混ぜると全体がいちばん良くなる。
-- 埋め込みには、持ち主の問いの文と Codex の検索語の両方を渡すと良くなった（混ぜたときの言い換えの MRR が、問いの文だけの 0.76 から 0.81 に。モックの値）。そのため `search` に `--question` がある。
+- 埋め込みは言い換えの問いに強く、単語の BM25 は識別子や 2 文字の言葉に強い。混ぜると全体がいちばん良くなる。
+- 埋め込みには、持ち主の問いの文と Codex の検索ワードの両方を渡すと良くなった（混ぜたときの言い換えの MRR が、問いの文だけの 0.76 から 0.81 に。モックの値）。そのため `search` に `--question` がある。
 - モデルの大きさは、実際の記録で差がはっきり出た（混ぜたときの MRR: 30m 0.821、70m 0.866、130m 0.906）。130m を選ぶ。
 - 形態素解析は SudachiPy と Janome でほぼ同じ（実際の記録で 0.906 と 0.912）。モックでは SudachiPy が上で、処理も速く更新も続いているので SudachiPy を選ぶ。kuromoji は Java と JavaScript の道具なので、Python からは使わない。
 - RRF の k と重みは、振っても差が問いの数の誤差の範囲だった。いちばん素直な k=60、1 対 1 にする。
@@ -296,7 +296,7 @@ python "$HOME\.agents\skills\session-search\scripts\session_search.py" setup
 python "$HOME\.agents\skills\session-search\scripts\session_search.py" index
 ```
 
-- `setup` は `%LOCALAPPDATA%\hirata-codex\venv` に専用の環境を作る。元にする Python は 3.14 を優先する（圧縮された記録を読むため）。入れる版は評価で使ったものに固定している（SudachiPy 0.7.0、sudachidict-core 20260723.1、sentence-transformers 6.1.0、transformers 5.18.0、tokenizers 0.23.2、torch 2.14.1、numpy 2.4.6。どれも 2026-10-01 より前の公開）。
+- `setup` は `%LOCALAPPDATA%\hirata-codex\venv` に専用の環境を作る。元にする Python は 3.14 を優先する（圧縮された記録を読むため）。入れるバージョンは評価で使ったものに固定している（SudachiPy 0.7.0、sudachidict-core 20260723.1、sentence-transformers 6.1.0、transformers 5.18.0、tokenizers 0.23.2、torch 2.14.1、numpy 2.4.6。どれも 2026-10-01 より前の公開）。
 - モデル（`cl-nagoya/ruri-v3-130m`、Apache-2.0）は `%LOCALAPPDATA%\hirata-codex\models\ruri-v3-130m` に置く。会社のネットワークから Hugging Face に届かないときは、別の PC で `hf download cl-nagoya/ruri-v3-130m --local-dir <フォルダ>` で取ってきたフォルダを、そこに置けば使える（Hugging Face の取得には `huggingface.co` のほかに CDN のホストも要る）。
 - `index` は、取り込み・単語の区切り・埋め込みを全部済ませる。最初の一度は、会話の量によって数分〜数十分かかる。
 - 専用の環境があると、`session_search.py` は自動でその環境の Python で動き直す。
@@ -330,7 +330,7 @@ min_rate_limit_remaining_percent = 40
 
 ### 使い方
 
-普通に聞けば `session-search` が選ばれる（AGENTS.md にも「過去の会話の中身を聞かれたら検索する」と書いてある）。Codex は、問いの文と検索語でスクリプトを流し、上位を `show` で読み、日時・引用・`codex resume <id>` を添えて答える。
+普通に聞けば `session-search` が選ばれる（AGENTS.md にも「過去の会話の中身を聞かれたら検索する」と書いてある）。Codex は、問いの文と検索ワードでスクリプトを流し、上位を `show` で読み、日時・引用・`codex resume <id>` を添えて答える。
 
 - 「前に CI の自動の再実行をどうするって決めたっけ？」
 - 「9 月に ECONNRESET の原因を調べたやつ、何だった？」（期間で絞る）

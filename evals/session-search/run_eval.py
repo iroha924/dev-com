@@ -51,7 +51,7 @@ def threads_from_ranked(ranked_msg_ids, msg_thread):
 
 
 def method_index(idx, home, terms, mode):
-    """標準ライブラリだけの方式（trigram の BM25、どれかの語を含めば当たる）。"""
+    """標準ライブラリだけの方式（trigram の BM25、どれかの単語を含めば当たる）。"""
     results, _, _ = idx.search(home, terms, ss.DEFAULT_KINDS, limit=1000, sem=None)
     return [r["id"] for _, r in results]
 
@@ -278,7 +278,7 @@ def main():
                 return [messages[i]["id"] for i in order[:500]]
             run("embed-%s/%s" % (name, form), fn)
 
-    # 埋め込みに、検索語と問いの文をつないで渡す形
+    # 埋め込みに、検索ワードと問いの文をつないで渡す形
     for name, (e, vecs) in embedders.items():
         def fn(q, e=e, vecs=vecs):
             sims = vecs @ e.query(q["question"] + " " + " ".join(q["keywords"]))

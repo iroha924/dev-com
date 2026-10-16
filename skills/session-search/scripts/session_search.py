@@ -17,8 +17,8 @@ rollout は公開された仕様ではなく Codex の内部の形式なので�
 
 検索の方式（evals/session-search の評価で決めた。README の「会話の検索」）:
   - `setup` で専用の環境（SudachiPy と ruri-v3-130m）を入れた PC: SudachiPy で単語に区切った BM25 と、
-    ruri-v3-130m の埋め込みの近さを RRF（k=60）で混ぜる。埋め込みには --question の文と検索語をつないで渡す。
-  - 入れていない PC: trigram の BM25（どれかの語を含めば当たる）。標準ライブラリだけで動く。
+    ruri-v3-130m の埋め込みの近さを RRF（k=60）で混ぜる。埋め込みには --question の文と検索ワードをつないで渡す。
+  - 入れていない PC: trigram の BM25（どれかの単語を含めば当たる）。標準ライブラリだけで動く。
 """
 
 import argparse
@@ -751,7 +751,7 @@ class Index:
         return out, len(scores), " + ".join(modes)
 
     def _trigram_or(self, terms, allowed):
-        """どれかの語を含めば候補にし、語ごとの点の和に新しさの補正を掛けて並べる（標準ライブラリだけの方式）。"""
+        """どれかの単語を含めば候補にし、言葉ごとの点の和に新しさの補正を掛けて並べる（標準ライブラリだけの方式）。"""
         now = datetime.datetime.now(datetime.timezone.utc)
         scores = {}
         for term in terms:
@@ -844,7 +844,7 @@ def _local(ts):
     return t.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
-# --- 検索語 ---------------------------------------------------------------------------------------
+# --- 検索ワード ---------------------------------------------------------------------------------------
 
 
 def parse_query(parts):
@@ -873,7 +873,7 @@ def parse_query(parts):
         i = j
     terms = [normalize(t) for t in terms if t.strip()]
     if not terms:
-        raise ValueError("検索語が空")
+        raise ValueError("検索ワードが空")
     return terms
 
 
@@ -944,7 +944,7 @@ def cmd_search(args):
     try:
         terms = parse_query(args.terms)
     except ValueError as e:
-        print("検索語の誤り: %s" % e, file=sys.stderr)
+        print("検索ワードの誤り: %s" % e, file=sys.stderr)
         return 2
     home = codex_home()
     sem = Semantic()
@@ -1145,13 +1145,13 @@ def build_parser():
     p.add_argument("--db", help="索引のファイル（既定は %s）" % default_db_path())
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("search", help="検索する")
-    s.add_argument("terms", nargs="+", help="検索語（空白区切りの AND、\"...\" で語句。- で始まる語は、オプションを全部書いた後に -- を置き、その後ろに書く）")
+    s.add_argument("terms", nargs="+", help="検索ワード（空白区切りの AND、\"...\" で語句。- で始まる言葉は、オプションを全部書いた後に -- を置き、その後ろに書く）")
     s.add_argument("--since", help="この日から（YYYY-MM-DD、ローカルの日付）")
     s.add_argument("--until", help="この日まで（YYYY-MM-DD、その日を含む）")
     s.add_argument("--cwd", help="作業フォルダで絞る（下の階層も含む）。here で今のフォルダ")
     s.add_argument("--all-kinds", action="store_true", help="途中の回答も検索する")
     s.add_argument("--include-agents", action="store_true", help="子のエージェントの会話も検索する")
-    s.add_argument("--question", help="持ち主が言った問いの文。埋め込みの検索に検索語と一緒に渡す")
+    s.add_argument("--question", help="持ち主が言った問いの文。埋め込みの検索に検索ワードと一緒に渡す")
     s.add_argument("--limit", type=int, default=10)
     s.add_argument("--budget", type=float, default=DEFAULT_EMBED_BUDGET, help="検索の前に埋め込みを足す時間の上限（秒）")
     s.add_argument("--json", action="store_true")
@@ -1159,7 +1159,7 @@ def build_parser():
     sh = sub.add_parser("show", help="参照の発言と前後を表示する")
     sh.add_argument("ref")
     sh.add_argument("--context", type=int, default=1, help="前後に出すターンの数")
-    sh.add_argument("--around", help="参照の発言のうち、この語の周りを表示する")
+    sh.add_argument("--around", help="参照の発言のうち、この言葉の周りを表示する")
     sh.add_argument("--offset", type=int, default=0)
     sh.add_argument("--length", type=int, default=2000)
     sh.set_defaults(func=cmd_show)
