@@ -4,11 +4,13 @@ Codex のモデルは、自分のモデル名・effort・利用枠の残りを�
 実際の値で判断できるよう、その会話の rollout（transcript_path）から読んで渡す。
 
 読むもの（rollout は公開された仕様ではなく、Codex の内部の形式）:
-  - turn_context の model / effort: 直前のターンの設定
+  - turn_context の model / effort: そのターンの設定（Codex はフックを呼ぶ前に、そのターンの turn_context を書く）
   - event_msg の token_count の rate_limits: primary / secondary の used_percent・window_minutes・resets_at
 
 どんな失敗でも終了コード 0 で終わる。フックの失敗で依頼を止めないため。読めなかった値は「不明」と書く。
 出力は hookSpecificOutput.additionalContext の JSON（公式は素のテキストも受け付けるが、Codex で動作を確かめた形に揃える）。
+JSON は ASCII だけで書く（日本語は \\uXXXX）。Windows では powershell.exe を通して起動されるので、
+PowerShell がネイティブのコマンドの出力を読み直すときに、日本語が文字コードの違いで化けないようにするため。
 """
 
 import datetime
@@ -66,31 +68,35 @@ def latest_status(lines):
     return turn, limits
 
 
-def describe_window(window):
+def describe_window(window, now):
+    """(表示, 使用率) を返す。リセット時刻を過ぎた値は今の使用率ではないので、使用率を None にする。"""
     if not isinstance(window, dict) or window.get("used_percent") is None:
         return None
     minutes = window.get("window_minutes")
     name = WINDOW_NAMES.get(minutes, "%s 分の枠" % minutes if minutes else "枠")
-    text = "%s %d%% 使用" % (name, round(float(window["used_percent"])))
     resets = window.get("resets_at")
+    if isinstance(resets, (int, float)) and resets <= now:
+        return "%s 不明（記録の後にリセット済み）" % name, None
+    text = "%s %d%% 使用" % (name, round(float(window["used_percent"])))
     if isinstance(resets, (int, float)):
         at = datetime.datetime.fromtimestamp(resets).strftime("%m/%d %H:%M")
         text += "（リセット %s）" % at
     return text, float(window["used_percent"])
 
 
-def build_message(hook_input, turn, limits):
+def build_message(hook_input, turn, limits, now=None):
+    now = datetime.datetime.now().timestamp() if now is None else now
     model = hook_input.get("model") or (turn or {}).get("model") or "不明"
     effort = (turn or {}).get("effort") or "不明"
-    parts = ["モデル %s" % model, "effort %s（直前のターンの値）" % effort]
+    parts = ["モデル %s" % model, "effort %s" % effort]
     tight = False
     windows = []
     if isinstance(limits, dict):
         for key in ("primary", "secondary"):
-            described = describe_window(limits.get(key))
+            described = describe_window(limits.get(key), now)
             if described:
                 windows.append(described[0])
-                tight = tight or described[1] >= TIGHT_PERCENT
+                tight = tight or (described[1] is not None and described[1] >= TIGHT_PERCENT)
     parts.append(" / ".join(windows) if windows else "利用枠 不明")
     line = "[利用状況] " + "、".join(parts) + "。"
     line += "作業の段階が変わるなら、AGENTS.md の「モデルと effort の案内」に従って先に案内する。"
@@ -108,6 +114,9 @@ def main():
         hook_input = {}
     if not isinstance(hook_input, dict):
         hook_input = {}
+    # spawn された子でもフックは走る（入力に agent_id が入る）。子は案内しないので、何も足さない。
+    if hook_input.get("agent_id"):
+        return 0
     turn = limits = None
     path = hook_input.get("transcript_path")
     if isinstance(path, str) and path:
@@ -120,7 +129,7 @@ def main():
     except Exception:  # 形の変わった値で落ちても、依頼は止めない
         message = "[利用状況] 不明。作業の段階が変わるなら、AGENTS.md の「モデルと effort の案内」に従って先に案内する。"
     event = hook_input.get("hook_event_name") or "UserPromptSubmit"
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}, ensure_ascii=False))
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}))
     return 0
 
 

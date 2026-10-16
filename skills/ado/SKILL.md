@@ -7,7 +7,7 @@ metadata:
 
 # ado
 
-推奨の設定: gpt-6-luna・low（読み書きだけのとき。呼び出し元の skill があれば、そちらの推奨に従う）。比べ方は AGENTS.md の「モデルと effort の案内」
+推奨の設定: gpt-6-luna・low（ADO の読み書きだけを頼まれたとき。ほかの skill の一部として使うときは比べない）。比べ方は AGENTS.md の「モデルと effort の案内」
 
 ## 前提（2026-10-16 に一次情報で確認）
 

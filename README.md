@@ -100,41 +100,43 @@ Windows の Codex で使う、グローバルな skill 16 個・custom agent 5 �
 
 会社のアカウントは、利用枠が Plus 相当で小さい。消費はモデルで大きく違い、gpt-6-luna は gpt-6.1-sol の約 1/20 で済む（[前提にした事実](#前提にした事実)）。このパッケージは次の 3 つで節約する。
 
-1. **親の Codex が、作業の段階ごとに設定の切り替えを案内する。**AGENTS.md の「モデルと effort の案内」に従い、段階に入る前に止めて、返答の最後にこの形で書く。
+1. **親の Codex が、依頼ごとに設定の切り替えを案内する。**AGENTS.md の「モデルと effort の案内」に従い、依頼を受けたら作業に手を付ける前に、勧める設定と今の設定を比べ、違えば止めて返答の最後にこの形で書く。依頼の途中では止めない。
    ```text
    【設定の切り替え】/model で gpt-6-luna・low にしてから「続けて」と送ってください。理由: <これからの段階>。このままでよければ「このまま」と送ってください。
    ```
-   - 切り替えたら「続けて」、切り替えないなら「このまま」と送る。「このまま」と送った段階が終わるまでは、同じ案内は出ない。
-   - 1〜2 ターンで終わる段階では案内しない。会話の途中でモデルや effort を変えると、次の 1 回はキャッシュが効かず、文脈全体を高い単価で読み直すため。
+   - 切り替えたら「続けて」、切り替えないなら「このまま」と送る。「このまま」と送ると、同じ種類の依頼が続く間は同じ案内は出ない。
+   - 「続けて」と送っても `[利用状況]` の値が案内と違えば（切り替え忘れ）、1 回だけそう言われる。
+   - 発言 1〜2 回で終わる小さな依頼で、今の設定のほうが重いときは案内しない。会話の途中でモデルや effort を変えると、次の 1 回はキャッシュが効かず、文脈全体を高い単価で読み直すため。軽い設定から重い設定への案内は省かない。
    - 利用枠の使用率が 80% 以上なら、luna で足りる段階は必ず luna を案内する。
 2. **Codex に、いまの設定と利用枠を見せる。**Codex のモデルは、自分のモデル名・effort・利用枠の残りを見られない（試して確かめた）。フックが依頼のたびに、その会話の記録から読んで 1 行で渡す。
    ```text
-   [利用状況] モデル gpt-6.1-sol、effort medium（直前のターンの値）、週の枠 72% 使用（リセット 10/22 15:35）。…
+   [利用状況] モデル gpt-6.1-sol、effort medium、週の枠 72% 使用（リセット 10/22 15:35）。…
    ```
-   フックが入っていないか読めないときは、会話の中で最後に案内した設定で判断する（会話の始めは gpt-6.1-sol・medium とみなす）。
+   spawn された子では何も足さない（子は案内しない）。リセット時刻を過ぎた古い使用率は「不明」と出す。
+   フックが入っていないか読めないときは、会話の中で最後に切り替えが確かめられた設定（「続けて」が返った案内の設定）で判断する（会話の始めは gpt-6.1-sol・medium とみなす）。
+   Windows では、フックを `powershell.exe -NoProfile -NonInteractive -EncodedCommand <…>` の形で登録する。Codex はフックをセッションのシェル（PowerShell か cmd）で起動し、Python のパスを引用符で囲む書き方は、片方のシェルでしか動かないため。
 3. **大量に読む子は luna に固定する。**`researcher`・`incident-evidence-analyst`・`prose-reviewer` の TOML に `model = "gpt-6-luna"` を書いてある。持ち主が何もしなくても減る。推理が要る `change-risk-reviewer` と `design-challenger` は、親の設定を継ぐ。
 
-段階と勧める設定（AGENTS.md と同じ）:
+依頼の中身と勧める設定（AGENTS.md と同じ）:
 
-| 段階 | 勧める設定 |
+| 依頼の中身 | 勧める設定 |
 |---|---|
-| 機械的な作業（一括の置換・整形・集計、決まった手順のコマンド、検査を流すだけ） | gpt-6-luna・low。繰り返す処理はスクリプトを書いて 1 回で流す |
-| 読んで探す・集めてまとめる | gpt-6-luna・medium |
-| 設計・レビュー・原因の推理・議論・人に読まれる文章 | gpt-6.1-sol・medium |
-| 直すのが難しい判断（データの形、権限、セキュリティ、本番の手順、リリース） | gpt-6.1-sol・high |
+| 機械的な作業だけ（一括の置換・整形・集計、決まった手順のコマンド、検査を流すだけ） | gpt-6-luna・low。繰り返す処理はスクリプトを書いて 1 回で流す |
+| 読んで探す・集めてまとめるだけ | gpt-6-luna・medium |
+| 実装（コードやプロンプトを書く・直す）、設計・レビュー・原因の推理・議論・人に読まれる文章のどれかを含む | gpt-6.1-sol・medium |
+| 直すのが難しい判断（データの形、権限、セキュリティ、本番の手順、リリース）を含む | gpt-6.1-sol・high |
 
-各 skill の SKILL.md の冒頭にも「推奨の設定」の行があり、skill を使い始めるときに今の設定と比べる。
+1 つの依頼に重さの違う部分があれば、いちばん重い部分の設定を勧める。名前で呼んだ skill や依頼の中心の skill は、SKILL.md の冒頭の「推奨の設定」の行が上の表より優先する。ほかの作業の一部として使われる skill（`ado`、`code-comments`、`review-triage` など）では比べない。
 
 | skill | 推奨の設定 |
 |---|---|
-| `prompt-lint`、`code-comments` | gpt-6-luna・low |
-| `ado`（読み書きだけのとき） | gpt-6-luna・low |
-| `sprint-report`、`pr-evidence-pack`、`pipeline-change-check`、`prompt-regression` | gpt-6-luna・medium |
-| `python-change-check` | 検査を流すまで luna・low、差分から拾うところから luna・medium |
-| `root-cause` | bisect を回すまで luna・low、原因のコミットを説明するところから sol・medium |
-| `ci-failure-triage` | ログを取って比べるまで luna・medium、原因の仮説から sol・medium |
+| `prompt-lint` | gpt-6-luna・low |
+| `ado`（ADO の読み書きだけを頼んだとき）、`code-comments`（コメントだけを頼んだとき） | gpt-6-luna・low |
+| `sprint-report`、`pr-evidence-pack`、`pipeline-change-check`、`prompt-regression`、`python-change-check` | gpt-6-luna・medium |
+| `root-cause` | gpt-6-luna・medium（原因の説明や直し方まで頼んだら gpt-6.1-sol・medium） |
+| `ci-failure-triage` | gpt-6.1-sol・medium（ログを集めるだけなら gpt-6-luna・medium） |
 | `work-item-ready`、`pr-review-assist`、`review-triage`、`incident-report` | gpt-6.1-sol・medium |
-| `writing-quality` | 社外向け・重要な文章は sol・medium、チャットの返信や短い文は luna・medium |
+| `writing-quality` | gpt-6.1-sol・medium（チャットの返信のような短い文だけなら gpt-6-luna・medium） |
 | `grill` | gpt-6.1-sol・medium（データの形・権限・セキュリティ・本番・リリースに触れる議題は high） |
 
 自分の設定で効くこと（このパッケージは `config.toml` を配らない）:
@@ -421,7 +423,7 @@ Microsoft Store の `python.exe`（`WindowsApps` の下にあるもの）は Sto
    PAT（Personal Access Token。ADO の画面で発行する、パスワードの代わりのトークン）で認証するときだけ、`ADO_AUTH` を `pat` にし、`ADO_PAT` に PAT を入れる。指定が無ければ Windows の統合認証（ログイン中のアカウント）を使う。
    **PAT はコマンドの引数やファイルに書かない。**環境変数の画面から入れるとよい。
 5. ターミナルと Codex を起動し直す。Codex の中で `/skills` を開き、このパッケージの 16 個（[一覧](#一覧)）があることを確かめる。
-   続けて `/hooks` を開き、`codex_status.py` のフックを信頼する（信頼するまで動かない。フックの中身が変わったら、もう一度信頼する）。何か依頼して、Codex に「[利用状況] の行が見えるか」と聞くと確かめられる。
+   続けて `/hooks` を開き、`hirata-codex usage status` のフックを信頼する（信頼するまで動かない。もう一度信頼が要るのは `hooks.json` の定義が変わったときで、`-Force` でスクリプトだけを入れ直したときは要らない）。何か依頼して、Codex に「[利用状況] の行が見えるか」と聞くと確かめられる。
 6. 接続を確かめる。Codex に「ADO に接続できるか確かめて」と頼むか、自分で流す。
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.agents\skills\ado\scripts\ado.ps1" get '_apis/projects'
@@ -478,7 +480,7 @@ Codex のサンドボックスでネットワークが止められていると�
   - `$HOME\.agents\skills\` の下の 16 個のフォルダ（`ado`、`ci-failure-triage`、`code-comments`、`grill`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`review-triage`、`root-cause`、`sprint-report`、`work-item-ready`、`writing-quality`）
   - `$HOME\.codex\agents\` の下の 5 つ（`change-risk-reviewer.toml`、`design-challenger.toml`、`incident-evidence-analyst.toml`、`prose-reviewer.toml`、`researcher.toml`。`CODEX_HOME` があればその下）
   - `$HOME\.codex\AGENTS.md`（このパッケージのものなら。`CODEX_HOME` があればその下）
-  - `$HOME\.codex\hooks\hirata-codex\` と、`$HOME\.codex\hooks.json` の `codex_status.py` の行（`hooks.json` をこのパッケージが作ったなら、ファイルごと消してよい）
+  - `$HOME\.codex\hooks\hirata-codex\` と、`$HOME\.codex\hooks.json` の中の `"statusMessage": "hirata-codex usage status"` のハンドラー。消した後に `hooks.json` にほかのハンドラーが残っていなければ、ファイルごと消してよい
 - 入れた先で直接直すと、次の `-Force` で上書きされる（退避はされる）。直すならこのフォルダ側を直して入れ直す。
 
 ## テスト
@@ -585,7 +587,9 @@ skill を足したり直したりしたら流す。`tests/test_layout.py` の一
 - `researcher` の Web 検索が、会社のネットワークで使えるか。
 - フック（`codex_status.py`）を、実際の Codex から呼んで `[利用状況]` の行がモデルに届くところまでは確かめていない。確かめたのは、スクリプト単体（手元の記録を読めること、壊れた入力でも 0 で終わること）、`install.ps1` が `hooks.json` を書くこと（PowerShell 7 の Linux のコンテナ）、同じ JSON の形で文脈を足す別のフック（sphica）が Codex で動いていることまで。手順 5 の後に確かめる。
 - 子のモデルを TOML の `model` で固定する形は、ソース（`core/src/agent/role.rs`）で効くことを確かめた段階。実際に luna で動くのを見たのは、`spawn_agent` の引数で渡した形だけ。
-- effort の値は直前のターンのもの。`/model` で変えた直後のターンでは、変える前の値が出る。
+- effort の値はそのターンのもの（Codex はフックを呼ぶ前に、そのターンの設定を記録に書く。ソースで確かめた段階で、実際の Codex では未確認）。
+- 会社のアカウントで、記録の `rate_limits` に使用率が入るか（`primary` / `secondary` に入らない形だと「利用枠 不明」になり、80% の案内が出ない）。
+- Windows の powershell.exe と cmd.exe から、EncodedCommand の形でフックが動くか。確かめたのは Linux の PowerShell 7 から呼んだ場合だけ。
 - WIQL の `ASOF` に UTC の `Z` 付きの日時を書いたときと、Reporting API の続きを `continuationToken` だけで取ったときに、Server 2020 が期待どおりに動くか（`sprint-report` の review が使う）。
 - `root-cause` の手順（判定の .ps1、差分を毎回当てて戻す）は、PowerShell 7.4（Linux のコンテナ）で原因のコミットを見つけるところまで流した。Windows と Git for Windows では流していない。
 - 書き込みを送った後に応答が返らなかったとき、または応答を保存できなかったときに、終了コード 3 になること。テストしているのは、送る前に止める側だけ。

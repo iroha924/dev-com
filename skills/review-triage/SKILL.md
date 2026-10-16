@@ -7,7 +7,7 @@ metadata:
 
 # review-triage
 
-推奨の設定: gpt-6.1-sol・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+推奨の設定: gpt-6.1-sol・medium（ほかの skill の一部として使うときは比べない）。比べ方は AGENTS.md の「モデルと effort の案内」
 
 **指摘を探せと言われたレビュアーは、対象が健全でも指摘を出す。**指摘が出たこと自体は、品質が低いことを意味しない。
 

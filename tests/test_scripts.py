@@ -289,16 +289,18 @@ class CodexStatusHookTest(unittest.TestCase):
                 f.write(json.dumps(item) + "\n")
         return path
 
-    def run_hook(self, stdin):
-        r = subprocess.run([sys.executable, self.SCRIPT], input=stdin, capture_output=True, encoding="utf-8")
+    def run_hook(self, stdin, env=None):
+        r = subprocess.run([sys.executable, self.SCRIPT], input=stdin, capture_output=True, encoding="utf-8", env=env)
         self.assertEqual(r.returncode, 0)
+        # Windows では powershell.exe を通るので、出力は ASCII だけにする（日本語は \uXXXX）。
+        r.stdout.encode("ascii")
         return json.loads(r.stdout)["hookSpecificOutput"]
 
     @staticmethod
-    def limits(used):
+    def limits(used, resets_at=4102444800):
         return {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
-            "primary": {"used_percent": used, "window_minutes": 10080, "resets_at": 1792650928},
-            "secondary": {"used_percent": 12.0, "window_minutes": 300, "resets_at": 1792650928}}}}
+            "primary": {"used_percent": used, "window_minutes": 10080, "resets_at": resets_at},
+            "secondary": {"used_percent": 12.0, "window_minutes": 300, "resets_at": resets_at}}}}
 
     def test_reports_latest_turn_and_limits(self):
         path = self.rollout([
@@ -312,6 +314,7 @@ class CodexStatusHookTest(unittest.TestCase):
         text = out["additionalContext"]
         self.assertIn("gpt-6-luna", text)
         self.assertIn("effort low", text)
+        self.assertNotIn("直前", text)
         self.assertIn("週の枠 55% 使用", text)
         self.assertIn("5 時間の枠 12% 使用", text)
         self.assertNotIn("必ずそれを案内", text)
@@ -325,8 +328,38 @@ class CodexStatusHookTest(unittest.TestCase):
         path = self.rollout([self.limits(85.0)])
         self.assertIn("必ずそれを案内", self.run_hook(json.dumps({"transcript_path": path}))["additionalContext"])
 
+    def test_values_from_before_a_reset_are_not_used(self):
+        path = self.rollout([self.limits(95.0, resets_at=1)])
+        text = self.run_hook(json.dumps({"transcript_path": path}))["additionalContext"]
+        self.assertIn("リセット済み", text)
+        self.assertNotIn("95%", text)
+        self.assertNotIn("必ずそれを案内", text)
+
+    def test_subagents_get_nothing(self):
+        r = subprocess.run([sys.executable, self.SCRIPT], input=json.dumps({"agent_id": "a1", "agent_type": "researcher"}),
+                           capture_output=True, encoding="utf-8")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_event_name_defaults_to_user_prompt_submit(self):
+        self.assertEqual(self.run_hook("{}")["hookEventName"], "UserPromptSubmit")
+
+    def test_reset_time_is_local(self):
+        path = self.rollout([self.limits(10.0, resets_at=4102444800)])  # 2100-01-01T00:00:00Z
+        env = dict(os.environ, TZ="Asia/Tokyo")
+        if not hasattr(__import__("time"), "tzset"):
+            self.skipTest("TZ を切り替えられない環境（Windows）")
+        self.assertIn("リセット 01/01 09:00", self.run_hook(json.dumps({"transcript_path": path}), env=env)["additionalContext"])
+
+    def test_malformed_values_still_exit_0(self):
+        for bad in ({"used_percent": "abc", "window_minutes": 10080}, {"used_percent": 50, "resets_at": 1e400},
+                    {"used_percent": 50, "resets_at": 10 ** 30}):
+            with self.subTest(bad=bad):
+                path = self.rollout([{"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {"primary": bad}}}])
+                self.assertIn("[利用状況]", self.run_hook(json.dumps({"transcript_path": path}))["additionalContext"])
+
     def test_failures_still_exit_0(self):
-        for stdin in ("", "garbage", "[]", json.dumps({"transcript_path": os.path.join(self.tmp.name, "none.jsonl")})):
+        for stdin in ("", "garbage", "[]", json.dumps({"transcript_path": os.path.join(self.tmp.name, "none.jsonl")}),
+                      json.dumps({"transcript_path": self.tmp.name})):
             with self.subTest(stdin=stdin):
                 self.assertIn("不明", self.run_hook(stdin)["additionalContext"])
 

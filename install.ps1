@@ -124,32 +124,49 @@ Install-One (Join-Path (Join-Path $source 'hooks') 'codex_status.py') $hookScrip
 # The hook needs a real Python; the Microsoft Store stub under WindowsApps only opens the Store.
 $python = Get-Command python -ErrorAction SilentlyContinue
 $launcher = Get-Command py -ErrorAction SilentlyContinue
-$hookCommand = $null
+$pythonCall = $null
 if ($python -and $python.Source -notmatch 'WindowsApps') {
-    $hookCommand = '"' + $python.Source + '" "' + $hookScript + '"'
+    $pythonCall = @($python.Source)
 } elseif ($launcher) {
-    $hookCommand = '"' + $launcher.Source + '" -3 "' + $hookScript + '"'
+    $pythonCall = @($launcher.Source, '-3')
 }
+$hookCommand = $null
+if ($pythonCall) {
+    if ([Environment]::OSVersion.Platform -eq 'Win32NT') {
+        # Codex runs a hook through the session's shell: "pwsh/powershell -Command <command>" or "cmd /C <command>".
+        # A quoted path needs "&" in PowerShell but breaks cmd, so hand the call to powershell.exe as an
+        # encoded command, which both shells run the same way.
+        $quoted = @($pythonCall + $hookScript | ForEach-Object { if ($_ -eq '-3') { $_ } else { "'" + $_.Replace("'", "''") + "'" } })
+        $inner = '& ' + ($quoted -join ' ') + '; if ($null -eq $LASTEXITCODE) { exit 1 }; exit $LASTEXITCODE'
+        $hookCommand = 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
+    } else {
+        $hookCommand = (@($pythonCall + $hookScript) | ForEach-Object { if ($_ -eq '-3') { $_ } else { '"' + $_ + '"' } }) -join ' '
+    }
+}
+# The command may be encoded, so the handler carries a plain marker to recognize it on later runs.
+$hookMarker = 'hirata-codex usage status'
 
 $hooksJson = Join-Path $codexHome 'hooks.json'
+$script:hookReady = $false
 if (-not $hookCommand) {
     Write-Host "skipped    $hooksJson  (Python was not found; install Python and rerun)"
-    $script:skipped++
 } elseif (Test-Path -LiteralPath $hooksJson) {
-    if ((Get-Content -LiteralPath $hooksJson -Raw) -match 'codex_status\.py') {
-        Write-Host "unchanged  $hooksJson  (already has the codex_status.py hook)"
+    if ((Get-Content -LiteralPath $hooksJson -Raw).Contains($hookMarker)) {
+        Write-Host "unchanged  $hooksJson  (already has the hirata-codex hook)"
+        $script:hookReady = $true
     } else {
         Write-Host "skipped    $hooksJson  (exists; add this handler under hooks.UserPromptSubmit yourself):"
-        Write-Host ('  {"hooks": [{"type": "command", "command": ' + (ConvertTo-Json $hookCommand) + ', "timeout": 10}]}')
+        Write-Host ('  {"hooks": [{"type": "command", "command": ' + (ConvertTo-Json $hookCommand) + ', "timeout": 10, "statusMessage": "' + $hookMarker + '"}]}')
         $script:skipped++
     }
 } elseif ($script:cmdlet.ShouldProcess($hooksJson, 'write')) {
-    $handler = [ordered]@{ type = 'command'; command = $hookCommand; timeout = 10 }
+    $handler = [ordered]@{ type = 'command'; command = $hookCommand; timeout = 10; statusMessage = $hookMarker }
     $config = [ordered]@{ hooks = [ordered]@{ UserPromptSubmit = @([ordered]@{ hooks = @($handler) }) } }
     $text = ConvertTo-Json -InputObject $config -Depth 6
     # UTF-8 without a BOM: Windows PowerShell 5.1 Set-Content would add one.
     [IO.File]::WriteAllText($hooksJson, $text, (New-Object System.Text.UTF8Encoding $false))
     Write-Host "installed  $hooksJson  (open /hooks in Codex and trust the hook once)"
+    $script:hookReady = $true
 }
 
 # Files copied from a zip or a download carry the "from the internet" mark, which blocks scripts.
@@ -186,5 +203,10 @@ Write-Host ''
 if ($script:skipped -gt 0) {
     Write-Host "$($script:skipped) item(s) were skipped because they already exist with different content."
 }
-Write-Host 'Restart Codex to load the skills and agents, then open /hooks and trust the codex_status.py hook.'
+Write-Host 'Restart Codex to load the skills and agents.'
+if ($script:hookReady) {
+    Write-Host 'Then open /hooks in Codex and trust the "hirata-codex usage status" hook (once; again only if hooks.json changes).'
+} else {
+    Write-Host 'The usage status hook is not active yet; see the hooks.json line above.'
+}
 Write-Host 'For per-tool MCP approval, see config\mcp-approval.example.toml.'

@@ -7,7 +7,7 @@ metadata:
 
 # root-cause
 
-推奨の設定: bisect を回すまで gpt-6-luna・low、原因のコミットを読んで説明するところから gpt-6.1-sol・medium。比べ方は AGENTS.md の「モデルと effort の案内」
+推奨の設定: gpt-6-luna・medium（bisect で原因のコミットを示すまで。原因の説明や直し方まで頼まれたら gpt-6.1-sol・medium）。比べ方は AGENTS.md の「モデルと effort の案内」
 
 ## bisect は共有の作業ツリーで走らせない
 
