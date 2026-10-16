@@ -489,7 +489,7 @@ class ReviewFindingsTest(_Base):
 
     def test_setup_prefers_314_and_uses_only_the_given_python(self):
         order = ss.setup_candidates(None)
-        first_other = next(i for i, c in enumerate(order) if "3.14" not in " ".join(c))
+        first_other = next((i for i, c in enumerate(order) if "3.14" not in " ".join(c)), len(order))
         self.assertTrue(all("3.14" in " ".join(c) for c in order[:first_other]))
         self.assertGreater(first_other, 0)
         self.assertEqual(ss.setup_candidates("py -3.13"), [["py", "-3.13"]])
@@ -515,6 +515,149 @@ class ReviewFindingsTest(_Base):
         con.commit()
         con.close()
         self.assertFalse(self.search("かいつぶり")["results"])  # 取り込み直して、子の会話の印が戻る
+
+    def test_compressing_with_an_old_python_keeps_the_content(self):
+        path = self.write(T1, paginated(T1, [("ユニフォームの依頼", "答え", None)]))
+        self.assertTrue(self.search("ユニフォーム")["results"])
+        os.remove(path)
+        with open(path + ".zst", "wb") as f:
+            f.write(b"compressed")
+        idx = self.idx()
+        saved = ss.zstd
+        try:
+            ss.zstd = None
+            idx.ingest(self.home)
+        finally:
+            ss.zstd = saved
+        n = idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (T1,)).fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 2)
+
+    def test_interrupted_migration_recovers(self):
+        self.write(T1, paginated(T1, [("移行 いわつばめ", "答え", None)]))
+        self.search("いわつばめ")
+        import sqlite3
+        con = sqlite3.connect(self.db)
+        con.execute("ALTER TABLE threads RENAME TO threads_v1")  # 名前を変えて新しい表を作った後、消す前に止まった
+        con.execute("CREATE TABLE threads (thread_id TEXT, codex_home TEXT, name TEXT, cwd TEXT, branch TEXT, "
+                    "originator TEXT, agent TEXT, started TEXT, PRIMARY KEY (codex_home, thread_id))")
+        con.execute("UPDATE meta SET value = '1' WHERE key = 'schema'")
+        con.commit()
+        con.close()
+        out = self.search("いわつばめ")
+        self.assertTrue(out["results"])
+        self.assertFalse(any("更新できなかった" in c for c in out["coverage"]), out["coverage"])
+
+    def test_old_duplicate_rows_are_read_again(self):
+        self.write(T1, paginated(T1, [("みさごの依頼", "答え", None)]))
+        self.search("みさご")
+        idx = self.idx()  # 1b66129 が 2 本目に行っていたこと: 中身を消して duplicate にする
+        with idx.db:
+            for (p,) in idx.db.execute("SELECT path FROM files").fetchall():
+                idx._delete_path(p)
+            idx.db.execute("UPDATE files SET status = 'duplicate'")
+            idx.db.execute("UPDATE meta SET value = '1' WHERE key = 'extract'")
+        idx.close()
+        self.assertTrue(self.search("みさご")["results"])
+
+    def test_powershell_quoting_is_redacted_well(self):
+        self.assertNotIn("secret", ss.redact("password: 'it''s secret'"))
+        self.assertNotIn("Hunter2", ss.redact("ConvertTo-SecureString -AsPlainText -Force -String 'Hunter2'"))
+        self.assertIn("$x = 'second'", ss.redact("$pwd = 'C:\\Users\\me\\'; $x = 'second'"))
+
+    def test_same_text_in_two_turns_is_kept(self):
+        rows = [line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})]
+        for n, ts in ((1, "2026-09-01T01:00:00Z"), (2, "2026-09-02T01:00:00Z")):
+            rows += [line(ts, "event_msg", {"type": "user_message", "message": "同じ依頼 しめ"}),
+                     line(ts, "event_msg", {"type": "task_complete", "last_agent_message": "答え%d" % n})]
+        self.write(T1, "\n".join(rows) + "\n")
+        self.write(T1, "\n".join(rows) + "\n", sub=("archived_sessions", "x"))
+        self.assertEqual(len(self.search("しめ")["results"]), 2)
+
+    def test_thread_metadata_is_per_home(self):
+        other = os.path.join(self.tmp.name, "codex2")
+        os.makedirs(os.path.join(other, "sessions"))
+        self.write(T1, paginated(T1, [("ほおじろ", "答え", None)]))
+        with open(os.path.join(self.home, "session_index.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"id": T1, "thread_name": "Aの名前"}, ensure_ascii=False) + "\n")
+        self.search("ほおじろ")
+        p2 = os.path.join(other, "sessions", "rollout-2026-09-01T01-00-00-%s.jsonl" % T1)
+        with open(p2, "w", encoding="utf-8") as f:
+            f.write(paginated(T1, [("ほおじろ", "答え", None)], agent="worker"))
+        with open(os.path.join(other, "session_index.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"id": T1, "thread_name": "Bの名前"}, ensure_ascii=False) + "\n")
+        env = dict(self.env, CODEX_HOME=other)
+        subprocess.run([sys.executable, SCRIPT, "search", "--budget", "0", "ほおじろ"], capture_output=True, env=env)
+        out = self.search("ほおじろ")
+        self.assertTrue(out["results"])  # B の子の印が A に付かない
+        self.assertIn("Aの名前", json.dumps(out, ensure_ascii=False))
+
+    def test_model_ready_needs_tokenizer_and_pooling(self):
+        d = os.path.join(self.tmp.name, "data", "models", ss.EMBED_MODEL_DIR)
+        os.makedirs(d)
+        for f in ("config.json", "modules.json", "model.safetensors"):
+            open(os.path.join(d, f), "w").close()
+        os.environ["HIRATA_CODEX_DATA"] = os.path.join(self.tmp.name, "data")
+        try:
+            self.assertFalse(ss.model_ready())
+        finally:
+            del os.environ["HIRATA_CODEX_DATA"]
+
+    def test_model_revision_is_pinned(self):
+        self.assertRegex(ss.EMBED_REVISION, r"^[0-9a-f]{40}$")
+
+    def test_single_quote_backslash_is_not_an_escape(self):
+        self.assertNotIn("privateSuffix", ss.redact("$password = 'abc privateSuffix\\'"))
+
+    def test_backtick_escapes_in_powershell(self):
+        self.assertNotIn("tail42", ss.redact('ConvertTo-SecureString "a`"tail42" -AsPlainText -Force'))
+        self.assertNotIn("sSecret42", ss.redact("ConvertTo-SecureString 'John''sSecret42' -AsPlainText"))
+
+    def test_stored_text_is_redacted_again_on_upgrade(self):
+        path = self.write(T1, paginated(T1, [("認証 しぎ", "答え", None)]))
+        self.search("しぎ")
+        os.remove(path)
+        self.search("しぎ")  # 原本なし（missing）として残る
+        leaked = '{"Authorization": "Basic dXNlcjpwYXNzd29yZA=="} しぎ'
+        idx = self.idx()
+        with idx.db:
+            idx.db.execute("UPDATE messages SET text = ?, norm = ? WHERE kind = 'user'", (leaked, ss.normalize(leaked)))
+            idx.db.execute("UPDATE meta SET value = '1' WHERE key = 'extract'")
+        idx.close()
+        self.assertNotIn("dXNlcjpwYXNzd29yZA", json.dumps(self.search("しぎ"), ensure_ascii=False))
+
+    def test_legacy_ids_differ_between_rollout_files(self):
+        def legacy(text, ts):
+            return "\n".join([line(ts, "session_meta", {"id": T1}),
+                              line(ts, "event_msg", {"type": "user_message", "message": text}),
+                              line(ts, "event_msg", {"type": "task_complete", "last_agent_message": text + " の答え"})]) + "\n"
+        self.write(T1, legacy("同じ依頼 ちどり", "2026-09-01T01:00:00Z"))
+        self.write("66666666-6666-4666-8666-666666666666", legacy("同じ依頼 ちどり", "2026-09-05T01:00:00Z"))
+        self.assertEqual([r["kind"] for r in self.search("ちどり")["results"]].count("user"), 2)
+
+    def test_migration_keeps_metadata_for_every_home(self):
+        other = os.path.join(self.tmp.name, "codex2")
+        os.makedirs(os.path.join(other, "sessions"))
+        self.write(T1, paginated(T1, [("ごいさぎ", "答え", None)], agent="worker"))
+        p2 = os.path.join(other, "sessions", "rollout-2026-09-01T01-00-00-%s.jsonl" % T1)
+        with open(p2, "w", encoding="utf-8") as f:
+            f.write(paginated(T1, [("ごいさぎ", "答え", None)], agent="worker"))
+        env = dict(self.env, CODEX_HOME=other)
+        self.search("ごいさぎ")
+        subprocess.run([sys.executable, SCRIPT, "search", "--budget", "0", "ごいさぎ"], capture_output=True, env=env)
+        os.remove(p2)
+        import sqlite3  # schema 1 の threads（thread_id だけの主キー、A の行だけ）に戻す
+        con = sqlite3.connect(self.db)
+        con.execute("DROP TABLE threads")
+        con.execute("CREATE TABLE threads (thread_id TEXT PRIMARY KEY, codex_home TEXT, name TEXT, cwd TEXT, branch TEXT, "
+                    "originator TEXT, agent TEXT, started TEXT)")
+        con.execute("INSERT INTO threads VALUES (?, ?, NULL, NULL, NULL, NULL, 'worker', NULL)", (T1, self.home))
+        con.execute("UPDATE meta SET value = '1'")
+        con.commit()
+        con.close()
+        r = subprocess.run([sys.executable, SCRIPT, "search", "--json", "--budget", "0", "ごいさぎ"],
+                           capture_output=True, encoding="utf-8", env=env)
+        self.assertFalse(json.loads(r.stdout)["results"])  # B に残った本文も、子の会話のまま
 
 
 class SemanticLayerTest(unittest.TestCase):

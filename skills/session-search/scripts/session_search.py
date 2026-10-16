@@ -55,6 +55,7 @@ EMBED_KINDS = ("user", "final", "memory")
 EMBED_CHARS = 4000
 DEFAULT_EMBED_BUDGET = 20.0  # 検索のたびに埋め込みを足す時間の上限（秒）
 EMBED_MODEL = "cl-nagoya/ruri-v3-130m"
+EMBED_REVISION = "e3114c6ee10dbab8b4b235fbc6dcf9dd4d5ac1a6"  # 評価に使ったコミット。上流が変わっても同じものを取る
 EMBED_MODEL_DIR = "ruri-v3-130m"
 QUERY_PREFIX = "検索クエリ: "
 DOC_PREFIX = "検索文書: "
@@ -77,12 +78,12 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)(basic|bearer|ntlm|negotiate|token)?\s*[A-Za-z0-9._~+/=-]{8,}"), r"\1\2 [REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
     # password= / "password": "..." / $password = '...' / 接続文字列の Password=。引用符があれば閉じるまで伏せる
-    # （\" のようなエスケープした引用符は、閉じる引用符と見なさない）
+    # （"..." の中の \" と `"、'...' の中の ''（PowerShell）は、閉じる引用符と見なさない。'...' の中の \ はエスケープではない）
     (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)[\"']?\s*[:=]\s*)"
-                r"(?:\"((?:[^\"\\\n]|\\.){1,200})\"|'((?:[^'\\\n]|\\.){1,200})')"),
+                r"(?:\"((?:[^\"\\`\n]|[\\`].){1,200})\"|'((?:[^'\n]|''){1,200})')"),
      lambda m: m.group(1) + ('"[REDACTED]"' if m.group(2) is not None else "'[REDACTED]'")),
     # PowerShell の ConvertTo-SecureString '...' -AsPlainText
-    (re.compile(r"(?i)(ConvertTo-SecureString\s+(?:-String\s+)?)(\"[^\"\n]*\"|'[^'\n]*')"), r"\1'[REDACTED]'"),
+    (re.compile(r"(?i)(ConvertTo-SecureString\b[^'\"\n|;]*)(\"(?:[^\"`\n]|`.)*\"|'(?:[^'\n]|'')*')"), r"\1'[REDACTED]'"),
     (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,]{4,})"), r"\1[REDACTED]"),
     # URL に埋め込まれた資格情報
     (re.compile(r"(?i)(https?://)[^\s/@:]+:[^\s/@]+@"), r"\1[REDACTED]@"),
@@ -259,6 +260,9 @@ def parse_rollout(path, data):
     m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", os.path.basename(path))
     if m:
         meta["thread_id"] = m.group(1)
+    # 発言 ID の無い古い形式は行番号で ID を作る。revert で同じ会話のファイルが 2 本になると行番号がぶつかるので、
+    # ファイル名の rollout ID の末尾を付ける（圧縮の前後のように同じ名前のファイルどうしは同じ ID になる）。
+    rollout_tag = m.group(1)[-12:] if m else "x"
     text = data.decode("utf-8", errors="replace")
     lines = text.split("\n")
     if lines and lines[-1] != "":
@@ -279,7 +283,7 @@ def parse_rollout(path, data):
         key = turn_id or "-"
         turn_seq[key] = turn_seq.get(key, 0) + 1
         messages.append({"kind": kind, "text": body, "line": line_no, "ts": ts, "turn_id": turn_id,
-                         "seq": turn_seq[key], "msg_id": msg_id or ("L%d" % line_no), "cwd": cwd})
+                         "seq": turn_seq[key], "msg_id": msg_id or ("L%d-%s" % (line_no, rollout_tag)), "cwd": cwd})
         if kind == "final":
             finals_by_turn.add(turn_id)
 
@@ -487,7 +491,7 @@ class Index:
         db = self.db
         db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
         old_schema = dict(db.execute("SELECT key, value FROM meta").fetchall()).get("schema")
-        if old_schema == "1" and self._has_table("threads"):
+        if old_schema == "1" and self._has_table("threads") and not self._has_table("threads_v1"):
             # 1 → 2: threads を CODEX_HOME ごとに分ける。原本の消えた会話の名前や子の印を失わないよう、行を移す。
             db.execute("ALTER TABLE threads RENAME TO threads_v1")
         db.executescript("""
@@ -511,8 +515,11 @@ class Index:
             CREATE TABLE IF NOT EXISTS vectors (message_id INTEGER PRIMARY KEY, model TEXT, vec BLOB);
         """)
         if self._has_table("threads_v1"):
+            # 旧い表は CODEX_HOME を区別していないので、その会話の本文を持つ CODEX_HOME ごとに行を作る
             db.execute("INSERT OR IGNORE INTO threads SELECT thread_id, codex_home, name, cwd, branch, originator, agent, "
                        "started FROM threads_v1")
+            db.execute("INSERT OR IGNORE INTO threads SELECT DISTINCT o.thread_id, m.codex_home, o.name, o.cwd, o.branch, "
+                       "o.originator, o.agent, o.started FROM threads_v1 o JOIN messages m ON m.thread_id = o.thread_id")
             db.execute("DROP TABLE threads_v1")
             db.commit()
         self._create_fts()
@@ -540,8 +547,23 @@ class Index:
         self.words = self._has_table("words_fts")
 
     def reset_extracted(self):
-        """取り込んだ内容を捨てて、次の取り込みで全部を読み直させる。原本が読めない会話の分は残す。"""
-        self.db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial')")
+        """取り込んだ内容を捨てて、次の取り込みで全部を読み直させる。原本が読めない会話の分は残す。
+
+        読み直せない分（原本が消えた会話など）にも新しい伏せ字が効くよう、保存済みの本文に伏せ字を掛け直す。
+        """
+        self.db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'duplicate')")
+        for r in self.db.execute("SELECT id, text FROM messages").fetchall():
+            text = redact(r["text"])
+            if text == r["text"]:
+                continue
+            if self.fts:
+                self.db.execute("DELETE FROM msg_fts WHERE rowid = ?", (r["id"],))
+                self.db.execute("INSERT INTO msg_fts (rowid, norm) VALUES (?, ?)", (r["id"], normalize(text)))
+            if self.words:
+                self.db.execute("DELETE FROM words_fts WHERE rowid = ?", (r["id"],))
+            self.db.execute("DELETE FROM word_done WHERE message_id = ?", (r["id"],))
+            self.db.execute("DELETE FROM vectors WHERE message_id = ?", (r["id"],))
+            self.db.execute("UPDATE messages SET text = ?, norm = ? WHERE id = ?", (text, normalize(text), r["id"]))
         self.db.commit()
 
     # 取り込み
@@ -606,7 +628,11 @@ class Index:
         for row in self.db.execute("SELECT path, thread_id, status FROM files WHERE codex_home = ?", (home,)).fetchall():
             if row["path"] in seen:
                 continue
-            moved = any(_file_stem(p) == _file_stem(row["path"]) for p in seen if p != row["path"])
+            # 同じ名前のファイル（archive への移動や圧縮）が別の場所にあり、その中身を取り込めているときだけ移動とみなす。
+            # 読めない .zst に変わっただけなら、前の中身を残す。
+            moved = any(_file_stem(r["path"]) == _file_stem(row["path"]) for r in self.db.execute(
+                "SELECT path FROM files WHERE thread_id = ? AND codex_home = ? AND path != ? AND status IN ('ok', 'partial')",
+                (row["thread_id"], home, row["path"])).fetchall() if r["path"] in seen)
             with self.db:
                 if moved or row["status"] == "forgotten":
                     self._delete_path(row["path"])
@@ -749,7 +775,7 @@ class Index:
         全文検索の表は、消した行の言葉が内部の区画に残ることがあるので、捨てて作り直す。
         """
         with self.db:
-            self.db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'zst_unreadable')")
+            self.db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'zst_unreadable', 'duplicate')")
             self.db.execute("DROP TABLE IF EXISTS msg_fts")
             self.db.execute("DROP TABLE IF EXISTS words_fts")
             self.db.execute("DELETE FROM word_done")
@@ -897,7 +923,7 @@ def _file_stem(path):
 
 
 def _dedupe_key(r):
-    return (r["thread_id"], r["msg_id"], r["kind"], r["norm"])
+    return (r["thread_id"], r["msg_id"], r["kind"], r["ts"], r["norm"])
 
 
 def _ts_num(ts):
@@ -1211,6 +1237,9 @@ def cmd_setup(args):
         except (OSError, subprocess.SubprocessError):
             have = ""
         exists = have == want
+        if exists and base_zstd and subprocess.run([venv_python()] + zstd_probe, stdout=subprocess.DEVNULL,
+                                                   stderr=subprocess.DEVNULL).returncode != 0:
+            exists = False  # 同じバージョンでも、圧縮された記録を読めない環境なら作り直す
         if not exists:
             print("今の専用の環境（%s）を、選んだ Python で作り直す" % (have or "起動できない"))
     if not exists:
@@ -1222,7 +1251,7 @@ def cmd_setup(args):
         return 1
     # 取得は毎回流す（揃っているファイルは取り直さない。途中で止まった分はここで埋まる）
     code = ("from huggingface_hub import snapshot_download; "
-            "snapshot_download(%r, local_dir=%r)" % (EMBED_MODEL, model_dir()))
+            "snapshot_download(%r, revision=%r, local_dir=%r)" % (EMBED_MODEL, EMBED_REVISION, model_dir()))
     if subprocess.run([venv_python(), "-c", code]).returncode != 0:
         if model_ready():
             print("モデルを取りに行けなかったが、%s に揃っているのでそれを使う" % model_dir())

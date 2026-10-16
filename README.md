@@ -298,7 +298,7 @@ python "$HOME\.agents\skills\session-search\scripts\session_search.py" index
 
 - `setup` は `%LOCALAPPDATA%\hirata-codex\venv` に専用の環境を作る。元にする Python は 3.14 を優先し、無ければ 3.13、3.11 の順に探す（3.14 でないと圧縮された記録を読めないので、そのときは注意を出す）。`--python` で指定したときは、それだけを使う。入れるバージョンは評価で使ったものに固定している（SudachiPy 0.7.0、sudachidict-core 20260723.1、sentence-transformers 6.1.0、transformers 5.18.0、tokenizers 0.23.2、torch 2.14.1、numpy 2.4.6。どれも 2026-10-01 より前の公開）。
 - モデル（`cl-nagoya/ruri-v3-130m`、Apache-2.0）は `%LOCALAPPDATA%\hirata-codex\models\ruri-v3-130m` に置く。会社のネットワークから Hugging Face に届かないときは、別の PC で `hf download cl-nagoya/ruri-v3-130m --local-dir <フォルダ>` で取ってきたフォルダを、そこに置けば使える（Hugging Face の取得には `huggingface.co` のほかに CDN のホストも要る）。
-- `setup` はモデルの取得を毎回流す。揃っているファイルは取り直さないので、途中で止まったときは `setup` を流し直せば続きから埋まる。
+- `setup` はモデルの取得を毎回流す。取るのは評価に使ったコミット（`e3114c6`）に固定していて、揃っているファイルは取り直さない。途中で止まったときは `setup` を流し直せば続きから埋まる。
 - `index` は、取り込み・単語の区切り・埋め込みを全部済ませる。最初の一度は、会話の量によって数分〜数十分かかる。
 - 専用の環境があると、`session_search.py` は自動でその環境の Python で動き直す。
 
