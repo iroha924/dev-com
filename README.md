@@ -1,6 +1,6 @@
 # hirata-codex
 
-Windows の Codex で使う、グローバルな skill 16 個・custom agent 5 つ・AGENTS.md のパッケージ。
+Windows の Codex で使う、グローバルな skill 17 個・custom agent 5 つ・AGENTS.md のパッケージ。
 スクラム（1 週間スプリント）と、オンプレの Azure DevOps Server 2020（以下 ADO）での Work Item・PR・パイプラインの作業、
 プロンプト類（md / txt / json）と Python の変更の確認、要件や設計の壁打ち、人に読まれる文章の作成を手伝う。外部 OSS は使わず、Python の標準ライブラリと Windows 標準の PowerShell だけで動く。
 
@@ -8,6 +8,7 @@ Windows の Codex で使う、グローバルな skill 16 個・custom agent 5 �
 - [一覧](#一覧)
 - [スプリントの中での使いどころ](#スプリントの中での使いどころ)
 - [利用枠を節約する](#利用枠を節約する)
+- [会話の検索](#会話の検索)
 - [skill の詳細](#skill-の詳細)
 - [custom agent](#custom-agent)
 - [AGENTS.md](#agentsmd)
@@ -31,7 +32,7 @@ flowchart LR
         codex["親の Codex<br/>gpt-6.1-sol / gpt-6-luna"]
         agentsmd[/"AGENTS.md<br/>起動のたびに読む決まり"/]
         hook[["フック codex_status.py<br/>依頼のたびに利用状況を 1 行"]]
-        skills[("skill 16 個")]
+        skills[("skill 17 個")]
         child["子の Codex（custom agent 5 つ）<br/>親の会話を引き継がずに起動"]
         adops1["ado.ps1<br/>読む・承認付きで書く"]
         mcp["ADO の MCP<br/>読み取りに使える"]
@@ -120,6 +121,7 @@ flowchart TD
 | [`writing-quality`](#writing-quality) | skill | 自動 | 使わない（頼めば送る） | PR 本文・Work Item・Teams・メール・設計文書を書く・直す・レビューするとき |
 | [`code-comments`](#code-comments) | skill | 自動 | 使わない | コードのコメントを書く・直すとき |
 | [`root-cause`](#root-cause) | skill | 自動 | 使わない | どのコミットで壊れたかを git bisect で探すとき |
+| [`session-search`](#会話の検索) | skill | 自動 | 使わない | 「前に〇〇って何て言ってた？」と過去の Codex の会話を探すとき |
 | [`change-risk-reviewer`](#change-risk-reviewer) | agent | `pr-review-assist` から | 使わない | 差分を独立した文脈で読むレビュアー |
 | [`incident-evidence-analyst`](#incident-evidence-analyst) | agent | `incident-report` から | 使わない | 障害のログを大量に読んで整理する |
 | [`design-challenger`](#design-challenger) | agent | `grill` から | 読む | 要件や設計の叩き台に反論する議論の相手 |
@@ -161,6 +163,7 @@ flowchart LR
 | 自分の PR にレビューが付いたとき | `review-triage` | 「PR #123 に付いた指摘のどれを直すか決めて」 |
 | CI が落ちたとき | `ci-failure-triage` | 「ビルド 4567 が落ちた原因を切り分けて」 |
 | いつから壊れたか分からないとき | `root-cause` | 「このテストがどのコミットで落ちるようになったか bisect で探して」 |
+| 前に何を決めたか思い出したいとき | `session-search` | 「前に CI の自動の再実行をどうするって決めたっけ？」 |
 | 障害の後 | `incident-report` | `$incident-report このログからポストモーテムを書いて` |
 | 金曜のスプリントレビュー・振り返り前 | `sprint-report`（review） | 「今スプリントのまとめと振り返りの材料を出して」 |
 
@@ -224,7 +227,7 @@ flowchart LR
 |---|---|
 | `prompt-lint` | gpt-6-luna・low |
 | `code-comments`（コメントだけを頼んだとき） | gpt-6-luna・low |
-| `ado`（ADO の読み書きだけを頼んだとき）、`sprint-report`、`pipeline-change-check`、`prompt-regression`、`python-change-check` | gpt-6-luna・medium |
+| `ado`（ADO の読み書きだけを頼んだとき）、`sprint-report`、`pipeline-change-check`、`prompt-regression`、`python-change-check`、`session-search` | gpt-6-luna・medium |
 | `root-cause` | gpt-6-luna・medium（原因の説明や直し方まで頼んだら gpt-6.1-sol・medium） |
 | `ci-failure-triage` | gpt-6.1-sol・medium（ログを集めるだけなら gpt-6-luna・medium） |
 | `work-item-ready`、`pr-evidence-pack`、`pr-review-assist`、`review-triage`、`incident-report` | gpt-6.1-sol・medium |
@@ -237,6 +240,103 @@ flowchart LR
 - Fast mode（`/fast`、`service_tier = "fast"`）を使わない。2.5 倍の速さで利用枠を使う。
 - `notice.hide_rate_limit_model_nudge` を `true` にしていれば外す。枠が近づいたときに、軽いモデルへの切り替えを Codex 自身が勧めてくれる。
 - 関係の無い作業に移るときは `/new` で新しい会話にする。文脈が大きいほど、毎回の入力の消費が増える。
+
+## 会話の検索
+
+「前に〇〇って何て言ってた？」「前回どうしたっけ」に答えるための `session-search`。Codex が自動で書いている会話の記録（`~/.codex/sessions` と `archived_sessions`）を、ローカルのスクリプトで検索する。**検索そのものはモデルの利用枠を使わない。**モデルが使うのは、絞った結果を読んで答えるところだけ。
+
+```mermaid
+flowchart LR
+    q["持ち主: 前に〇〇って<br/>何て決めたっけ？"] --> x["Codex（session-search）<br/>検索語を選ぶ"]
+    x --> s["session_search.py search<br/>--question 問いの文 + 検索語"]
+    r[("Codex の会話の記録<br/>sessions / archived_sessions<br/>memories")] -- "増えた分だけ取り込む" --> idx[("索引 sessions.sqlite<br/>%LOCALAPPDATA%\\hirata-codex")]
+    s --> idx
+    idx --> bm["単語の BM25<br/>（SudachiPy）"]
+    idx --> em["埋め込みの近さ<br/>（ruri-v3-130m）"]
+    bm --> f["RRF で混ぜる"]
+    em --> f
+    f --> x2["Codex: 上位を show で読み、<br/>日時・引用・codex resume を添えて答える"]
+```
+
+- 取り込むのは、ユーザーの依頼・最終の回答（・途中の回答）と、Codex の memories が書いた要点のファイル。ツールやコマンドの出力、推論、AGENTS.md などの差し込みは入れない。シークレットらしい値（PAT の形、`Authorization`、`Bearer`、`password=`、URL の中の資格情報、秘密鍵）は伏せてから入れる。
+- 取り込みは検索のたびに、増えた・変わった記録だけ。元の記録は Codex のものが正で、索引は消しても `rebuild` で作り直せる。原本が消えた会話は、索引に残して「原本なし」と表示する。
+- 圧縮された記録（`.jsonl.zst`）は Python 3.14 で読む。手元の Mac では、記録の約 85% が圧縮されていた。3.14 が無い Python で動いたときは、3.14（`py -3.14`、`python3.14`、`mise exec python@3.14`）を探して自分を起動し直す。見つからなければ、読めなかった数を出す。
+
+### 方式と、評価で決めた理由
+
+`evals/session-search/` に評価の道具がある。持ち主の仕事に近いモックの会話 150 本と問い 120 件（同じ語・言い換え・2 文字の語・英語混じり・識別子・似た会話の見分け）と、手元の Mac の実際の会話 1,017 本から作った問い 60 件（リポジトリには入れていない）で比べた。正解の会話が何位に来るかで数える（R@1・R@10 は 1 位・10 位以内に入った割合、MRR は 1 / 順位の平均）。最後の 2 行は、組み込んだ `session_search.py` の検索そのものを測った値。
+
+| 方法 | モック R@1 | モック R@10 | モック MRR | 実際 R@1 | 実際 R@10 | 実際 MRR |
+|---|---|---|---|---|---|---|
+| trigram・すべての語を含む（最初の作り） | 0.333 | 0.367 | 0.350 | 0.483 | 0.517 | 0.500 |
+| trigram の BM25・どれかの語を含む（専用の環境が無いときの方式） | 0.617 | 0.925 | 0.733 | 0.617 | 0.833 | 0.695 |
+| SudachiPy の単語の BM25 | 0.717 | 0.975 | 0.818 | 0.750 | 0.933 | 0.810 |
+| ruri-v3-130m の埋め込み（問いの文 + 検索語） | 0.783 | 0.975 | 0.865 | 0.800 | 0.983 | 0.873 |
+| **単語の BM25 + 埋め込み（RRF、k=60）。既定の方式** | **0.800** | **1.000** | **0.883** | **0.867** | **0.983** | **0.918** |
+
+- 埋め込みは言い換えの問いに強く、単語の BM25 は識別子や 2 文字の語に強い。混ぜると全体がいちばん良くなる。
+- 埋め込みには、持ち主の問いの文と Codex の検索語の両方を渡すと良くなった（混ぜたときの言い換えの MRR が、問いの文だけの 0.76 から 0.81 に。モックの値）。そのため `search` に `--question` がある。
+- モデルの大きさは、実際の記録で差がはっきり出た（混ぜたときの MRR: 30m 0.821、70m 0.866、130m 0.906）。130m を選ぶ。
+- 形態素解析は SudachiPy と Janome でほぼ同じ（実際の記録で 0.906 と 0.912）。モックでは SudachiPy が上で、処理も速く更新も続いているので SudachiPy を選ぶ。kuromoji は Java と JavaScript の道具なので、Python からは使わない。
+- RRF の k と重みは、振っても差が問いの数の誤差の範囲だった。いちばん素直な k=60、1 対 1 にする。
+- 埋め込みにかける時間（この Mac の CPU、依頼と最終の回答 3,909 件）: 30m 130 秒、70m 279 秒、130m 555 秒。最初の一度だけ `index` でまとめて作り、あとは検索のたびに増えた分を 20 秒まで足す（間に合わない分は全文検索だけで探したと出る）。
+
+作りを変えたら、評価を流し直す（専用の環境の Python で）。
+
+```powershell
+python evals\session-search\run_eval.py --corpus evals\session-search\corpus.json --queries evals\session-search\queries.json --work $env:TEMP\ss-eval --methods product,index-or/kw
+```
+
+### 入れ方
+
+検索だけなら、何も入れなくても動く（trigram の方式）。精度を上げるには、専用の環境を作る（ライブラリと約 500 MB のモデルを取ってくるので、時間がかかる）。
+
+```powershell
+python "$HOME\.agents\skills\session-search\scripts\session_search.py" setup
+python "$HOME\.agents\skills\session-search\scripts\session_search.py" index
+```
+
+- `setup` は `%LOCALAPPDATA%\hirata-codex\venv` に専用の環境を作る。元にする Python は 3.14 を優先する（圧縮された記録を読むため）。入れる版は評価で使ったものに固定している（SudachiPy 0.7.0、sudachidict-core 20260723.1、sentence-transformers 6.1.0、transformers 5.18.0、tokenizers 0.23.2、torch 2.14.1、numpy 2.4.6。どれも 2026-10-01 より前の公開）。
+- モデル（`cl-nagoya/ruri-v3-130m`、Apache-2.0）は `%LOCALAPPDATA%\hirata-codex\models\ruri-v3-130m` に置く。会社のネットワークから Hugging Face に届かないときは、別の PC で `hf download cl-nagoya/ruri-v3-130m --local-dir <フォルダ>` で取ってきたフォルダを、そこに置けば使える（Hugging Face の取得には `huggingface.co` のほかに CDN のホストも要る）。
+- `index` は、取り込み・単語の区切り・埋め込みを全部済ませる。最初の一度は、会話の量によって数分〜数十分かかる。
+- 専用の環境があると、`session_search.py` は自動でその環境の Python で動き直す。
+
+### Codex のサンドボックスから索引に書けないとき
+
+索引は作業フォルダの外にあるので、サンドボックスの設定によっては書けない。そのときは前の索引で検索し、「索引を更新できなかった」と出る。書けるようにするには、`~\.codex\config.toml` に索引のフォルダを足す。
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ['C:\Users\<ユーザー名>\AppData\Local\hirata-codex']
+```
+
+### memories と組み合わせる
+
+Codex の memories（既定は無効）は、過去の会話から要点を自動でまとめ、次の会話の文脈に入れる。会話の検索は原文を探して引用する。役割が違うので、両方を使うのがいちばん良い（意見）。memories が書いた要点のファイルも、会話の検索の対象に入る。
+
+memories は要点を作るのにモデルを使い、利用枠を減らす。要点を作るモデルを gpt-6-luna にし、枠の残りが少ないときは作らないようにしておく。
+
+```toml
+[features]
+memories = true
+
+[memories]
+extract_model = "gpt-6-luna"
+consolidation_model = "gpt-6-luna"
+min_rate_limit_remaining_percent = 40
+```
+
+会社の Enterprise のアカウントで、local の memories が管理者の設定で止められていないかは確かめていない。
+
+### 使い方
+
+普通に聞けば `session-search` が選ばれる（AGENTS.md にも「過去の会話の中身を聞かれたら検索する」と書いてある）。Codex は、問いの文と検索語でスクリプトを流し、上位を `show` で読み、日時・引用・`codex resume <id>` を添えて答える。
+
+- 「前に CI の自動の再実行をどうするって決めたっけ？」
+- 「9 月に ECONNRESET の原因を調べたやつ、何だった？」（期間で絞る）
+- 「このリポジトリで前に `--no-verify` の話をした会話を出して」（作業フォルダで絞る）
+
+会話を検索に出したくないときは、`session_search.py forget <thread_id>`。Codex の記録そのものは消えない（消すなら `codex delete <thread_id>`）。`forget` は検索に出なくするところまでで、索引のファイルから痕跡を消すなら `rebuild` で作り直す。
 
 ## skill の詳細
 
@@ -510,7 +610,7 @@ TOML でサンドボックスや承認の設定は上書きできず、親のも
 | Windows | 10 / 11 | |
 | PowerShell | ふだんのシェルは 7 でも 5.1 でもよい。**`ado.ps1` は、skill の手順では常に Windows PowerShell 5.1（`powershell`、Windows に標準で入っている）で起動する** | `$PSVersionTable.PSVersion`、`powershell -NoProfile -Command '$PSVersionTable.PSVersion'` |
 | Python | 3.8 以上。`python` か `py -3` で起動できること | `python --version` |
-| Codex | 最低バージョンは未確認。手順 5 の `/skills` にこのパッケージの 16 個が出れば skill は足りている | `codex --version` |
+| Codex | 最低バージョンは未確認。手順 5 の `/skills` にこのパッケージの 17 個が出れば skill は足りている | `codex --version` |
 | モデル | サブエージェントのツールが v2 のもの（gpt-6.1-sol で確認）。`grill` などの子を起動する手順は v2 の書き方だけで書いてある | 手順 6 の後の、`$grill` の試し |
 | git | 作業リポジトリで使っているもの | `git --version` |
 
@@ -544,7 +644,7 @@ Microsoft Store の `python.exe`（`WindowsApps` の下にあるもの）は Sto
    ```
    PAT（Personal Access Token。ADO の画面で発行する、パスワードの代わりのトークン）で認証するときだけ、`ADO_AUTH` を `pat` にし、`ADO_PAT` に PAT を入れる。指定が無ければ Windows の統合認証（ログイン中のアカウント）を使う。
    **PAT はコマンドの引数やファイルに書かない。**環境変数の画面から入れるとよい。
-5. ターミナルと Codex を起動し直す。Codex の中で `/skills` を開き、このパッケージの 16 個（[一覧](#一覧)）があることを確かめる。
+5. ターミナルと Codex を起動し直す。Codex の中で `/skills` を開き、このパッケージの 17 個（[一覧](#一覧)）があることを確かめる。
    続けて `/hooks` を開き、`hirata-codex usage status` のフックを信頼する（信頼するまで動かない。もう一度信頼が要るのは `hooks.json` の定義が変わったときで、`-Force` でスクリプトだけを入れ直したときは要らない）。何か依頼して、Codex に「[利用状況] の行が見えるか」と聞くと確かめられる。
 6. 接続を確かめる。Codex に「ADO に接続できるか確かめて」と頼むか、自分で流す。
    ```powershell
@@ -648,7 +748,8 @@ sequenceDiagram
 - 更新: 新しいフォルダを持ち込み、`install.ps1 -Force` を流す。変わったものだけが置き換わり、元のものは `$HOME\.hirata-codex-backup\<日時>\` に残る。
   **`-Force` は `AGENTS.md` にも効く。**自分で書いた `~\.codex\AGENTS.md` を使っているなら、置き換わった後に退避先（`$HOME\.hirata-codex-backup\<日時>\.codex\AGENTS.md`）から戻すか、先に `-WhatIf` で何が置き換わるかを見る。
 - 削除: 次を消す。
-  - `$HOME\.agents\skills\` の下の 16 個のフォルダ（`ado`、`ci-failure-triage`、`code-comments`、`grill`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`review-triage`、`root-cause`、`sprint-report`、`work-item-ready`、`writing-quality`）
+  - `$HOME\.agents\skills\` の下の 17 個のフォルダ（`ado`、`ci-failure-triage`、`code-comments`、`grill`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`review-triage`、`root-cause`、`session-search`、`sprint-report`、`work-item-ready`、`writing-quality`）
+  - 会話の検索の索引と専用の環境: `%LOCALAPPDATA%\hirata-codex\`（`sessions.sqlite`、`venv\`、`models\`）
   - `$HOME\.codex\agents\` の下の 5 つ（`change-risk-reviewer.toml`、`design-challenger.toml`、`incident-evidence-analyst.toml`、`prose-reviewer.toml`、`researcher.toml`。`CODEX_HOME` があればその下）
   - `$HOME\.codex\AGENTS.md`（このパッケージのものなら。`CODEX_HOME` があればその下）
   - `$HOME\.codex\hooks.json` の中の `"statusMessage": "hirata-codex usage status"` のハンドラーを先に消し、そのあと `$HOME\.codex\hooks\hirata-codex\` を消す（順番を逆にすると、残ったハンドラーが無いスクリプトを呼び、Python が終了コード 2 を返して依頼が止まる）。ハンドラーを消した後に `hooks.json` にほかのハンドラーが残っていなければ、ファイルごと消してよい

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Session Search"
+  short_description: "過去の Codex の会話を検索して、前に何を言ったか答える"
+  default_prompt: "Use $session-search to find what we said about this in past Codex sessions."
+policy:
+  allow_implicit_invocation: true

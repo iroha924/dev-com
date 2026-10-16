@@ -51,6 +51,10 @@ Azure DevOps の Work Item・PR・コメント、チャット、メールなど�
 - Python で `open()` や `subprocess` の text を使うときは `encoding` を書く。Windows の既定は cp932。
 - PowerShell 5.1 の `Out-File` と `>` は UTF-16、`Set-Content` は ANSI で書く。UTF-8 で書きたいファイルは Python で書く。
 
+## 過去の会話
+
+過去の Codex の会話の中身を聞かれたら（前に何と言ったか、前回どうしたか、以前決めた方針）、記憶で答えずに `session-search` で検索し、日時と引用を添えて答える。
+
 ## 報告
 
 - 結論から書く。主張には、確かめた事実か推測かを添え、確かめていないものは未確認と書く。

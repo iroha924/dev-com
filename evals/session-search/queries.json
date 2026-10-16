@@ -1,0 +1,1659 @@
+{
+ "queries": [
+  {
+   "id": "q001",
+   "type": "exact",
+   "question": "PublishTestResults@2 のパターン、結局何にしたんだっけ？",
+   "keywords": [
+    "PublishTestResults@2",
+    "パターン"
+   ],
+   "gold": [
+    "t003"
+   ],
+   "why": "PublishTestResults@2 のパターンを '**/test-results/*.xml' にした会話"
+  },
+  {
+   "id": "q002",
+   "type": "exact",
+   "question": "azure-pipelines.yml をテンプレートに分けたとき、何行から何行になった？",
+   "keywords": [
+    "azure-pipelines.yml",
+    "テンプレート",
+    "分割"
+   ],
+   "gold": [
+    "t006"
+   ],
+   "why": "テンプレートへの分割で 312 行から 58 行になったと記録"
+  },
+  {
+   "id": "q003",
+   "type": "exact",
+   "question": "ビルド検証のパスフィルター、どのフォルダを対象にしたっけ",
+   "keywords": [
+    "ビルド検証",
+    "パスフィルター"
+   ],
+   "gold": [
+    "t008"
+   ],
+   "why": "ビルド検証のパスフィルターの設定値が facts にある"
+  },
+  {
+   "id": "q004",
+   "type": "exact",
+   "question": "シークレット変数が環境変数に入らなかったの、どう渡すんだった？",
+   "keywords": [
+    "シークレット変数",
+    "環境変数"
+   ],
+   "gold": [
+    "t010"
+   ],
+   "why": "script の env: で明示的に渡すと決めた会話"
+  },
+  {
+   "id": "q005",
+   "type": "exact",
+   "question": "エージェントプールの使い分けで、Windows 専用テストはどう分けたっけ",
+   "keywords": [
+    "エージェントプール",
+    "Windows 専用テスト"
+   ],
+   "gold": [
+    "t011"
+   ],
+   "why": "@pytest.mark.windows_only と markerExpr で分けた会話"
+  },
+  {
+   "id": "q006",
+   "type": "exact",
+   "question": "アーティファクトを PublishBuildArtifacts@1 に統一した理由って何だっけ",
+   "keywords": [
+    "PublishBuildArtifacts@1",
+    "アーティファクト"
+   ],
+   "gold": [
+    "t020"
+   ],
+   "why": "クラシックのリリースから取りやすいため統一した会話"
+  },
+  {
+   "id": "q007",
+   "type": "exact",
+   "question": "prompts リポジトリも一緒に checkout したとき、path はどう分けた？",
+   "keywords": [
+    "checkout",
+    "prompts",
+    "path"
+   ],
+   "gold": [
+    "t025"
+   ],
+   "why": "self は s、prompts は s/_prompts にした会話"
+  },
+  {
+   "id": "q008",
+   "type": "exact",
+   "question": "bot が作る PR の説明文、見出しは何にしたっけ",
+   "keywords": [
+    "PR 説明文",
+    "見出し",
+    "bot"
+   ],
+   "gold": [
+    "t033"
+   ],
+   "why": "説明文の 4 見出しを決めた会話"
+  },
+  {
+   "id": "q009",
+   "type": "exact",
+   "question": "依頼者に差分を見せる Teams のカード、どういう見せ方にした？",
+   "keywords": [
+    "差分",
+    "Teams",
+    "カード",
+    "依頼者"
+   ],
+   "gold": [
+    "t038"
+   ],
+   "why": "段落単位の変更前／変更後をカードで見せると決めた会話"
+  },
+  {
+   "id": "q010",
+   "type": "exact",
+   "question": "judge が長い回答をひいきする件、採点をどう変えたんだっけ",
+   "keywords": [
+    "judge",
+    "長い回答",
+    "採点"
+   ],
+   "gold": [
+    "t055"
+   ],
+   "why": "観点ごとの加点式にし長さは評価しないと明記した会話"
+  },
+  {
+   "id": "q011",
+   "type": "exact",
+   "question": "回帰の temperature を 0 にした理由、何だったっけ",
+   "keywords": [
+    "回帰",
+    "temperature"
+   ],
+   "gold": [
+    "t057"
+   ],
+   "why": "変更の影響の検出が目的なので揺れの小さい 0 を選んだ会話"
+  },
+  {
+   "id": "q012",
+   "type": "exact",
+   "question": "プレースホルダーを snake_case に統一したとき、何か所直した？",
+   "keywords": [
+    "プレースホルダー",
+    "snake_case",
+    "統一"
+   ],
+   "gold": [
+    "t059"
+   ],
+   "why": "{CustomerName} 形式 13 ファイル 38 か所を {{snake_case}} に統一"
+  },
+  {
+   "id": "q013",
+   "type": "exact",
+   "question": "プロンプトインジェクションの回帰ケース、何件作ったっけ",
+   "keywords": [
+    "プロンプトインジェクション",
+    "回帰ケース"
+   ],
+   "gold": [
+    "t063"
+   ],
+   "why": "tests/cases/injection/ に 12 件作った会話"
+  },
+  {
+   "id": "q014",
+   "type": "exact",
+   "question": "few-shot を 8 件から 4 件に減らしたとき、トークンはどれくらい減った？",
+   "keywords": [
+    "few-shot",
+    "4 件",
+    "トークン"
+   ],
+   "gold": [
+    "t070"
+   ],
+   "why": "入力トークン 5,400 → 3,350（-38%）と記録"
+  },
+  {
+   "id": "q015",
+   "type": "exact",
+   "question": "1 週間スプリントの会議、曜日と時間どう組んだっけ",
+   "keywords": [
+    "1 週間スプリント",
+    "会議",
+    "プランニング"
+   ],
+   "gold": [
+    "t076"
+   ],
+   "why": "プランニング・デイリー・レビュー・ふりかえりの時間を決めた会話"
+  },
+  {
+   "id": "q016",
+   "type": "exact",
+   "question": "レビューコメントの接頭辞、must と nit の違いって何だっけ",
+   "keywords": [
+    "レビューコメント",
+    "接頭辞",
+    "must",
+    "nit"
+   ],
+   "gold": [
+    "t080"
+   ],
+   "why": "must:/should:/nit:/q: の意味を決めた会話"
+  },
+  {
+   "id": "q017",
+   "type": "exact",
+   "question": "Area パスの切り方、いくつに分けたんだっけ",
+   "keywords": [
+    "Area パス"
+   ],
+   "gold": [
+    "t086"
+   ],
+   "why": "AIOps\\CI など 4 つ、深さ 1 段に決めた会話"
+  },
+  {
+   "id": "q018",
+   "type": "exact",
+   "question": "公式のタグ 6 つって、何と何だったっけ",
+   "keywords": [
+    "公式のタグ",
+    "タグ"
+   ],
+   "gold": [
+    "t089"
+   ],
+   "why": "flaky・incident など 6 つの公式タグを決めた会話"
+  },
+  {
+   "id": "q019",
+   "type": "exact",
+   "question": "Windows のエージェントで venv が効かなかった件、どう直した？",
+   "keywords": [
+    "venv",
+    "Windows",
+    "エージェント"
+   ],
+   "gold": [
+    "t102"
+   ],
+   "why": "##vso[task.prependpath] で PATH に足して解決"
+  },
+  {
+   "id": "q020",
+   "type": "exact",
+   "question": "ディスクフルの手順書を書き直したとき、ひな形の見出しは何にした？",
+   "keywords": [
+    "手順書",
+    "ひな形",
+    "ディスクフル"
+   ],
+   "gold": [
+    "t139"
+   ],
+   "why": "_template.md の見出し（使う場面・事前に確認すること…）を決めた会話"
+  },
+  {
+   "id": "q021",
+   "type": "paraphrase",
+   "question": "コミット前のチェックを手元で飛ばされても、後で拾えるようにした件どうしたっけ",
+   "keywords": [
+    "コミット前 チェック",
+    "スキップ",
+    "フック"
+   ],
+   "gold": [
+    "t007"
+   ],
+   "why": "--no-verify の抜け道を CI で pre-commit を全ファイル実行して塞いだ会話"
+  },
+  {
+   "id": "q022",
+   "type": "paraphrase",
+   "question": "夜中の定期テスト、コードを触ってない日も動かすことにした理由って何だっけ",
+   "keywords": [
+    "定期実行",
+    "夜間",
+    "テスト"
+   ],
+   "gold": [
+    "t012"
+   ],
+   "why": "always: true にしてモデル側の変化を検出したいとした会話"
+  },
+  {
+   "id": "q023",
+   "type": "paraphrase",
+   "question": "プルリクのビルドで本番に出す段まで動いちゃう件、条件どう書いた？",
+   "keywords": [
+    "プルリク",
+    "本番",
+    "条件"
+   ],
+   "gold": [
+    "t014"
+   ],
+   "why": "deploy stage の condition を main かつ PullRequest 以外にした会話"
+  },
+  {
+   "id": "q024",
+   "type": "paraphrase",
+   "question": "Windows のビルド機でファイルの場所が深すぎて落ちたやつ、何を設定したっけ",
+   "keywords": [
+    "Windows",
+    "パス 長い",
+    "ビルド"
+   ],
+   "gold": [
+    "t015"
+   ],
+   "why": "Filename too long を core.longpaths と LongPathsEnabled で解決"
+  },
+  {
+   "id": "q025",
+   "type": "paraphrase",
+   "question": "ネットに出られないビルド機で Python が用意できなかった件、どう解決した？",
+   "keywords": [
+    "オフライン",
+    "Python",
+    "ビルド機"
+   ],
+   "gold": [
+    "t016"
+   ],
+   "why": "UsePythonVersion のツールキャッシュを rsync でコピーした会話"
+  },
+  {
+   "id": "q026",
+   "type": "paraphrase",
+   "question": "プルリクのときに試す Python の版を絞った話、どれを残したっけ",
+   "keywords": [
+    "Python バージョン",
+    "プルリク",
+    "マトリクス"
+   ],
+   "gold": [
+    "t017"
+   ],
+   "why": "PR ビルドは py311 だけ、py310 は main と夜間だけ"
+  },
+  {
+   "id": "q027",
+   "type": "paraphrase",
+   "question": "本番の手順を出す前に誰が OK するか決めた件、何人要るんだっけ",
+   "keywords": [
+    "本番",
+    "承認者",
+    "人数"
+   ],
+   "gold": [
+    "t022"
+   ],
+   "why": "prod-runbooks 環境の承認者 2 名のどちらか 1 名で可とした会話"
+  },
+  {
+   "id": "q028",
+   "type": "paraphrase",
+   "question": "Windows でファイルを写すコマンドが、ちゃんと動いたのにエラー判定になった件",
+   "keywords": [
+    "Windows",
+    "コピー",
+    "終了コード"
+   ],
+   "gold": [
+    "t028"
+   ],
+   "why": "robocopy の終了コード 8 未満は成功と扱うよう直した会話"
+  },
+  {
+   "id": "q029",
+   "type": "paraphrase",
+   "question": "新しく足したビルド機に必要な道具が入ってなくて落ちた件、再発防止どうした？",
+   "keywords": [
+    "ビルド機",
+    "ツール 不足",
+    "コマンド"
+   ],
+   "gold": [
+    "t029"
+   ],
+   "why": "exit code 127 の件で agent-maintenance.yml に必須コマンドの確認を追加"
+  },
+  {
+   "id": "q030",
+   "type": "paraphrase",
+   "question": "CI が落ちたらチャットに知らせる件、どういうときだけ飛ばすことにした？",
+   "keywords": [
+    "通知",
+    "CI 失敗",
+    "チャット"
+   ],
+   "gold": [
+    "t030"
+   ],
+   "why": "失敗かつ main のときだけ Teams のチャネルへ通知と決めた会話"
+  },
+  {
+   "id": "q031",
+   "type": "paraphrase",
+   "question": "bot が直そうとしたファイルを他の人も同時にいじってたら、どうするんだっけ",
+   "keywords": [
+    "bot",
+    "競合",
+    "同時編集"
+   ],
+   "gold": [
+    "t035"
+   ],
+   "why": "コンフリクトは自動で解消せず依頼者に判断を戻すと決めた会話"
+  },
+  {
+   "id": "q032",
+   "type": "paraphrase",
+   "question": "bot がプルリクを出す前に自分で書式チェックするようにした件、何がきっかけ？",
+   "keywords": [
+    "bot",
+    "事前チェック",
+    "lint"
+   ],
+   "gold": [
+    "t039"
+   ],
+   "why": "7 月の bot の PR 28 本中 9 本が CI の lint で落ちたため"
+  },
+  {
+   "id": "q033",
+   "type": "paraphrase",
+   "question": "bot が依頼者に話すとき、開発者向けの言葉を言い換えたルールってどこにまとめた？",
+   "keywords": [
+    "bot",
+    "言い換え",
+    "用語"
+   ],
+   "gold": [
+    "t041"
+   ],
+   "why": "マージ=反映などの言い換えを bot/messages_ja.yaml に集約した会話"
+  },
+  {
+   "id": "q034",
+   "type": "paraphrase",
+   "question": "bot が何度も手直しを繰り返して終わらないのを止める上限、何回にした？",
+   "keywords": [
+    "bot",
+    "上限",
+    "繰り返し"
+   ],
+   "gold": [
+    "t042"
+   ],
+   "why": "編集ループは最大 3 回、同じエラー 2 回で停止"
+  },
+  {
+   "id": "q035",
+   "type": "paraphrase",
+   "question": "bot の変更履歴の説明が日本語だけ読めなくなってた件、原因は？",
+   "keywords": [
+    "bot",
+    "文字化け",
+    "日本語"
+   ],
+   "gold": [
+    "t047"
+   ],
+   "why": "Windows で git commit -m に日本語を渡し cp932 を経由したのが原因"
+  },
+  {
+   "id": "q036",
+   "type": "paraphrase",
+   "question": "一度入れた指示文の変更を bot で取り消せるようにした件、仕組みどうした？",
+   "keywords": [
+    "取り消し",
+    "元に戻す",
+    "bot"
+   ],
+   "gold": [
+    "t050"
+   ],
+   "why": "REST の reverts で bot/revert-<番号> を作り下書き PR にする会話"
+  },
+  {
+   "id": "q037",
+   "type": "paraphrase",
+   "question": "指示文を変えたときに壊れてないか確かめる仕組み、最初どう設計したっけ",
+   "keywords": [
+    "プロンプト",
+    "テスト",
+    "設計"
+   ],
+   "gold": [
+    "t052"
+   ],
+   "why": "回帰テストのケース形式と 4 種類の検査を設計した会話"
+  },
+  {
+   "id": "q038",
+   "type": "paraphrase",
+   "question": "お客さん向けの返事の文面、謝りすぎだった件どう直した？",
+   "keywords": [
+    "謝罪",
+    "返信",
+    "プロンプト"
+   ],
+   "gold": [
+    "t058"
+   ],
+   "why": "CS 返信プロンプトの謝罪の多さを v2 で直した会話"
+  },
+  {
+   "id": "q039",
+   "type": "paraphrase",
+   "question": "指示文の版番号、どの変更でどこを上げるルールだったっけ",
+   "keywords": [
+    "バージョン",
+    "上げ方",
+    "プロンプト"
+   ],
+   "gold": [
+    "t060"
+   ],
+   "why": "major/minor/patch の上げ方と判定方法を決めた会話"
+  },
+  {
+   "id": "q040",
+   "type": "paraphrase",
+   "question": "AI 側が更新されて要約の書き方が変わった件、テストは緩めたんだっけ？",
+   "keywords": [
+    "モデル更新",
+    "要約",
+    "書式"
+   ],
+   "gold": [
+    "t061"
+   ],
+   "why": "箇条書き記号の変化で検査は緩めずプロンプトに明記した会話"
+  },
+  {
+   "id": "q041",
+   "type": "paraphrase",
+   "question": "長くなりすぎた指示文、どの指示文にも出てくる部分を別ファイルに出したんだっけ？",
+   "keywords": [
+    "共通化",
+    "長い",
+    "プロンプト"
+   ],
+   "gold": [
+    "t065"
+   ],
+   "why": "_shared/style_ja.md に切り出して取り込む形にした会話"
+  },
+  {
+   "id": "q042",
+   "type": "paraphrase",
+   "question": "監視の通知をまず仕分けさせる指示文で、裏付けのない原因を書かせない工夫は？",
+   "keywords": [
+    "アラート",
+    "根拠",
+    "ハルシネーション"
+   ],
+   "gold": [
+    "t068"
+   ],
+   "why": "evidence は入力からの引用必須、無ければ空配列とした会話"
+  },
+  {
+   "id": "q043",
+   "type": "paraphrase",
+   "question": "もう使ってない指示文の片付け方、どういう手順にした？",
+   "keywords": [
+    "廃止",
+    "不要",
+    "プロンプト"
+   ],
+   "gold": [
+    "t073"
+   ],
+   "why": "status: deprecated で _archive へ移し 90 日後に削除とした会話"
+  },
+  {
+   "id": "q044",
+   "type": "paraphrase",
+   "question": "作業の大きさに点数を付けるのやめた件、代わりに何で計画するんだっけ",
+   "keywords": [
+    "見積もり",
+    "ポイント",
+    "計画"
+   ],
+   "gold": [
+    "t081"
+   ],
+   "why": "ストーリーポイントを使わず件数で計画すると決めた会話"
+  },
+  {
+   "id": "q045",
+   "type": "paraphrase",
+   "question": "作業が終わったと言える条件、チームで決めたやつ何だったっけ",
+   "keywords": [
+    "完了の定義",
+    "DoD",
+    "完了条件"
+   ],
+   "gold": [
+    "t087"
+   ],
+   "why": "DoD の共通項目と種類別の項目を決めた会話"
+  },
+  {
+   "id": "q046",
+   "type": "paraphrase",
+   "question": "締め切りって作業票のどこに書くことにしたっけ",
+   "keywords": [
+    "期限",
+    "締め切り",
+    "Work Item"
+   ],
+   "gold": [
+    "t091"
+   ],
+   "why": "期限は Target Date にだけ書きタイトルに書かないと決めた会話"
+  },
+  {
+   "id": "q047",
+   "type": "paraphrase",
+   "question": "振り返りで出た改善案が結局やられない問題、どうしたんだっけ",
+   "keywords": [
+    "振り返り",
+    "改善",
+    "未実施"
+   ],
+   "gold": [
+    "t092"
+   ],
+   "why": "ふりかえりのアクションを Task にして 1 回 2 件までにした会話"
+  },
+  {
+   "id": "q048",
+   "type": "paraphrase",
+   "question": "Windows のビルド機で Python の出力が読めない文字になった件、どう直した？",
+   "keywords": [
+    "Windows",
+    "Python",
+    "文字化け"
+   ],
+   "gold": [
+    "t098"
+   ],
+   "why": "標準出力が cp932 になるので PYTHONUTF8: 1 を設定した会話"
+  },
+  {
+   "id": "q049",
+   "type": "paraphrase",
+   "question": "社内ツールの HTTP 呼び出し、失敗したら何度かやり直す設定どうした？",
+   "keywords": [
+    "リトライ",
+    "HTTP",
+    "再試行"
+   ],
+   "gold": [
+    "t099"
+   ],
+   "why": "make_session() の Retry の設定と PATCH・POST を除外した会話"
+  },
+  {
+   "id": "q050",
+   "type": "paraphrase",
+   "question": "スクリプトのテストで外への通信をダミーに置き換える方法、何にしたっけ",
+   "keywords": [
+    "テスト",
+    "モック",
+    "HTTP"
+   ],
+   "gold": [
+    "t105"
+   ],
+   "why": "unittest.mock で make_session() を差し替え、外部ライブラリを入れないと決めた会話"
+  },
+  {
+   "id": "q051",
+   "type": "short",
+   "question": "ログサーバーの容量が足りなくなった件、何が原因だった？",
+   "keywords": [
+    "容量",
+    "ログサーバー"
+   ],
+   "gold": [
+    "t113"
+   ],
+   "why": "logs01 の D: 95% の原因が夜間回帰の出力の全件保存"
+  },
+  {
+   "id": "q052",
+   "type": "short",
+   "question": "承認が数えられなかった障害、原因なんだっけ",
+   "keywords": [
+    "承認",
+    "障害"
+   ],
+   "gold": [
+    "t124"
+   ],
+   "why": "AD のグループ再編で投稿の権限が消え承認が数えられなかった会話"
+  },
+  {
+   "id": "q053",
+   "type": "short",
+   "question": "bot の PAT、権限の範囲と期限どうしたんだっけ",
+   "keywords": [
+    "権限",
+    "期限",
+    "PAT",
+    "bot"
+   ],
+   "gold": [
+    "t036"
+   ],
+   "why": "svc-promptbot の PAT をコードと作業項目の読み書きだけ・90 日にした会話"
+  },
+  {
+   "id": "q054",
+   "type": "short",
+   "question": "監視ツールの見積もり依頼、回答の期限いつにした？",
+   "keywords": [
+    "期限",
+    "見積もり",
+    "監視"
+   ],
+   "gold": [
+    "t141"
+   ],
+   "why": "回答期限 2026-08-22 と書いたライセンス追加のメール"
+  },
+  {
+   "id": "q055",
+   "type": "short",
+   "question": "利用枠がきつくて夜の回帰を減らした件、どう減らした？",
+   "keywords": [
+    "利用枠",
+    "回帰",
+    "夜間"
+   ],
+   "gold": [
+    "t072"
+   ],
+   "why": "平日の夜間は代表 3 ケースだけ、全件は週 1 回に変えた会話"
+  },
+  {
+   "id": "q056",
+   "type": "short",
+   "question": "Codex の枠が週の途中で尽きた件、何を変えたっけ",
+   "keywords": [
+    "枠",
+    "Codex",
+    "利用"
+   ],
+   "gold": [
+    "t128"
+   ],
+   "why": "木曜で枠が尽き、検証や lint 修正を mini に回すと決めた会話"
+  },
+  {
+   "id": "q057",
+   "type": "short",
+   "question": "席を増やす予算の申請、何席にするって書いた？",
+   "keywords": [
+    "予算",
+    "席",
+    "申請"
+   ],
+   "gold": [
+    "t143"
+   ],
+   "why": "Codex の席を 5 → 8 に増やす予算申請"
+  },
+  {
+   "id": "q058",
+   "type": "short",
+   "question": "上期の評価で、回帰テストの整備はどう書いたっけ",
+   "keywords": [
+    "評価",
+    "上期",
+    "回帰テスト"
+   ],
+   "gold": [
+    "t140"
+   ],
+   "why": "回帰テストの整備を「一部達成」とした自己評価"
+  },
+  {
+   "id": "q059",
+   "type": "short",
+   "question": "上司に遅れを伝えた連絡、理由なんて書いたっけ",
+   "keywords": [
+    "遅れ",
+    "上司",
+    "連絡"
+   ],
+   "gold": [
+    "t136"
+   ],
+   "why": "MVP 遅れの理由をサービスアカウントの権限の申請待ちと書いた文面"
+  },
+  {
+   "id": "q060",
+   "type": "short",
+   "question": "休日の当番、電話するのはどの優先度だけだっけ",
+   "keywords": [
+    "休日",
+    "当番",
+    "電話"
+   ],
+   "gold": [
+    "t148"
+   ],
+   "why": "休日は P1・P2 だけ電話と決めた文章"
+  },
+  {
+   "id": "q061",
+   "type": "short",
+   "question": "議事メモで誤記して直したのって、どの件だった？",
+   "keywords": [
+    "議事メモ",
+    "誤記",
+    "訂正"
+   ],
+   "gold": [
+    "t145"
+   ],
+   "why": "受付の拡大を決定と誤記して訂正した設計レビューの議事メモ"
+  },
+  {
+   "id": "q062",
+   "type": "short",
+   "question": "移行の時期、いつがいいって回答したんだっけ",
+   "keywords": [
+    "移行",
+    "時期"
+   ],
+   "gold": [
+    "t146"
+   ],
+   "why": "ADO Server 2022 への移行を 2027 年 1〜3 月と希望した会話"
+  },
+  {
+   "id": "q063",
+   "type": "short",
+   "question": "エージェントが全台落ちた障害、恒久対応どうするって言ってた？",
+   "keywords": [
+    "全台",
+    "障害",
+    "恒久対応"
+   ],
+   "gold": [
+    "t111"
+   ],
+   "why": "AD パスワード期限切れで全台オフラインになり恒久対応を提案した会話"
+  },
+  {
+   "id": "q064",
+   "type": "short",
+   "question": "長いセッションで精度が落ちる件、どう対処することにした？",
+   "keywords": [
+    "精度",
+    "長いセッション"
+   ],
+   "gold": [
+    "t135"
+   ],
+   "why": "セッションを Work Item 単位で切り、最後にまとめを書かせると決めた会話"
+  },
+  {
+   "id": "q065",
+   "type": "short",
+   "question": "エージェント待ちの遅延、原因って何だったっけ",
+   "keywords": [
+    "遅延",
+    "エージェント待ち",
+    "キュー"
+   ],
+   "gold": [
+    "t026"
+   ],
+   "why": "平日 10〜12 時の集中と main の CI の積み重なりが原因"
+  },
+  {
+   "id": "q066",
+   "type": "mixed",
+   "question": "textlint の sentence-length、結局 off にしたんだっけ？",
+   "keywords": [
+    "textlint",
+    "sentence-length"
+   ],
+   "gold": [
+    "t069"
+   ],
+   "why": "sentence-length を無効化し max-ten を緩めた会話"
+  },
+  {
+   "id": "q067",
+   "type": "mixed",
+   "question": "ECONNRESET で LB の idle timeout に引っかかったやつ、どう対処した？",
+   "keywords": [
+    "ECONNRESET",
+    "idle timeout",
+    "ロードバランサー"
+   ],
+   "gold": [
+    "t115"
+   ],
+   "why": "gateway-proxy を stream: true にし idle timeout の延長を依頼した会話"
+  },
+  {
+   "id": "q068",
+   "type": "mixed",
+   "question": "CERTIFICATE_VERIFY_FAILED で pip が落ちた朝、原因なんだった？",
+   "keywords": [
+    "CERTIFICATE_VERIFY_FAILED",
+    "pip"
+   ],
+   "gold": [
+    "t121"
+   ],
+   "why": "nexus の中間証明書の更新にエージェントが追従していなかった障害"
+  },
+  {
+   "id": "q069",
+   "type": "mixed",
+   "question": "bot の edit_loop が MemoryError で落ちた件、何のファイルのせい？",
+   "keywords": [
+    "MemoryError",
+    "edit_loop",
+    "bot"
+   ],
+   "gold": [
+    "t122"
+   ],
+   "why": "faq_lookup_v1.json（4.8MB）の差分を difflib で作ったのが原因"
+  },
+  {
+   "id": "q070",
+   "type": "mixed",
+   "question": "Codex の approval_policy って何にしたっけ",
+   "keywords": [
+    "approval_policy",
+    "Codex",
+    "config.toml"
+   ],
+   "gold": [
+    "t129"
+   ],
+   "why": "approval_policy = \"on-request\" に変えた会話"
+  },
+  {
+   "id": "q071",
+   "type": "mixed",
+   "question": "Codex の profiles 作ったとき、triage の profile はどういう設定？",
+   "keywords": [
+    "profiles",
+    "triage",
+    "Codex"
+   ],
+   "gold": [
+    "t132"
+   ],
+   "why": "triage は mini・low・sandbox_mode read-only と決めた会話"
+  },
+  {
+   "id": "q072",
+   "type": "mixed",
+   "question": "reasoning effort の使い分け、普段は medium で何のときに high？",
+   "keywords": [
+    "reasoning effort",
+    "medium",
+    "high"
+   ],
+   "gold": [
+    "t127"
+   ],
+   "why": "日常は medium、障害調査や設計は high と決めた会話"
+  },
+  {
+   "id": "q073",
+   "type": "mixed",
+   "question": "ADO 用の MCP server を入れる話、結局どうなった？",
+   "keywords": [
+    "MCP",
+    "ADO"
+   ],
+   "gold": [
+    "t134"
+   ],
+   "why": "ADO 用の MCP サーバーは入れないと決めた会話"
+  },
+  {
+   "id": "q074",
+   "type": "mixed",
+   "question": "pipeline の中で codex exec を走らせない理由って何だったっけ",
+   "keywords": [
+    "codex exec",
+    "パイプライン"
+   ],
+   "gold": [
+    "t131"
+   ],
+   "why": "シークレットや権限があり悪用の恐れがあるので動かさないと決めた会話"
+  },
+  {
+   "id": "q075",
+   "type": "mixed",
+   "question": "ADO の timestamp が UTC で、JST と比べてずれた件どう直した？",
+   "keywords": [
+    "UTC",
+    "JST",
+    "タイムゾーン"
+   ],
+   "gold": [
+    "t106"
+   ],
+   "why": "parse_ado_time() で JST の aware な datetime にした会話"
+  },
+  {
+   "id": "q076",
+   "type": "mixed",
+   "question": "Excel で開く CSV、encoding どうしたんだっけ",
+   "keywords": [
+    "CSV",
+    "Excel",
+    "encoding",
+    "BOM"
+   ],
+   "gold": [
+    "t108"
+   ],
+   "why": "utf-8-sig（BOM 付き）と newline=\"\" で書くと決めた会話"
+  },
+  {
+   "id": "q077",
+   "type": "mixed",
+   "question": "bot の PR を draft で作る件、いつ draft を外すんだっけ",
+   "keywords": [
+    "draft",
+    "PR",
+    "bot"
+   ],
+   "gold": [
+    "t043"
+   ],
+   "why": "isDraft: true で作り回帰が通ったら false にする会話"
+  },
+  {
+   "id": "q078",
+   "type": "mixed",
+   "question": "judge の temperature 下げたら、判定の割れはどれだけ減った？",
+   "keywords": [
+    "judge",
+    "temperature",
+    "判定"
+   ],
+   "gold": [
+    "t067"
+   ],
+   "why": "judge の temperature を 0.3 → 0 にして割れが 41 → 9 ケース"
+  },
+  {
+   "id": "q079",
+   "type": "mixed",
+   "question": "JUnit XML から flaky test を数えたとき、本命はどの test だった？",
+   "keywords": [
+    "JUnit XML",
+    "flaky",
+    "テスト"
+   ],
+   "gold": [
+    "t101"
+   ],
+   "why": "junit_flaky.py で test_gateway_stream などを本命とした会話"
+  },
+  {
+   "id": "q080",
+   "type": "mixed",
+   "question": "agent loop を設計するときの原則、stop 条件は何種類だっけ",
+   "keywords": [
+    "agent loop",
+    "原則",
+    "停止条件"
+   ],
+   "gold": [
+    "t142"
+   ],
+   "why": "ループの 4 原則で止まる条件 3 種を挙げた会話"
+  },
+  {
+   "id": "q081",
+   "type": "identifier",
+   "question": "promptlint の R006 って何を見るルールだっけ",
+   "keywords": [
+    "promptlint",
+    "R006"
+   ],
+   "gold": [
+    "t054"
+   ],
+   "why": "R006（警告）を強い言い回しの回数と定義した会話"
+  },
+  {
+   "id": "q082",
+   "type": "identifier",
+   "question": "promptreg update の --reason、何文字以上要るんだっけ",
+   "keywords": [
+    "promptreg update",
+    "--reason"
+   ],
+   "gold": [
+    "t062"
+   ],
+   "why": "--reason は必須で 10 文字未満は不可と決めた会話"
+  },
+  {
+   "id": "q083",
+   "type": "identifier",
+   "question": "S32 から S33 に Item まとめて動かしたとき、外したのはどれ？",
+   "keywords": [
+    "S32",
+    "S33",
+    "反復パス"
+   ],
+   "gold": [
+    "t084"
+   ],
+   "why": "move_iteration.py で 34 件移動し Task 3 件を除外した会話"
+  },
+  {
+   "id": "q084",
+   "type": "identifier",
+   "question": "ado_failed_runs.py の --summary って何が出るんだっけ",
+   "keywords": [
+    "ado_failed_runs.py",
+    "--summary"
+   ],
+   "gold": [
+    "t096"
+   ],
+   "why": "--summary でパイプライン別の件数を出すと書いた会話"
+  },
+  {
+   "id": "q085",
+   "type": "identifier",
+   "question": "add_ado_args() で共通にした引数って何だった？",
+   "keywords": [
+    "add_ado_args"
+   ],
+   "gold": [
+    "t097"
+   ],
+   "why": "--collection-url・--project・--dry-run を共通化した会話"
+  },
+  {
+   "id": "q086",
+   "type": "identifier",
+   "question": "rotate_logs.py って、圧縮したログをどこに退避するんだっけ",
+   "keywords": [
+    "rotate_logs.py",
+    "退避"
+   ],
+   "gold": [
+    "t103"
+   ],
+   "why": "\\\\fs01\\archive\\logs\\<ホスト名>\\<yyyy-mm>\\ へ退避する会話"
+  },
+  {
+   "id": "q087",
+   "type": "identifier",
+   "question": "check_owners.py を pre-commit に入れなかった理由は？",
+   "keywords": [
+    "check_owners.py",
+    "pre-commit"
+   ],
+   "gold": [
+    "t071"
+   ],
+   "why": "policy の API を使うため夜間ジョブにした会話"
+  },
+  {
+   "id": "q088",
+   "type": "identifier",
+   "question": "#1371 って何の不具合で起票したんだっけ",
+   "keywords": [
+    "#1371"
+   ],
+   "gold": [
+    "t109"
+   ],
+   "why": "alert_triage に recent_changes が渡っていなかった不具合を #1371 で起票"
+  },
+  {
+   "id": "q089",
+   "type": "identifier",
+   "question": "editable_paths から tests/cases を外した理由、何だった？",
+   "keywords": [
+    "editable_paths",
+    "tests/cases"
+   ],
+   "gold": [
+    "t046"
+   ],
+   "why": "回帰の意味がなくなるので tests/cases を外した会話"
+  },
+  {
+   "id": "q090",
+   "type": "identifier",
+   "question": "preview_pipeline.py で叩いてる API、どの api-version だった？",
+   "keywords": [
+    "preview_pipeline.py",
+    "api-version",
+    "previewRun"
+   ],
+   "gold": [
+    "t023"
+   ],
+   "why": "previewRun（api-version=6.0-preview.1）を使う検証の会話"
+  },
+  {
+   "id": "q091",
+   "type": "disambiguation",
+   "question": "CI の自動再実行、全く入れないって決めた最初の方で、見直す条件は何だった？",
+   "keywords": [
+    "自動再実行",
+    "CI",
+    "見直し"
+   ],
+   "gold": [
+    "t001"
+   ],
+   "why": "7/2 の「入れない」決定で flaky が月 5 件超なら見直すと記載（9/8 の一部許可の t018 とは別）"
+  },
+  {
+   "id": "q092",
+   "type": "disambiguation",
+   "question": "pip のキャッシュの件、入れた方じゃなくてやめた方。npm はどうしたっけ？",
+   "keywords": [
+    "pip",
+    "キャッシュ",
+    "廃止",
+    "npm"
+   ],
+   "gold": [
+    "t024"
+   ],
+   "why": "9/1 に pip の Cache@2 を廃止し npm は残した会話（7/8 導入の t004 とは別）"
+  },
+  {
+   "id": "q093",
+   "type": "disambiguation",
+   "question": "npm ci の ECONNRESET、設定ファイルの行が消えてた方の話",
+   "keywords": [
+    "npm ci",
+    "ECONNRESET",
+    "設定"
+   ],
+   "gold": [
+    "t002"
+   ],
+   "why": ".npmrc の registry 行が消えたのが原因の 7/3 の件（夜間保守の t021、LB の t115 とは別）"
+  },
+  {
+   "id": "q094",
+   "type": "disambiguation",
+   "question": "npm の ECONNRESET、夜中のメンテが原因だった方で、開始時刻どうずらした？",
+   "keywords": [
+    "ECONNRESET",
+    "npm",
+    "夜間 保守"
+   ],
+   "gold": [
+    "t021"
+   ],
+   "why": "nexus の夜間保守が原因で夜間ビルドを 03:00 開始にした 8/20 の件"
+  },
+  {
+   "id": "q095",
+   "type": "disambiguation",
+   "question": "ディスクフルの件で、作業フォルダが溜まってた方はどう掃除することにした？",
+   "keywords": [
+    "ディスクフル",
+    "作業フォルダ",
+    "削除"
+   ],
+   "gold": [
+    "t005"
+   ],
+   "why": "_work の溜まりが原因で週次削除にした 7/9 の件（docker イメージの t019 とは別）"
+  },
+  {
+   "id": "q096",
+   "type": "disambiguation",
+   "question": "60 分でジョブが切られた件、テストじゃなくて大きいファイルの取得が遅かった方",
+   "keywords": [
+    "60 分",
+    "キャンセル",
+    "タイムアウト"
+   ],
+   "gold": [
+    "t027"
+   ],
+   "why": "git lfs の取得が原因の 9/15 の件（pytest が固まった t009 とは別）"
+  },
+  {
+   "id": "q097",
+   "type": "disambiguation",
+   "question": "TF401027 が出た件で、ビルドからタグを push できなかった方の権限は？",
+   "keywords": [
+    "TF401027",
+    "タグ",
+    "push",
+    "権限"
+   ],
+   "gold": [
+    "t013"
+   ],
+   "why": "Build Service に投稿とタグの作成の権限がなかった 7/29 の件（bot の Deny の t037 とは別）"
+  },
+  {
+   "id": "q098",
+   "type": "disambiguation",
+   "question": "TF401027 の件で、明示的な拒否が効いてた方。何のグループに入ってた？",
+   "keywords": [
+    "TF401027",
+    "拒否",
+    "Deny"
+   ],
+   "gold": [
+    "t037"
+   ],
+   "why": "svc-promptbot が Readers に入り拒否が許可を上書きした 7/24 の件"
+  },
+  {
+   "id": "q099",
+   "type": "disambiguation",
+   "question": "bot のブランチ名、番号入りに変える前の最初の形式って何だった？",
+   "keywords": [
+    "bot",
+    "ブランチ名",
+    "命名"
+   ],
+   "gold": [
+    "t032"
+   ],
+   "why": "7/7 の初版 prompt/<ユーザーID>/<日時>（9/2 の Work Item 番号入りの t044 の前）"
+  },
+  {
+   "id": "q100",
+   "type": "disambiguation",
+   "question": "パスごとの必須レビュアーを決めたとき、最小人数は何人のままにした？",
+   "keywords": [
+    "必須レビュアー",
+    "最小レビュアー数",
+    "パス"
+   ],
+   "gold": [
+    "t040"
+   ],
+   "why": "8/7 時点で最小 1 名のまま（CS を 2 名にした 9/24 の t048 より前）"
+  },
+  {
+   "id": "q101",
+   "type": "disambiguation",
+   "question": "回帰の合格ライン、上げる前の最初の方は何 % で何回実行だった？",
+   "keywords": [
+    "回帰",
+    "合格ライン"
+   ],
+   "gold": [
+    "t053"
+   ],
+   "why": "7/9 の 90%・1 回（9/4 に 95%・3 回にした t066 の前）"
+  },
+  {
+   "id": "q102",
+   "type": "disambiguation",
+   "question": "Expecting value のエラー、BOM じゃなくて PAT に改行が入ってた方",
+   "keywords": [
+    "Expecting value",
+    "PAT",
+    "改行"
+   ],
+   "gold": [
+    "t104"
+   ],
+   "why": "ADO が 203 でサインイン画面を返した 9/9 の件（BOM の t056 とは別）"
+  },
+  {
+   "id": "q103",
+   "type": "disambiguation",
+   "question": "スプリントレビューの曜日、木曜から戻した方の理由って何だった？",
+   "keywords": [
+    "スプリントレビュー",
+    "曜日",
+    "変更"
+   ],
+   "gold": [
+    "t090"
+   ],
+   "why": "9/17 にリリース判定と重なるため金曜に戻した会話（7/17 に木曜へ移した t079 とは別）"
+  },
+  {
+   "id": "q104",
+   "type": "disambiguation",
+   "question": "triage の応答が遅くなった件、2 回目の方の原因は何だっけ",
+   "keywords": [
+    "triage",
+    "遅延",
+    "再発"
+   ],
+   "gold": [
+    "t120"
+   ],
+   "why": "9/19 の DNS が原因の再発（7/16 の 429 の t112 とは別）"
+  },
+  {
+   "id": "q105",
+   "type": "disambiguation",
+   "question": "ADO の REST が 401 になった件、期限切れじゃなくて送り方が悪かった方",
+   "keywords": [
+    "401",
+    "ADO",
+    "認証"
+   ],
+   "gold": [
+    "t100"
+   ],
+   "why": "Bearer で PAT を送っていた 8/12 の件（PAT の期限切れの t119 とは別）"
+  },
+  {
+   "id": "q106",
+   "type": "disambiguation",
+   "question": "bot の編集ループのモデル、結局 mini に寄せた方の比較結果ってどうだった？",
+   "keywords": [
+    "bot",
+    "編集ループ",
+    "mini",
+    "モデル"
+   ],
+   "gold": [
+    "t133"
+   ],
+   "why": "9/26 に mini を既定にした 48 件の比較（8/1 に gpt-5-codex のままとした t128 とは逆）"
+  },
+  {
+   "id": "q107",
+   "type": "disambiguation",
+   "question": "#2051 の期限の件で、ずらすって決めた方。Codex は何日を勧めてた？",
+   "keywords": [
+    "#2051",
+    "期限"
+   ],
+   "gold": [
+    "t094"
+   ],
+   "why": "9/15 に 10/31 へずらし Codex は 10/9 を勧めた会話（その結果起きた障害の t121 とは別）"
+  },
+  {
+   "id": "q108",
+   "type": "disambiguation",
+   "question": "triage で枠を食った件、アラートが大量に来た方じゃなくて同じアラートで回り続けた方",
+   "keywords": [
+    "triage",
+    "利用枠",
+    "ループ"
+   ],
+   "gold": [
+    "t125"
+   ],
+   "why": "10/16 の ops-db03 で 40 回繰り返した暴走の件（8/8 の大量アラートの t114 とは別）"
+  },
+  {
+   "id": "q109",
+   "type": "disambiguation",
+   "question": "pre-commit の話で、遅いから中身を減らした方。何秒になった？",
+   "keywords": [
+    "pre-commit",
+    "遅い",
+    "短縮"
+   ],
+   "gold": [
+    "t064"
+   ],
+   "why": "prompts の pre-commit から回帰を外し 2.8 秒にした会話（CI で塞いだ t007 とは別）"
+  },
+  {
+   "id": "q110",
+   "type": "disambiguation",
+   "question": "ECONNRESET の件で、障害対応じゃなくてふりかえり資料の方。許した条件は？",
+   "keywords": [
+    "ECONNRESET",
+    "ふりかえり",
+    "ポストモーテム"
+   ],
+   "gold": [
+    "t116"
+   ],
+   "why": "8/14 の件のふりかえりで許した条件 3 つを挙げた会話（対応そのものの t115 とは別）"
+  },
+  {
+   "id": "q111",
+   "type": "paraphrase",
+   "question": "スクリプトが使うライブラリの版がバラバラだった件、どうやってそろえた？",
+   "keywords": [
+    "依存",
+    "バージョン固定",
+    "ライブラリ"
+   ],
+   "gold": [
+    "t107"
+   ],
+   "why": "requests を固定し pip freeze で lock を作った会話"
+  },
+  {
+   "id": "q112",
+   "type": "paraphrase",
+   "question": "社内サーバーに同時に何本リクエストを投げるか測った件、結局いくつにした？",
+   "keywords": [
+    "並列",
+    "同時実行",
+    "リクエスト数"
+   ],
+   "gold": [
+    "t110"
+   ],
+   "why": "ADO Server 向けの並列数を 4 に決めた会話"
+  },
+  {
+   "id": "q113",
+   "type": "short",
+   "question": "夜間の呼び出し、二次担当に回すまで何分待つんだっけ",
+   "keywords": [
+    "夜間",
+    "呼び出し",
+    "二次担当"
+   ],
+   "gold": [
+    "t117"
+   ],
+   "why": "一次担当が 20 分応答なしで二次担当に回すと決めた会話"
+  },
+  {
+   "id": "q114",
+   "type": "paraphrase",
+   "question": "指示文の置き場と bot のコードを一か所にまとめる案、なんでやめたんだっけ",
+   "keywords": [
+    "リポジトリ統合",
+    "モノレポ",
+    "bot"
+   ],
+   "gold": [
+    "t137"
+   ],
+   "why": "bot に自身のコードを書き換えさせないためリポジトリを分けたままにした会話"
+  },
+  {
+   "id": "q115",
+   "type": "exact",
+   "question": "aiops-triage リポジトリを作るかって話、結論どうなった？",
+   "keywords": [
+    "aiops-triage",
+    "リポジトリ"
+   ],
+   "gold": [
+    "t144"
+   ],
+   "why": "aiops-triage リポジトリは作らず aiops-tools に置くと決めた会話"
+  },
+  {
+   "id": "q116",
+   "type": "exact",
+   "question": "prompts と bot を GitHub へ移すかって話、結局どうしたっけ",
+   "keywords": [
+    "GitHub",
+    "移行",
+    "prompts"
+   ],
+   "gold": [
+    "t149"
+   ],
+   "why": "GitHub へ移さないと決め、検討する条件を挙げた会話"
+  },
+  {
+   "id": "q117",
+   "type": "mixed",
+   "question": "Windows で Codex 動かすなら WSL2 って話、repo はどこに clone するんだっけ",
+   "keywords": [
+    "WSL2",
+    "Codex",
+    "clone"
+   ],
+   "gold": [
+    "t130"
+   ],
+   "why": "/mnt/c ではなく WSL の ~/work に clone すると決めた会話"
+  },
+  {
+   "id": "q118",
+   "type": "identifier",
+   "question": "stale_pr.py って何日で通知して何日で取り下げるんだっけ",
+   "keywords": [
+    "stale_pr.py"
+   ],
+   "gold": [
+    "t045"
+   ],
+   "why": "最終更新から 14 日で通知、21 日で自動取り下げと決めた会話"
+  },
+  {
+   "id": "q119",
+   "type": "disambiguation",
+   "question": "9/3 の障害の件で、技術の記録じゃなくて役員向けにまとめた方。再発防止はどう書いた？",
+   "keywords": [
+    "9/3 障害",
+    "役員",
+    "要約"
+   ],
+   "gold": [
+    "t147"
+   ],
+   "why": "再発防止 3 つを「人と自動の確認の強化」とまとめた役員向け要約（障害の記録そのものの t118 とは別）"
+  },
+  {
+   "id": "q120",
+   "type": "disambiguation",
+   "question": "triage で枠を食った件、保守のせいでアラートが大量に来た方はどう抑えた？",
+   "keywords": [
+    "triage",
+    "アラート",
+    "大量",
+    "利用枠"
+   ],
+   "gold": [
+    "t114"
+   ],
+   "why": "8/8 の core-sw02 の保守のアラートを指紋でまとめた件（10/16 の暴走の t125 とは別）"
+  }
+ ]
+}
