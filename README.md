@@ -22,14 +22,14 @@ Windows の Codex で使う、グローバルな skill 16 個・custom agent 5 �
 
 ## 動き方
 
-全体像。持ち主の依頼を親の Codex が受け、skill の手順に従って、子の Codex・Python のスクリプト・ADO を使う。AGENTS.md とフックは、依頼のたびに親の Codex の文脈に入る。ADO への書き込みは、MCP が使えても必ず `ado.ps1` の承認の手順を通る。
+全体像。持ち主の依頼を親の Codex が受け、skill の手順に従って、子の Codex・Python のスクリプト・ADO を使う。AGENTS.md は Codex の起動のたびに、フックの 1 行は依頼のたびに、親の Codex の文脈に入る。ADO の MCP（Codex に外部のツールを足す仕組み）は読み取りに使ってよいが、ADO への書き込みは、MCP が使えても必ず `ado.ps1` の承認の手順を通る。
 
 ```mermaid
 flowchart LR
     owner(["持ち主"])
     subgraph pc["会社の Windows PC"]
         codex["親の Codex<br/>gpt-6.1-sol / gpt-6-luna"]
-        agentsmd[/"AGENTS.md<br/>毎回読む決まり"/]
+        agentsmd[/"AGENTS.md<br/>起動のたびに読む決まり"/]
         hook[["フック codex_status.py<br/>依頼のたびに利用状況を 1 行"]]
         skills[("skill 16 個")]
         child["子の Codex（custom agent 5 つ）<br/>親の会話を引き継がずに起動"]
@@ -39,10 +39,11 @@ flowchart LR
     end
     ado[("Azure DevOps Server 2020<br/>Work Item・PR・パイプライン")]
     owner -- "依頼・承認・/model の切り替え" --> codex
-    agentsmd -. "毎回" .-> codex
+    agentsmd -. "起動のたび" .-> codex
     hook -. "依頼のたび" .-> codex
     codex -- "説明で選ぶ / 名前で呼ぶ" --> skills
     skills -- "手順の指示" --> child
+    codex -- "名指し（researcher など）" --> child
     skills --> scripts
     skills -- "書き込みは必ずここから" --> adops1
     skills -. "読み取り" .-> mcp
@@ -56,6 +57,7 @@ flowchart LR
   skill の手順は、起動するときに `fork_turns: "none"` を指定して、親の会話を引き継がない子にする。**指定しないと、子は親の会話をすべて引き継ぐ**（Codex の既定）。
 - AGENTS.md: Codex が毎回読む、作業の決まりごと。
 - フック（`codex_status.py`）: 依頼を送るたびに Codex が走らせる小さな Python のスクリプト。いまのモデル・effort・利用枠の使用率を 1 行で Codex に渡す。
+- effort: モデルが考える深さ（low / medium / high）。深いほど利用枠を使う。`/model` でモデルと一緒に選ぶ。
 
 **どれもバックグラウンドや定期実行では動かない。**Codex に話しかけたときに、Codex がその場で読み込んで使う。
 「自動」は、依頼の内容から Codex が skill を選ぶことを指す。
@@ -67,38 +69,36 @@ flowchart LR
 | skill（手動だけのもの） | 名前で呼んだときだけ | `$pr-review-assist PR #123 をレビューして`、`$grill この設計を詰めて` |
 | custom agent | skill の手順が起動を指示したとき、またはユーザーが名指ししたとき | 通常は skill 経由。直接なら「change-risk-reviewer にこの差分を見せて」 |
 
-依頼から報告までの流れ。最初にモデルと effort を確かめ（[利用枠を節約する](#利用枠を節約する)）、名前で呼ばれた skill か、説明が当てはまる skill の手順で進め、外へ書き込む前には必ず承認を待つ。
+依頼から報告までの流れ。使う skill を決めてその SKILL.md を読み、勧めるモデルと effort を今の設定と比べ（[利用枠を節約する](#利用枠を節約する)）、skill の手順で進め、外へ書き込む前には必ず承認を待つ。
 
 ```mermaid
 flowchart TD
     req["持ち主の依頼"] --> hk["フックが [利用状況] を足す"]
-    hk --> cmp{"勧める設定と<br/>今の設定は同じ？"}
+    hk --> pick{"名前で呼ばれた skill か、<br/>説明が当てはまる skill がある？"}
+    pick -- "ある" --> skill["その skill の SKILL.md を読む<br/>勧める設定 = 推奨の設定の行"]
+    pick -- "無い" --> plain["勧める設定 = AGENTS.md の表"]
+    skill --> cmp{"勧める設定と今の設定は違う？<br/>（小さな依頼で今のほうが重いとき、<br/>「このまま」の後は案内しない）"}
+    plain --> cmp
     cmp -- "違う" --> stop["止めて【設定の切り替え】を案内"]
     stop --> ans{"持ち主の返事"}
-    ans -- "/model で切り替えて「続けて」" --> pick
-    ans -- "「このまま」" --> pick
-    cmp -- "同じ" --> pick{"$名前で呼ばれた？"}
-    pick -- "はい" --> manual["その skill の SKILL.md を読む<br/>（手動だけの 5 つもここ）"]
-    pick -- "いいえ" --> auto{"説明に当てはまる skill がある？"}
-    auto -- "ある" --> skill["その skill の SKILL.md を読む"]
-    auto -- "無い" --> plain["skill なしで進める"]
-    manual --> work["手順どおりに進める<br/>必要なら子を起動・スクリプトを流す"]
-    skill --> work
-    plain --> work
+    ans -- "/model で切り替えて「続けて」" --> work
+    ans -- "「このまま」" --> work
+    cmp -- "同じ・案内しない" --> work["手順どおりに進める<br/>必要なら子を起動・スクリプトを流す<br/>（依頼の途中では止めない）"]
     work --> write{"ADO や外へ書き込む？"}
-    write -- "はい" --> appr["対象と本文を見せて承認を待つ"]
     write -- "いいえ" --> done["報告"]
-    appr --> done
+    write -- "はい" --> appr{"対象と本文を見せて承認を待つ"}
+    appr -- "承認" --> send["送る"]
+    appr -- "承認しない" --> done
+    send --> done
 ```
 
 - Codex は起動時に各 skill の名前と説明だけを読み、使うと決めたときに本文（SKILL.md）を読む。
 - `/skills` で、読み込まれている skill の一覧が見られる。
 - **`ado` 以外で ADO に書き込む 4 つ（`pr-evidence-pack`・`work-item-ready`・`pr-review-assist`・`incident-report`）は、手動でしか動かないようにしてある**（各 skill の `agents/openai.yaml` の `policy.allow_implicit_invocation: false`）。
   グローバルの skill はどのプロジェクトでも候補に上がるので、関係ない作業中に書き込みの手順が始まらないようにするため。
-  土台の `ado` は読み取りにも使うので自動でも選ばれる。書き込みは毎回、対象と本文を見せて承認を取ってから送る手順になっている。
+  土台の `ado` は読み取りにも使うので自動でも選ばれる。書き込みは毎回、対象と本文を見せて承認を取ってから送る手順になっている（[ADO への接続と書き込み](#ado-への接続と書き込み)）。
   `review-triage` と `writing-quality` も自動で選ばれる。どちらも、ユーザーが送るよう頼んだときだけ `ado` の書き込みの手順へ渡す。
 - **`grill` も手動だけ。**書き込みはしないが、子を起動して何往復も議論するので時間とトークンを使う。「設計」「壁打ち」はよく出る言葉で、勝手に選ばれやすい。
-- 手動だけの skill の中でも、ADO への書き込みは毎回、対象と本文を見せて承認を取ってから送る（[ADO への接続と書き込み](#ado-への接続と書き込み)）。
 
 ## 一覧
 
@@ -166,9 +166,9 @@ flowchart LR
 
 ## 利用枠を節約する
 
-会社のアカウントは、利用枠が Plus 相当で小さい。消費はモデルで大きく違い、gpt-6-luna は gpt-6.1-sol の約 1/20 で済む（[前提にした事実](#前提にした事実)）。このパッケージは次の 3 つで節約する。
+会社のアカウントは、利用枠が Plus 相当で小さい。利用枠には 5 時間ごとの枠と週ごとの枠があり、それぞれ決まった時刻にリセットされる（アカウントによっては片方だけ）。`[利用状況]` の行には見えている枠が全部出て、どちらかが 80% を超えると軽い設定を優先して案内する。消費はモデルで大きく違い、gpt-6-luna は gpt-6.1-sol の約 1/20 で済む（[前提にした事実](#前提にした事実)）。このパッケージは次の 3 つで節約する。
 
-1. **親の Codex が、依頼ごとに設定の切り替えを案内する。**AGENTS.md の「モデルと effort の案内」に従い、依頼を受けたら作業に手を付ける前に、勧める設定と今の設定を比べ、違えば止めて返答の最後にこの形で書く。依頼の途中では止めない。
+1. 親の Codex が、依頼ごとに設定の切り替えを案内する。AGENTS.md の「モデルと effort の案内」に従い、依頼を受けたら作業に手を付ける前に、勧める設定と今の設定を比べ、違えば止めて返答の最後にこの形で書く。依頼の途中では止めない。
    ```text
    【設定の切り替え】/model で gpt-6-luna・low にしてから「続けて」と送ってください。理由: <この依頼の中身>。このままでよければ「このまま」と送ってください。
    ```
@@ -176,11 +176,11 @@ flowchart LR
    - 「続けて」と送っても `[利用状況]` の値が案内と違えば（切り替え忘れ）、1 回だけそう言われる。
    - 発言 1〜2 回で終わる小さな依頼で、今の設定のほうが重いときは案内しない。会話の途中でモデルや effort を変えると、次の 1 回はキャッシュが効かず、文脈全体を高い単価で読み直すため。軽い設定から重い設定への案内は省かない。
    - 利用枠の使用率が 80% 以上なら、luna で足りる依頼は必ず luna を案内する。
-2. **Codex に、いまの設定と利用枠を見せる。**Codex のモデルは、自分のモデル名・effort・利用枠の残りを見られない（試して確かめた）。フックが依頼のたびに、その会話の記録から読んで 1 行で渡す。
+2. Codex に、いまの設定と利用枠を見せる。Codex のモデルは、自分のモデル名・effort・利用枠の残りを見られない（試して確かめた）。フックが依頼のたびに、その会話の記録から読んで 1 行で渡す。
    ```text
    [利用状況] モデル gpt-6.1-sol、effort medium、週の枠 72% 使用（リセット 10/22 15:35）。…
    ```
-   spawn された子では何も足さない（子は案内しない）。リセット時刻を過ぎた古い使用率は「不明」と出す。
+   起動された子のエージェントでは何も足さない（子は案内しない）。リセット時刻を過ぎた古い使用率は「不明」と出す。
    依頼のたびに、フックが記録から今の設定と利用枠を読み、Codex が依頼の中身から勧める設定を決めて比べる流れ:
 
    ```mermaid
@@ -193,22 +193,20 @@ flowchart LR
        O->>X: 依頼を送る
        X->>H: UserPromptSubmit（model・transcript_path）
        H->>R: 最後の turn_context と rate_limits を読む
-       H-->>X: [利用状況] モデル・effort・週の枠の使用率
+       H-->>X: [利用状況] モデル・effort・5 時間の枠と週の枠の使用率
        X->>X: 依頼の中身から勧める設定を決める（SKILL.md の行が表より優先）
-       alt 今の設定と違う
+       alt 今の設定と違う（小さな依頼で今のほうが重いとき、「このまま」の後を除く）
            X->>O: 【設定の切り替え】/model で gpt-6-luna・low にしてから「続けて」
            O->>X: /model で切り替えて「続けて」（または「このまま」）
-           X->>X: [利用状況] の値で切り替わったかを確かめる
+           X->>H: UserPromptSubmit（もう一度）
+           H-->>X: [利用状況]（切り替えた後の値）
+           X->>X: 案内した設定になったかを確かめる。違えば 1 回だけ伝える
        end
        X->>X: 作業する（依頼の途中では止めない）
    ```
 
    フックが入っていないか読めないときは、会話の中で最後に切り替えが確かめられた設定（「続けて」が返った案内の設定）で判断する（会話の始めは gpt-6.1-sol・medium とみなす）。
-   Windows での `hooks.json` のコマンドは、`install.ps1` が次のどちらかで作る（`hooks/New-HookCommand.ps1`）。Codex はフックをセッションのシェル（PowerShell なら `-Command`、無ければ `cmd.exe /C`）で起動し、引用符で囲んだパスの書き方は片方のシェルでしか動かないため。
-   - Python とスクリプトのパスが空白や記号を含まない（ふつうはこちら）: `C:\...\python.exe C:\...\codex_status.py` をそのまま書く。PowerShell は通さない。
-   - 含む: System32 の `powershell.exe` をフルパスで書き、`-EncodedCommand` でパスを渡す。フルパスにするのは、cmd が名前だけのコマンドを作業中のフォルダから先に探し、リポジトリに置かれた同じ名前の exe を動かしてしまうため。この形は、会社のセキュリティの製品が「不審な PowerShell の起動」として検知することがある（推測）。気になるなら、Python を空白の無い場所に入れ直す。
-   どちらの形でも、フックが依頼を止めることは無い（スクリプトは常に終了コード 0、`-EncodedCommand` の形は Python が無くても 0）。
-3. **大量に読む子は luna に固定する。**`researcher`・`incident-evidence-analyst`・`prose-reviewer` の TOML に `model = "gpt-6-luna"` を書いてある。持ち主が何もしなくても減る。推理が要る `change-risk-reviewer` と `design-challenger` は、親の設定を継ぐ。
+3. 大量に読む子は luna に固定する。`researcher`・`incident-evidence-analyst`・`prose-reviewer` の TOML に `model = "gpt-6-luna"` を書いてあり、持ち主が何もしなくても減る見込み（TOML で効くことはソースで確かめた段階。[確かめていないこと](#確かめていないこと)）。推理が要る `change-risk-reviewer` と `design-challenger` は、親の設定を継ぐ。
 
 依頼の中身と勧める設定（AGENTS.md と同じ）:
 
@@ -374,10 +372,10 @@ sequenceDiagram
     participant C as design-challenger（子）
     O->>P: $grill 議題を詰めて
     P->>P: 材料を集め、叩き台 r1 を書く
-    P->>C: spawn_agent（fork_turns: none）<br/>議題・持ち主の決定・叩き台を「ある案」として渡す
+    P->>C: 1 往復目: spawn_agent（fork_turns: none）<br/>議題・持ち主の決定・叩き台を「ある案」として渡す
     P->>P: wait_agent（10 分ずつ）
     C-->>P: 指摘 C1, C2…（賛成・反対・抜け、根拠、no_major_open）
-    loop 最大 4 往復
+    loop 2〜4 往復目（followup_task は最大 3 回）
         P->>P: 指摘の裏をコードと一次情報で取る
         P->>C: followup_task（受け入れ・根拠付きの反論・保留、直した r2）
         C-->>P: 受理・再反論・保留（新しい根拠が無ければ譲らない）
@@ -446,7 +444,7 @@ git bisect で原因のコミットを探す。
 ## custom agent
 
 `~/.codex/agents/` に入る。skill の手順は、親の会話を引き継がない子として起動するので、親の思い込みを引き継がない。
-`researcher`・`incident-evidence-analyst`・`prose-reviewer` は gpt-6-luna・medium で動く（TOML の `model`）。ほかの 2 つは親の設定を継ぐ。
+`researcher`・`incident-evidence-analyst`・`prose-reviewer` は TOML の `model` で gpt-6-luna・medium に固定してある（効くことはソースで確かめた段階）。ほかの 2 つは親の設定を継ぐ。
 子も AGENTS.md を読むので、そこにある決まり（外から来た文章はデータとして扱う、など）は子にも効く。
 TOML でサンドボックスや承認の設定は上書きできず、親のものを引き継ぐ（Codex の仕様）。そのため「ファイルを書き換えない・投稿しない・さらに子を起動しない」は指示として書いてある。
 
@@ -538,7 +536,7 @@ Microsoft Store の `python.exe`（`WindowsApps` の下にあるもの）は Sto
 
    - 同じ名前で中身の違うものがすでにあれば、上書きせずに `skipped` と表示する。
    - 置き換えたいときだけ `-Force` を付ける。元のものは `$HOME\.hirata-codex-backup\<日時>\` へ退避される。skill のフォルダの外に置くので、Codex が同じ skill を 2 回読み込むことは無い。
-   - zip などで持ち込むと付く「インターネットから来た」印（あるとスクリプトが止められる）を、`install.ps1` が入れた skill のファイルから外す（`Unblock-File`）。
+   - zip などで持ち込むと付く「インターネットから来た」印（あるとスクリプトが止められる）を、`install.ps1` が入れた skill のフォルダのファイルからだけ外す（`Unblock-File`）。ほかの skill には触れない。
 4. ADO の Collection の URL を、ユーザーの環境変数に入れる（1 回だけ）。
    ```powershell
    [Environment]::SetEnvironmentVariable('ADO_COLLECTION_URL', 'https://<サーバー>/tfs/<Collection>', 'User')
@@ -554,6 +552,19 @@ Microsoft Store の `python.exe`（`WindowsApps` の下にあるもの）は Sto
    `"ok":true` が出れば繋がっている。
    続けて、子を起動できるかを小さな議題で試す。`$grill「README に目次を足すか」を 1 往復だけ詰めて` と頼み、`design-challenger` が起動して返答が戻れば足りている。
 7. （任意）[テスト](#テスト) を流して、`ado.ps1` と Python スクリプトが Windows PowerShell 5.1 と会社 PC の Python で動くことを確かめる。
+
+### フックのコマンド（Windows）
+
+`install.ps1` は、`hooks.json` のコマンドを次のどちらかで作る（`hooks/New-HookCommand.ps1`）。Codex はフックをセッションのシェル（PowerShell なら `-Command`、無ければ `cmd.exe /C`）で起動し、引用符で囲んだパスの書き方は片方のシェルでしか動かないため。
+
+| Python とスクリプトのパス | 作るコマンド |
+|---|---|
+| 空白や記号を含まない（ふつうはこちら） | `C:\...\python.exe C:\...\codex_status.py` をそのまま書く。PowerShell は通さない |
+| 含む | System32 の `powershell.exe` をフルパスで書き、`-EncodedCommand` でパスを渡す |
+
+- フルパスにするのは、cmd が名前だけのコマンドを作業中のフォルダから先に探し、リポジトリに置かれた同じ名前の exe を動かしてしまうため。
+- `-EncodedCommand` の形は、会社のセキュリティの製品が「不審な PowerShell の起動」として検知することがある（推測）。気になるなら、Python を空白の無い場所に入れ直して `install.ps1` を流し直す（既存の `hooks.json` は書き換えないので、先にこのパッケージのハンドラーを消す）。
+- スクリプトが動けば、フックは常に終了コード 0 で終わる。`-EncodedCommand` の形は、スクリプトや Python が無くても 0。**直接呼ぶ形は、スクリプトが無いと Python が終了コード 2 を返し、Codex は依頼を止める。**消すときは、ハンドラーを先に消す（[更新と削除](#更新と削除)）。
 
 ### MCP の承認の設定（任意）
 
@@ -592,20 +603,24 @@ sequenceDiagram
     X->>X: 本文を作る（先頭に test /rev = 7）
     X->>S: write -DryRun
     S-->>X: 送らずに approval のハッシュを返す
-    X->>O: 対象・本文・件数を見せて承認を求める
+    X->>O: 対象・本文・件数を見せて承認を求める（skill の手順）
     O-->>X: 承認
+    X->>O: コマンドの実行の承認を求める（Codex の仕組み。write は常に許可にしない）
+    O-->>X: 許可
     X->>S: write -Approve ハッシュ
-    Note over X,S: Codex のコマンドの承認（write は常に許可にしない）
-    S->>S: メソッド・URL・Content-Type・本文のハッシュが一致するか
-    S->>A: PATCH
-    alt 200
-        A-->>S: 更新した Work Item
-        S-->>X: 終了コード 0
-    else 400（誰かが先に更新）
-        A-->>S: rev が違う
-        S-->>X: 終了コード 1。読み直して承認を取り直す
-    else 応答が無い
-        S-->>X: 終了コード 3。送り直さずに読み直す
+    alt ハッシュが合わない（本文か引数が変わった）
+        S-->>X: 終了コード 2。送らない。-DryRun からやり直す
+    else ハッシュが合う
+        S->>A: PATCH
+        alt 200
+            A-->>S: 更新した Work Item
+            S-->>X: 終了コード 0
+        else 400（誰かが先に更新）
+            A-->>S: rev が違う
+            S-->>X: 終了コード 1。読み直して承認を取り直す
+        else 応答が無い
+            S-->>X: 終了コード 3。送り直さずに読み直す
+        end
     end
 ```
 
@@ -654,7 +669,7 @@ python -m unittest discover -s tests
 |---|---|
 | `tests/test_scripts.py` | Python スクリプト 6 本とフック（`hooks/codex_status.py`）の動作。フックは、壊れた入力や読めない記録でも終了コード 0 で「不明」と出すこと |
 | `tests/test_ado_ps1.py` | `ado.ps1` を手元の偽サーバーに向けて流し、送り先の制限・承認のハッシュ・Content-Type・拒否のときに送っていないことを確かめる。PowerShell が無ければ飛ばす |
-| `tests/test_hook_command.py` | フックのコマンドを実際にシェルから流す（PowerShell の `-Command` と、cmd の代わりのシェル）。空白・日本語・引用符を含むパス、スクリプトが無いときに依頼を止めないこと、`install.ps1` が `hooks.json` を 1 度だけ作り、既存のもの（空のものも含む）に触らないこと。PowerShell が無ければ飛ばす |
+| `tests/test_hook_command.py` | フックのコマンドを実際にシェルから流す（PowerShell の `-Command` と、cmd の代わりのシェル）。空白・日本語・引用符を含むパス、`-EncodedCommand` の形でスクリプトが無くても依頼を止めないこと、`install.ps1` が `hooks.json` を 1 度だけ作り、既存のもの（空のものも含む）に触らないこと。PowerShell が無ければ飛ばす |
 | `tests/test_layout.py` | 各 skill の形（名前と説明、説明の合計が 6,000 文字以内か、手動だけの skill の一覧と `openai.yaml` が合うか、SKILL.md が参照するスクリプトとリンクと agent があるか、**子を起動する段落ごとに `fork_turns: "none"` があるか**、description が YAML で途中で切れない書き方か、コードフェンスが正しく閉じているか）、agent の形、.ps1 が ASCII だけか |
 
 skill を足したり直したりしたら流す。`tests/test_layout.py` の一覧に足すものは次のとおり（足し忘れるとテストが落ちる）。

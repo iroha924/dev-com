@@ -169,11 +169,15 @@ if (-not $hookCommand) {
 }
 
 # Files copied from a zip or a download carry the "from the internet" mark, which blocks scripts.
+# Only this package's skill folders are touched; other skills under the same folder keep their mark.
 if (-not $WhatIfPreference -and [Environment]::OSVersion.Platform -eq 'Win32NT') {
-    try {
-        Get-ChildItem -LiteralPath $skillsHome -Recurse -File -ErrorAction SilentlyContinue | Unblock-File
-    } catch {
-        Write-Host "Unblock-File failed: $($_.Exception.Message)"
+    foreach ($dir in (Get-ChildItem -LiteralPath (Join-Path $source 'skills') -Directory)) {
+        $target = Join-Path $skillsHome $dir.Name
+        try {
+            Get-ChildItem -LiteralPath $target -Recurse -File -ErrorAction SilentlyContinue | Unblock-File
+        } catch {
+            Write-Host "Unblock-File failed for ${target}: $($_.Exception.Message)"
+        }
     }
 }
 
