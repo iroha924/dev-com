@@ -49,6 +49,7 @@ REPORT input <ID>
 - 失敗したコマンドを後の操作で解消したら、`command_notes` に失敗した操作と解消した操作の ID を書く。
 - 章（chapters）は、持ち主の発言が 40 件を超える会話だけ。ほかは `[]`。
 - `source_digest` は report.json の `digest` をそのまま写す。推論の中身は書かない。PAT・パスワード・トークンは書かない。
+- 追記の文（要約・依頼・条件・決定・学び・課題）には、URL と絶対パスを書かない。ファイルは名前だけ、場所は言葉で書く（共有用を作るとき、`render --share` が見つけると止まる）。
 - annotations.json は UTF-8 で書く（PowerShell の `Out-File` と `>` は UTF-16 になるので使わない）。
 
 ## 4. 確かめて直す

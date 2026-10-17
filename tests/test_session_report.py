@@ -1123,7 +1123,7 @@ class ShareTest(_Base):
         report = self.extract(T1)
         out = os.path.join(self.tmp.name, "out")
         ann = {"format_version": "1", "source_digest": report["digest"],
-               "summary": {"text": "置き場所を直した。https://tfs.example/CANARYURL2 と C:\\Users\\me\\CANARYPATH2\\y.py",
+               "summary": {"text": "置き場所を直した。",
                            "evidence": [{"ref": "a1", "quote": "置き場所がずれていました"}]},
                "chapters": [], "questions": [], "lessons": [], "command_notes": [],
                "requests": [{"id": "R1", "text": "Tests タブに出す", "at": "u1", "lifecycle": "有効", "criteria": [],
@@ -1132,6 +1132,21 @@ class ShareTest(_Base):
                               "alternatives": [], "supersedes": None, "evidence": [{"ref": "a1", "quote": "置き場所がずれていました"}]}],
                "issues": [{"id": "I1", "kind": "未解決", "text": "CANARYCMD.py が落ちる", "evidence": [{"ref": "c1", "quote": "CANARYOUT"}]}],
                "owner_messages": {"u1": ["R1"]}}
+        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(ann, f, ensure_ascii=False)
+        # 追記の文に URL や絶対パスがあれば、共有用は書かずに止まる（Codex が書き直す）
+        ann_risky = json.loads(json.dumps(ann))
+        ann_risky["summary"]["text"] = "置き場所を直した。https://tfs.example/CANARYURL2 と C:\\Users\\me\\CANARYPATH2\\y.py"
+        ann_risky["decisions"][0]["why"] = "場所は/Users/CANARYPARENT/x.py"
+        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(ann_risky, f, ensure_ascii=False)
+        code, stdout, err = self.run_cli("render", "--dir", out, "--share")
+        self.assertEqual(code, 1)
+        self.assertIn("summary: 共有用の文に URL か絶対パスがある", stdout)
+        self.assertIn("D1.why: 共有用の文に URL か絶対パスがある", stdout)
+        self.assertFalse(os.path.exists(os.path.join(out, "report-share.html")))
+        # 記録から来る引用に URL があれば、引用を丸ごと省く
+        ann["decisions"][0]["evidence"] = [{"ref": "a1", "quote": "https://tfs.example/CANARYURL/x"}]
         with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
             json.dump(ann, f, ensure_ascii=False)
         code, stdout, err = self.run_cli("render", "--dir", out, "--share")
@@ -1146,7 +1161,8 @@ class ShareTest(_Base):
         self.assertIn("共有してよくない内容が残っていないかは、持ち主が確かめる", view["notices"][0])
         self.assertEqual(view["meta"]["cwd"], "ci-pipelines")
         self.assertEqual(view["meta"]["title"], "Tests タブに出す")
-        self.assertIn("置き場所を直した。[URL] と y.py", view["summary"])
+        self.assertEqual(view["summary"], "置き場所を直した。")
+        self.assertEqual(view["decisions"][0]["quote"], "（パスか URL を含むため省略）")
         self.assertEqual([m[0] for m in view["flow"]["marks"]], ["依頼", "決定", "失敗"])
         self.assertEqual(view["flow"]["marks"][2][1][0]["label"], "コマンドの失敗")
         # 課題の本文（持ち主が読むために Codex が書いた要点）は残す。コマンドの名前が入っていても消さない
@@ -1156,6 +1172,23 @@ class ShareTest(_Base):
         local = open(os.path.join(out, "report.html"), encoding="utf-8").read()
         self.assertIn("CANARYOUT", local)
         self.assertIn("CANARYMSG", local)
+
+
+class ShareRiskTest(unittest.TestCase):
+    RISKY = ["/workspace/CANARYPARENT/x.py", "C:/Users/CANARYPARENT/x.py", "//server/CANARYSHARE/x.py",
+             '"C:\\Users\\Jane Doe\\CANARYPARENT\\x.py"', '"/Users/Jane Doe/CANARYPARENT/x.py"', "参照https://example.test/CANARYURL",
+             "場所は/Users/CANARYPARENT/x.py", "確認(https://example.test/x)してから", "\\\\server\\share\\a.txt", "~/CANARY/x",
+             "www.example.test/CANARY", "file:///C:/CANARY", "C:\\work\\CANARY"]
+    PLAIN = ["tests/test_retry.py は相対", "ratio 1/2 と CI/CD", "src\\clock.py を直した", "テスト/本番の両方", "and/or",
+             "_apis/wit/workitems/1287 を PATCH"]
+
+    def test_risky_strings_are_found(self):
+        for s in self.RISKY:
+            with self.subTest(s=s):
+                self.assertTrue(sr.share_risk(s))
+        for s in self.PLAIN:
+            with self.subTest(s=s):
+                self.assertFalse(sr.share_risk(s))
 
 
 class FixturesTest(unittest.TestCase):

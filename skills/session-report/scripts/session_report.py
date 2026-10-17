@@ -1841,27 +1841,53 @@ def build_view(report, ann, overrides, stale=False):
     return view
 
 
-_URL = re.compile(r"(?i)\b(?:https?|ftp|file)://[^\s\"'<>）」]+")
-_WIN_PATH = re.compile(r"(?<![\w/])(?:[A-Za-z]:|\\\\[^\\\s]+)\\[^\s\"'<>）」]*")
-_POSIX_PATH = re.compile(r"(?<![\w:.])/(?:Users|home|var|tmp|private|opt|etc|mnt|srv|root|Volumes)/[^\s\"'<>）」]*")
+# 共有用に出さない URL と絶対パスを、広めに見つける。形を数え上げて「その部分だけ除く」作りは抜けが出るので、
+# 見つけたら、Codex が書いた文なら render --share を止めて書き直させ、記録から来る文なら丸ごと省く。
+# 誤って見つけても書き直しが 1 回増えるだけで、漏れる向きにはならない。
+_SHARE_RISK = re.compile(
+    r"(?i)[a-z][a-z0-9+.-]*://"            # https://、file://、ssh:// など
+    r"|\bwww\."                             # www.example.com
+    r"|[A-Za-z]:[\\/]"                       # C:\ と C:/
+    r"|\\\\|//[^\s/]"                      # UNC（\\server と //server）
+    r"|(?<![A-Za-z0-9._-])/[A-Za-z0-9._~-]+/"  # /Users/... のような、/ で始まる 2 段以上（日本語の直後も拾う）
+    r"|~[\\/]")                              # ~/...
+SHARE_OMITTED = "（パスか URL を含むため省略）"
 SHARE_NOTICE = ("共有用: 会話の全文・操作の詳細（外部の操作・ファイル・コマンド・差分）・絶対パス・URL は除いた。"
                 "要約と引用に共有してよくない内容が残っていないかは、持ち主が確かめる。")
 
 
-def _scrub(text):
-    """共有用の文字列から URL と絶対パスを除く（パスは最後の名前だけ残す）。"""
-    text = _URL.sub("[URL]", text)
-    text = _WIN_PATH.sub(lambda m: re.split(r"[\\/]", m.group(0).rstrip("\\/"))[-1] or "[パス]", text)
-    return _POSIX_PATH.sub(lambda m: m.group(0).rstrip("/").rsplit("/", 1)[-1] or "[パス]", text)
+def share_risk(text):
+    return isinstance(text, str) and bool(_SHARE_RISK.search(text))
 
 
-def _scrub_tree(obj):
+def share_problems(ann, overrides):
+    """共有用に出す、Codex が書いた文と持ち主の訂正の理由のうち、URL か絶対パスがあるもの。"""
+    fields = [("summary", ann["summary"]["text"])]
+    for r in ann["requests"]:
+        fields.append((r["id"], r["text"]))
+        for n, c in enumerate(r["criteria"], 1):
+            fields += [("%s.%d" % (r["id"], n), c["text"]), ("%s.%d.basis" % (r["id"], n), c["basis"])]
+    for q in ann["questions"]:
+        fields += [(q["id"], q["text"]), (q["id"] + ".note", q["note"])]
+    for d in ann["decisions"]:
+        fields += [(d["id"], d["text"]), (d["id"] + ".why", d["why"])] + [(d["id"] + ".alternatives", a) for a in d["alternatives"]]
+    for x in ann["lessons"] + ann["issues"]:
+        fields.append((x["id"], x["text"]))
+    for c in ann["chapters"]:
+        fields.append((c["id"], c["title"]))
+    for item_id, o in sorted(overrides.items()):
+        fields.append(("override " + item_id, o.get("reason")))
+    return ["%s: 共有用の文に URL か絶対パスがある。書き直す（ファイルは名前だけ、場所は言葉で）" % k for k, v in fields if share_risk(v)]
+
+
+def _omit_tree(obj):
+    """記録から来る文に URL か絶対パスがあれば、その文を丸ごと省く（最後の守り）。"""
     if isinstance(obj, str):
-        return _scrub(obj)
+        return SHARE_OMITTED if share_risk(obj) else obj
     if isinstance(obj, list):
-        return [_scrub_tree(v) for v in obj]
+        return [_omit_tree(v) for v in obj]
     if isinstance(obj, dict):
-        return {k: _scrub_tree(v) for k, v in obj.items()}
+        return {k: _omit_tree(v) for k, v in obj.items()}
     return obj
 
 
@@ -1886,7 +1912,7 @@ def build_share_view(report, ann, overrides, stale=False):
     }
     view["tabs"] = [[tid, label, (None if tid == "chat" else len(full["ops"]["artifacts"]) if tid == "ops" else n)]
                     for tid, label, n in full["tabs"]]
-    return _scrub_tree(view)
+    return _omit_tree(view)
 
 
 def embed_json(view):
@@ -1925,6 +1951,13 @@ def cmd_render(args):
         return 1
     ov_path = os.path.join(out, "overrides.json")
     overrides = read_json(ov_path) if os.path.isfile(ov_path) else {}
+    if args.share:
+        problems = share_problems(ann, overrides)
+        if problems:
+            for p in problems:
+                print(p)
+            print("共有用の文に URL か絶対パスがあるので、report-share.html を書かない（%d 件）" % len(problems), file=sys.stderr)
+            return 1
     view = (build_share_view if args.share else build_view)(report, ann, overrides, stale=stale)
     path = os.path.join(out, "report-share.html" if args.share else "report.html")
     with open(path, "w", encoding="utf-8", newline="\n") as f:
