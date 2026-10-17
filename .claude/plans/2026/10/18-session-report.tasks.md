@@ -275,16 +275,6 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `fix(session-report): 適用されなかった変更を数えず、何度も変えたファイルの差分を全部残し、置き換えた決定を示す`
   - 結果: red を直す前のコードで実測 → FAIL。直した後 `python3 -m unittest discover -s tests` → 386 件 OK（skip 24）
 
-- [x] T27: 共有用の URL と絶対パスを、広く見つけて止める・丸ごと省く作りにする
-  - 種別: 修正
-  - 計画: S8
-  - 依存: T09（直す対象の共有用が要る）, T10（書き足す SKILL.md が要る）
-  - 変更: `skills/session-report/scripts/session_report.py`, `skills/session-report/SKILL.md`, `tests/test_session_report.py`
-  - red: `python3 -m unittest tests.test_session_report -k Share` → FAIL（ドライブの後の /、空白を含むパス、日本語の直後の URL、切り詰めた後のパス、括弧の中の URL、UNC の // が残る、または文が削れる）
-  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
-  - コミット: `fix(session-report): 共有用の URL と絶対パスを広く見つけ、追記の文なら書き直させ、記録の文なら丸ごと省く`
-  - 結果: red を直す前のコードで実測 → FAIL（share_risk が無い、URL を含む追記でも共有用を書く）。直した後 `python3 -m unittest discover -s tests` → 387 件 OK（skip 24）
-
 ## P5: 使える形にまとめる
 
 Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を比べる道具がそろう。
@@ -298,6 +288,16 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `docs(session-report): SKILL.md の手順と README の一覧を書く`
   - 結果: `python3 -m unittest tests.test_layout` → 15 件 OK（足した test_readme_lists_every_skill を含む。説明文の合計 5,297 文字で上限 6,000 の内）。`python3 -m unittest discover -s tests` → 385 件 OK（skip 24）
 
+- [x] T27: 共有用の URL と絶対パスを、広く見つけて止める・丸ごと省く作りにする
+  - 種別: 修正
+  - 計画: S8
+  - 依存: T09（直す対象の共有用が要る）, T10（書き足す SKILL.md が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `skills/session-report/SKILL.md`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Share` → FAIL（ドライブの後の /、空白を含むパス、日本語の直後の URL、切り詰めた後のパス、括弧の中の URL、UNC の // が残る、または文が削れる）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 共有用の URL と絶対パスを広く見つけ、追記の文なら書き直させ、記録の文なら丸ごと省く`
+  - 結果: red を直す前のコードで実測 → FAIL（share_risk が無い、URL を含む追記でも共有用を書く）。直した後 `python3 -m unittest discover -s tests` → 387 件 OK（skip 24）
+
 - [ ] T11: 追記を正解と比べる道具
   - 種別: 追加
   - 計画: S10
@@ -307,6 +307,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T27 / T27 を T10 より前に置いたままコミットした（tasks の検査の違反を、コマンドの組み方のせいで見落とした）/ T10 の後ろへ移した
 
 - 2026-10-18 / T27 / T09 のレビュー（bde0f63、high）の 5 件（F1〜F5、どれも P2）は、どれも URL と絶対パスを正規表現で「その部分だけ除く」作りの抜けだった。形を数え上げられないので、作りを「広く見つけて、Codex が書いた文なら render --share を止めて書き直させ、記録から来る文なら丸ごと省く」に変えた。誤って見つけても書き直しが増えるだけで、漏れる向きにはならない / T27 を足して直した。当てるときに範囲の探し方を誤り、関係ない関数をまとめて消したので、コミット済みの形に戻して当て直した
 
