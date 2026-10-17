@@ -121,6 +121,16 @@ base: main
   - コミット: `fix(session-report): revert を 100 段までつなぎ、会話の情報と書きかけの行を選んだファイルから取り、ID の欄を伏せ字から外す`
   - 結果: red を直す前のコードで実測 → 4 件 FAIL、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 48 件 OK
 
+- [x] T18: 操作の対象の伏せ字・連結したコマンドの目的・MCP の目的・Windows の引用符・差分の行数を直す
+  - 種別: 修正
+  - 計画: S3
+  - 依存: T03（直す対象の操作の取り出しが要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Operation` → 9 件 FAIL（対象を切ってから伏せ字をかけて URL の秘密が残る、連結したコマンドを参照と分類、MCP の目的を名前の動詞から推測、Windows の形で引用符が残る、-- と ++ で始まる変更の行を数え落とす）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 操作の対象を伏せ字の後に切り、目的の分類を確かめた形だけにし、Windows の引用符と差分の行数を直す`
+  - 結果: red を直す前のコードで実測 → 9 件 FAIL、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 48 件 OK
+
 ## P3: Codex の追記を読ませて確かめる
 
 Codex が読む input を作り、書いた追記の根拠と漏れをスクリプトで確かめ、持ち主が判定を直せるようになる。
@@ -198,6 +208,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T18 / T03 のレビュー（11cb6c0）の 5 件（F1 対象の伏せ字 P1、F2 連結したコマンド P2、F3 MCP の目的の推測 P2、F4 Windows の引用符 P2、F5 差分の行数 P2）を再現で確かめて受理 / T18 を足して直した。MCP の目的は read_only_hint と MCP_PURPOSE の表だけで決め、表は空にした。会社の PC の probe で ADO MCP の tool の名前が分かったら、表を埋めるタスクを足す
 
 - 2026-10-18 / T17 / README の追記が、ファイルを読む前の書き換えで当たらないまま T17 をコミットした / 次のコミットで README に足した
 

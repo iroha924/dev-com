@@ -670,20 +670,21 @@ _ADO_WRITE = [
     (re.compile(r"_apis/pipelines/\d+/runs/?(\?|$)", re.I), "POST", "作成"),
     (re.compile(r"_apis/build/builds/?(\?|$)", re.I), "POST", "作成"),
 ]
-# ADO の MCP の tool の名前の動詞（server の名前に ado・azure・devops を含むとき）
-_MCP_VERBS = {"get": "参照", "list": "参照", "search": "参照", "read": "参照", "query": "参照", "show": "参照",
-              "create": "作成", "add": "作成", "run": "作成", "queue": "作成",
-              "update": "更新", "link": "更新", "set": "更新", "vote": "更新", "complete": "更新",
-              "delete": "削除", "remove": "削除"}
+# MCP の (server, tool) ごとの目的。確かめた組み合わせだけを書き、名前の動詞からは推測しない。
+# 会社の PC の ADO MCP の tool の名前は、probe の item.McpToolCall.tool の結果で確かめてから足す（2026-10-18 時点で未確認）
+MCP_PURPOSE = {}
 
 
 def _split(script, windows):
     """1 つのコマンドの文を語に分ける。分けられなければ None。"""
     import shlex
     try:
-        return shlex.split(script, posix=not windows)
+        words = shlex.split(script, posix=not windows)
     except ValueError:
         return None
+    if windows:  # posix=False は引用符を語に残す
+        words = [w[1:-1] if len(w) >= 2 and w[0] == w[-1] and w[0] in "\"'" else w for w in words]
+    return words
 
 
 def _base(word):
@@ -760,7 +761,7 @@ def _az_purpose(words):
 
 def _ado_purpose(words):
     """ado.ps1 の呼び出し（powershell -File ...ado.ps1 <mode> <path> [-Method ...] [-DryRun]）の目的。"""
-    at = next((i for i, w in enumerate(words) if _base(w) == "ado.ps1" or w.lower().endswith("ado.ps1")), None)
+    at = next((i for i, w in enumerate(words) if _base(w) == "ado.ps1"), None)
     if at is None or at + 1 >= len(words):
         return None
     mode = words[at + 1].lower()
@@ -782,13 +783,13 @@ def _ado_purpose(words):
 
 def _mcp_purpose(it):
     if it.get("read_only_hint") is True:
-        return "参照"
-    server, tool = it.get("server"), it.get("tool")
-    if isinstance(server, str) and isinstance(tool, str) and re.search(r"ado|azure|devops", server, re.I):
-        for word in re.split(r"[_.\-]", tool.lower()):
-            if word in _MCP_VERBS:
-                return _MCP_VERBS[word]
-    return "不明"
+        return "参照"  # MCP のサーバーが「読むだけ」と宣言した tool
+    return MCP_PURPOSE.get((it.get("server"), it.get("tool")), "不明")
+
+
+def _short(text):
+    """操作の対象（コマンドの文・検索語）を、伏せ字をかけてから TARGET_LIMIT 文字に切る。"""
+    return ss.redact(text[:TARGET_LIMIT + REDACT_MARGIN])[:TARGET_LIMIT]
 
 
 def _cut(text, head=OUTPUT_HEAD, tail=OUTPUT_TAIL):
@@ -825,11 +826,19 @@ def _ms_to_iso(ms):
 
 
 def _diff_counts(diff):
+    """増えた行と減った行。--- と +++ を見出しとして飛ばすのはハンク（@@）の外だけ。"""
     added = removed = 0
+    in_hunk = False
     for row in diff.splitlines():
-        if row.startswith("+") and not row.startswith("+++"):
+        if row.startswith("@@"):
+            in_hunk = True
+        elif row.startswith("diff "):
+            in_hunk = False
+        elif not in_hunk and row.startswith(("---", "+++")):
+            continue
+        elif row.startswith("+"):
             added += 1
-        elif row.startswith("-") and not row.startswith("---"):
+        elif row.startswith("-"):
             removed += 1
     return added, removed
 
@@ -877,7 +886,7 @@ def operation(it, ts, turn_id):
     if typ == "CommandExecution":
         script, windows = command_script(it.get("command"))
         code = it.get("exit_code") if isinstance(it.get("exit_code"), int) and not isinstance(it.get("exit_code"), bool) else None
-        op.update(route="command", target=ss.redact(script[:TARGET_LIMIT]), exit_code=code,
+        op.update(route="command", target=_short(script), exit_code=code,
                   duration_ms=_duration_ms(it.get("duration")))
         if st == "declined":
             op["status"] = "declined"
@@ -891,6 +900,8 @@ def operation(it, ts, turn_id):
             op["status"] = "incomplete"
         words = _split(script, windows) or []
         ext = _ado_purpose(words) or _az_purpose(words)
+        if ext and _SHELL_META.search(script):
+            ext["purpose"] = "不明"  # 連結したコマンドは、どの操作の目的かを 1 つに決めない
         if ext:
             op.update(route="command", tool=_red(ext["tool"]), method=ext["method"], purpose=ext["purpose"], external=True)
         op["output"], op["output_cut"], op["output_chars"] = _cut(it.get("aggregated_output"))
@@ -905,7 +916,7 @@ def operation(it, ts, turn_id):
     elif typ == "WebSearch":
         act = it.get("action") if isinstance(it.get("action"), dict) else {}
         query = ss._str(it.get("query")) or ss._str(act.get("query")) or ss._str(act.get("url")) or ""
-        op.update(route="web", target=ss.redact(query[:TARGET_LIMIT]), tool="web." + (ss._str(act.get("type")) or "?"),
+        op.update(route="web", target=_short(query), tool="web." + (ss._str(act.get("type")) or "?"),
                   purpose="参照", status="ok", external=True)
     elif typ == "FileChange":
         op["files"] = _file_changes(it.get("changes"))

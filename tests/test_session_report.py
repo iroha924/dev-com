@@ -566,6 +566,8 @@ class OperationTest(_Base):
             (cmd("rg --files-without-match foo", 1), "failed"),
             (cmd("grep foo x", 2), "failed"),
             (cmd("Select-String -Pattern foo x.txt", 1, shell=("pwsh", "-NoProfile", "-Command")), "failed"),
+            (cmd('rg "--files-without-match" foo x', 1, shell=("pwsh", "-NoProfile", "-Command")), "failed"),
+            (cmd('rg -n "foo bar" x', 1, shell=("pwsh", "-NoProfile", "-Command")), "no_match"),
             (cmd("python x.py", 1), "failed"),
             (cmd("git push", None, status="declined"), "declined"),
         ]
@@ -590,10 +592,17 @@ class OperationTest(_Base):
             (cmd("az repos pr create --title x", 0), ("az repos pr create", "作成")),
             (cmd("az pipelines run --name python-test", 1), ("az pipelines run", "作成")),
             (cmd("az boards iteration team list", 0), ("az boards iteration team", "不明")),
-            (mcp("repo_create_pull_request"), ("ado.repo_create_pull_request", "作成")),
-            (mcp("wit_update_work_item"), ("ado.wit_update_work_item", "更新")),
-            (mcp("wit_get_work_item"), ("ado.wit_get_work_item", "参照")),
+            # MCP は確かめた組み合わせ（read_only_hint と MCP_PURPOSE の表）だけを分類する。名前の動詞からは推測しない
+            (mcp("repo_create_pull_request"), ("ado.repo_create_pull_request", "不明")),
+            (mcp("repo_get_or_create_pull_request"), ("ado.repo_get_or_create_pull_request", "不明")),
+            (mcp("create_thing", server="shadow"), ("shadow.create_thing", "不明")),
             (mcp("fetch_file", server="github", read_only=True), ("github.fetch_file", "参照")),
+            # 連結したコマンドは、どれか 1 つの目的に決めない
+            (cmd(ado + "get _apis/wit/workitems/1; " + ado + "write _apis/wit/workitems/1 -Method PATCH -Approve a", 0), ("ado.ps1 get", "不明")),
+            (cmd("az boards query --wiql x && az boards work-item delete --id 1", 0), ("az boards query", "不明")),
+            # Windows の引用符で囲んだパス
+            (cmd('powershell -File "C:\\Program Files\\ado.ps1" write _apis/wit/workitems/1 -Method PATCH -Approve a', 0,
+                 shell=("pwsh", "-NoProfile", "-Command")), ("ado.ps1 write", "更新")),
             (mcp("create_issue", server="github"), ("github.create_issue", "不明")),
         ]
         for it, (tool, purpose) in cases:
@@ -611,6 +620,10 @@ class OperationTest(_Base):
             "C:\\w\\c.py": {"type": "delete"}}})
         self.assertEqual([(f["path"], f["kind"], f["added"], f["removed"]) for f in o["files"]],
                          [("C:\\w\\a.md", "add", 3, 0), ("C:\\w\\b.yml", "update", 2, 1), ("C:\\w\\c.py", "delete", None, None)])
+        # 中身が -- や ++ で始まる変更の行も数える
+        d = self.op({"type": "FileChange", "id": "f3", "status": "completed", "changes": {
+            "x": {"type": "update", "unified_diff": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n---old\n+++new\n"}}})["files"][0]
+        self.assertEqual((d["added"], d["removed"]), (1, 1))
         big = self.op({"type": "FileChange", "id": "f2", "status": "completed",
                        "changes": {"x": {"type": "update", "unified_diff": "+a\n" * 10000}}})["files"][0]
         self.assertTrue(big["diff_cut"])
@@ -636,6 +649,11 @@ class OperationTest(_Base):
         long = self.op(cmd("x", 0, output="A" * 1990 + " " + tok + " " + "M" * 100000 + " " + tok + " " + "Z" * 1990))
         self.assertNotIn(tok[:9], long["output"])
         self.assertEqual(long["output_chars"], 1990 * 2 + 100000 + 2 * len(tok) + 4)
+        # 対象のコマンドの文も、伏せ字をかけてから切る
+        url = self.op(cmd("echo " + "x " * 185 + " https://user:shortsecret@host/", 0))
+        self.assertNotIn("shortsecret", json.dumps(url))
+        web = self.op({"type": "WebSearch", "id": "w9", "query": "q " * 195 + " https://user:shortsecret@host/", "action": {}})
+        self.assertNotIn("shortsecret", json.dumps(web))
         short = self.op(cmd("echo", 0, output="token=Sup3rS3cretValue9"))
         self.assertNotIn("Sup3rS3cretValue9", json.dumps(short))
 
