@@ -145,13 +145,15 @@ base: main
 
 Codex が読む input を作り、書いた追記の根拠と漏れをスクリプトで確かめ、持ち主が判定を直せるようになる。
 
-- [ ] T04: input と show-op
+- [x] T04: input と show-op
   - 種別: 追加
   - 計画: S4
   - 依存: T03（操作の 1 行の要約と出力が要る）
   - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report -k Input` → OK（60,000 文字で発言の切れ目に分かれる、2 つ目以降の頭に未決の項目、推論の中身が無い）
   - コミット: `feat(session-report): Codex に読ませる input と操作の出力を出す show-op を足す`
+  - 結果: `python3 -m unittest tests.test_session_report -k Input` → 5 件 OK。`python3 -m unittest discover -s tests` → この Mac 365 件 OK（skip 24）、コンテナ 365 件 OK（skip 3）
+  - 結果: `session_report.py input --dir <一時フォルダ>` → この Mac の実際の記録（発言 52 件、操作 243 件）で終了コード 0（件数と文字数だけを見て消した）
 
 - [ ] T05: 追記の形と check
   - 種別: 追加
@@ -218,6 +220,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T04 / 発言と操作を記録の順に並べるため、report.json の発言と操作に seq（記録の中の行の順番）を足した。テストの表示の時刻が流す PC の時差に依っていたので、テストでは TZ=Asia/Tokyo に固定した
 
 - 2026-10-18 / T19 / T17 の見直し（a6e7a05、high）は、直した 4 件を確かめ、F1（対象の伏せ字 P1）は T18 で直し済み、F2（前半のファイルが短い P2）だけが新しい件だった。持ち主と決めた終わり方（重い指摘が 0 件で extract を閉じる）に当たるので、extract のレビューはここで閉じる / F2 は T19 で直し、最後の全体の差分のレビュー（A7）で見てもらう
 

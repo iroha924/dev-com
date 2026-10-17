@@ -120,7 +120,7 @@ class _Base(unittest.TestCase):
         self.home = os.path.join(self.tmp.name, "codex")
         os.makedirs(os.path.join(self.home, "sessions", "2026", "10", "14"))
         self.env = dict(os.environ, CODEX_HOME=self.home, HIRATA_CODEX_DATA=os.path.join(self.tmp.name, "data"),
-                        HIRATA_CODEX_REPORT_REEXEC="test")
+                        HIRATA_CODEX_REPORT_REEXEC="test", TZ="Asia/Tokyo")  # 表示の時刻を、流す PC の時差によらず決める
 
     def write(self, tid, text, day="2026-10-14"):
         y, m, d = day.split("-")
@@ -690,6 +690,75 @@ class OperationTest(_Base):
                           ("Work Item", 1287, "CI のテスト結果が見えない", "Active", ["c2"])])
         self.assertEqual(rep["coverage"]["legacy_operations"], {"exec_command_end": 1})
         self.assertEqual(rep["operations"][0]["turn_id"], "t1")
+
+
+class InputTest(_Base):
+    def make(self):
+        r = Rollout(T1).turn("t1")
+        r.user("u1", "Tests タブに何も出ない", [{"type": "local_image", "path": "C:\\a\\tab.png"}])
+        r.item({"type": "Reasoning", "id": "r1", "summary": [], "content": [{"type": "text", "text": "推論の中身 %s" % CANARY}]})
+        r.item(cmd('rg "testResultsFiles" -g "*.yml"', 1, oid="c1"))
+        r.item(cmd("python -m pytest -q", 1, oid="c2", output="....\nFAILED tests/test_retry.py::test_x - AssertionError\n"))
+        r.agent("a1", "置き場所がずれていました").end("置き場所がずれていました")
+        r.turn("t2").user("u2", "PR を作って").agent("a2", "作りました").end("作りました")
+        self.write(T1, r.text())
+        self.extract(T1)
+        return os.path.join(self.tmp.name, "out")
+
+    def test_input_orders_messages_and_operations(self):
+        out = self.make()
+        code, stdout, err = self.run_cli("input", "--dir", out)
+        self.assertEqual(code, 0, err)
+        with open(os.path.join(out, "input-1.md"), encoding="utf-8") as f:
+            text = f.read()
+        order = [text.index(s) for s in ("[u1]", "[c1]", "[c2]", "[a1]", "[u2]", "[a2]")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("（添付: tab.png、本体なし）", text)
+        self.assertIn("[c1] 10:15 コマンド 該当なし", text)
+        self.assertIn("→ FAILED tests/test_retry.py::test_x - AssertionError", text)
+        self.assertIn("終了コード 1", text)
+        self.assertNotIn(CANARY, text)  # 推論は入れない
+        self.assertIn("持ち主の発言 2 件（この範囲 2 件）", text)
+
+    def test_parts_split_before_owner_messages(self):
+        entries = [("### [u1] 持ち主\n" + "a" * 50, True), ("- op\n", False), ("### [a1] Codex\n" + "b" * 50, False),
+                   ("### [u2] 持ち主\n" + "c" * 50, True), ("### [a2] Codex\n" + "d" * 200, False)]
+        parts = sr.split_parts(entries, limit=100)
+        self.assertEqual([[e.split("\n")[0] for e in p] for p in parts],
+                         [["### [u1] 持ち主", "- op", "### [a1] Codex"], ["### [u2] 持ち主", "### [a2] Codex"]])
+
+    def test_later_parts_list_pending_items(self):
+        out = self.make()
+        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump({"requests": [
+                {"id": "R1", "text": "原因を直す", "lifecycle": "有効", "criteria": [{"status": "できた"}, {"status": "未確認"}]},
+                {"id": "R2", "text": "済んだもの", "lifecycle": "有効", "criteria": [{"status": "できた"}]},
+                {"id": "R3", "text": "取り下げたもの", "lifecycle": "取り下げ", "criteria": []}],
+                "questions": [{"id": "Q1", "text": "再実行すべき？", "status": "未回答"}, {"id": "Q2", "text": "x", "status": "答えた"}]},
+                f, ensure_ascii=False)
+        report = sr.read_json(os.path.join(out, "report.json"))
+        self.assertEqual(len(sr.split_parts(sr.input_entries(report), limit=10)), 2)
+        self.assertEqual(sr.pending_items(sr.read_json(os.path.join(out, "annotations.json"))),
+                         ["- R1（一部）: 原因を直す", "- Q1（未回答）: 再実行すべき？"])
+        code, _, err = self.run_cli("input", "--dir", out, "--part", "2")
+        self.assertEqual(code, 1)
+        self.assertIn("範囲は 1〜1", err)
+
+    def test_request_status(self):
+        cases = [([], "未確認"), (["できた", "できた"], "できた"), (["できた", "未確認"], "一部"), (["一部"], "一部"),
+                 (["できていない", "未確認"], "できていない"), (["未確認"], "未確認")]
+        for states, want in cases:
+            with self.subTest(states=states):
+                self.assertEqual(sr.request_status({"criteria": [{"status": s} for s in states]}), want)
+        self.assertIsNone(sr.request_status({"lifecycle": "取り下げ", "criteria": [{"status": "できた"}]}))
+
+    def test_show_op(self):
+        out = self.make()
+        code, stdout, err = self.run_cli("show-op", "c2", "--dir", out)
+        self.assertEqual(code, 0, err)
+        self.assertIn("FAILED tests/test_retry.py::test_x", stdout)
+        code, _, err = self.run_cli("show-op", "nope", "--dir", out)
+        self.assertEqual((code, "操作が無い: nope" in err), (1, True))
 
 
 class SearchModuleTest(unittest.TestCase):
