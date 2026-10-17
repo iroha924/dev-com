@@ -194,13 +194,14 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `fix(session-report): 範囲の端をまたぐ語だけを捨て、ado.ps1 は実行の形と引数の名前が表のとおりのときだけ分類する`
   - 結果: red を直す前のコードで実測 → 2 件 FAIL、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 69 件 OK
 
-- [ ] T06: override
+- [x] T06: override
   - 種別: 追加
   - 計画: S6
   - 依存: T05（直す対象の項目 ID と状態の値が要る）
   - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report -k Override` → OK（overrides.json に保存され、元の判定と理由が残る、無い項目 ID は失敗）
   - コミット: `feat(session-report): 持ち主が判定を直す override を足す`
+  - 結果: `python3 -m unittest tests.test_session_report -k Override` → 2 件 OK（R1.2 と R2 の訂正、元の判定と理由が残る、--clear で戻る、無い項目 ID は終了コード 1、使えない状態と理由の無い訂正は 2）。`python3 -m unittest discover -s tests` → 374 件 OK（skip 24）
 
 - [ ] T07: 作り物の会話と正解の追記
   - 種別: 追加
@@ -251,6 +252,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T06 / 直せる項目は、依頼の状態（R1）・条件の状態（R1.2、1 から数える）・質問の状態（Q1）にした。依頼の状態は Codex の条件の判定から集め、条件の訂正は依頼の状態に効かせない（訂正したい依頼は R1 を直す）。テストのクラスの継ぎ方で Input のテストが Check の下でも重ねて流れていたので、土台のクラスを分けた（全体の件数が 380 から 374 に減ったのはこの重なりの分）
 
 - 2026-10-18 / T22 / T20 の見直し（909bc5d、high）の 3 件（F1 伏せ字で縮むと切れ端が残る P2（T20 の直しで入った）、F2 省略した引数の名前 P2、F3 別のプログラムの引数の ado.ps1 P2）。操作の分類の直しで新しい欠陥が入るのが 2 回続いたので止めて持ち主に聞き、「形で直して往復は閉じる」と決まった / F1 は「伏せ字をかけた範囲の端をまたぐ語だけを捨てる」に、F2・F3 は「表に無い形は不明」に寄せて T22 で直した。操作の分類のレビューの往復はここで閉じ、直しは最後の全体のレビュー（A7）で見てもらう
 

@@ -5,6 +5,7 @@
     python session_report.py input [<thread_id> | --dir DIR] [--part N]
     python session_report.py show-op <操作の ID> [<thread_id> | --dir DIR]
     python session_report.py check [<thread_id> | --dir DIR]
+    python session_report.py override <項目 ID> [<thread_id> | --dir DIR] (--status <状態> --reason <理由> | --clear)
 
 probe: 記録の形（行の種類、項目の種類とキー名、件数、有無）だけを数えて出す。本文・コマンド・出力・パス・引数・検索語・
 差分は出さない。出す値は、Codex のコードと設定が決める種類の値（type・phase・status・MCP の server と tool の名前・版）で、
@@ -1486,6 +1487,62 @@ def cmd_check(args):
     return 0
 
 
+# --- override: 持ち主の訂正 ------------------------------------------------------------------------
+
+QUESTION_STATES = ("答えた", "一部回答", "未回答")
+
+
+def status_targets(ann):
+    """直せる項目の ID と、その状態に使える値と、Codex の判定（依頼は条件から集めた状態）。"""
+    out = {}
+    for r in ann.get("requests") or []:
+        out[r["id"]] = (CRITERIA_STATES, request_status(r))
+        for n, c in enumerate(r.get("criteria") or [], 1):
+            out["%s.%d" % (r["id"], n)] = (CRITERIA_STATES, c.get("status"))
+    for q in ann.get("questions") or []:
+        out[q["id"]] = (QUESTION_STATES, q.get("status"))
+    return out
+
+
+def effective_statuses(ann, overrides):
+    """項目 ID ごとの {status, original, reason}。訂正があれば status は訂正の値で、original に Codex の判定を残す。"""
+    out = {}
+    for item_id, (_, original) in status_targets(ann).items():
+        o = overrides.get(item_id)
+        out[item_id] = {"status": o["status"] if o else original, "original": original,
+                        "reason": o["reason"] if o else None, "overridden": bool(o)}
+    return out
+
+
+def cmd_override(args):
+    out = resolve_dir(args)
+    ann_path = os.path.join(out, "annotations.json")
+    if not os.path.isfile(ann_path):
+        print("annotations.json が無い: %s" % ann_path, file=sys.stderr)
+        return 1
+    targets = status_targets(read_json(ann_path))
+    path = os.path.join(out, "overrides.json")
+    overrides = read_json(path) if os.path.isfile(path) else {}
+    if args.item_id not in targets:
+        print("直せる項目に無い: %s（直せるのは %s）" % (args.item_id, "・".join(sorted(targets)) or "なし"), file=sys.stderr)
+        return 1
+    if args.clear:
+        overrides.pop(args.item_id, None)
+    else:
+        states, original = targets[args.item_id]
+        if args.status not in states:
+            print("%s の状態は %s のどれか" % (args.item_id, "・".join(states)), file=sys.stderr)
+            return 2
+        if not args.reason or not args.reason.strip():
+            print("--reason に、直す理由を書く", file=sys.stderr)
+            return 2
+        overrides[args.item_id] = {"status": args.status, "reason": ss.redact(args.reason.strip()), "by": "持ち主",
+                                   "original": original}
+    write_json(path, overrides)
+    print("書いた: %s（訂正 %d 件）" % (path, len(overrides)))
+    return 0
+
+
 # --- 入口 -----------------------------------------------------------------------------------------
 
 
@@ -1525,6 +1582,15 @@ def build_parser():
         if name == "input":
             sp.add_argument("--part", type=int, default=1, help="何番目の範囲か（1 から）")
         sp.set_defaults(func=func)
+    ov = sub.add_parser("override", help="依頼・条件・質問の状態を持ち主が直す（overrides.json に保存する）")
+    ov.add_argument("item_id", help="R1（依頼）、R1.2（R1 の 2 つ目の条件）、Q1（質問）")
+    ov.add_argument("thread_id", nargs="?", type=_thread_id)
+    ov.add_argument("--dir", help="report.json のあるフォルダ（既定は会話の ID から決める）")
+    which = ov.add_mutually_exclusive_group(required=True)
+    which.add_argument("--status", help="直した状態（依頼と条件: できた・一部・できていない・未確認、質問: 答えた・一部回答・未回答）")
+    which.add_argument("--clear", action="store_true", help="訂正を消して、Codex の判定に戻す")
+    ov.add_argument("--reason", help="直す理由（--status のとき必須）")
+    ov.set_defaults(func=cmd_override)
     return p
 
 

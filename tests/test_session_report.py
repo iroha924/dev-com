@@ -721,7 +721,9 @@ class OperationTest(_Base):
         self.assertEqual(rep["operations"][0]["turn_id"], "t1")
 
 
-class InputTest(_Base):
+class _ReportBase(_Base):
+    """作り物の会話を extract した report.json のフォルダを作る土台（テストは持たない）。"""
+
     def make(self):
         r = Rollout(T1).turn("t1")
         r.user("u1", "Tests タブに何も出ない", [{"type": "local_image", "path": "C:\\a\\tab.png"}])
@@ -734,6 +736,12 @@ class InputTest(_Base):
         self.extract(T1)
         return os.path.join(self.tmp.name, "out")
 
+    def write_ann(self, out, ann):
+        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(ann, f, ensure_ascii=False)
+
+
+class InputTest(_ReportBase):
     def test_input_orders_messages_and_operations(self):
         out = self.make()
         code, stdout, err = self.run_cli("input", "--dir", out)
@@ -851,11 +859,7 @@ def good_annotations(report):
     }
 
 
-class CheckTest(InputTest):
-    def write_ann(self, out, ann):
-        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
-            json.dump(ann, f, ensure_ascii=False)
-
+class CheckTest(_ReportBase):
     def check(self, mutate=None):
         out = self.make()
         report = sr.read_json(os.path.join(out, "report.json"))
@@ -936,6 +940,41 @@ class CheckTest(InputTest):
             f.write("{broken")
         code, _, err = self.run_cli("check", "--dir", out)
         self.assertIn("JSON として読めない", err)
+
+
+class OverrideTest(_ReportBase):
+    def setup_ann(self):
+        out = self.make()
+        self.write_ann(out, good_annotations(sr.read_json(os.path.join(out, "report.json"))))
+        return out
+
+    def test_override_and_clear(self):
+        out = self.setup_ann()
+        code, _, err = self.run_cli("override", "R1.2", "--dir", out, "--status", "できた", "--reason", "CI の結果を持ち主が見た")
+        self.assertEqual(code, 0, err)
+        code, _, err = self.run_cli("override", "R2", "--dir", out, "--status", "未確認", "--reason", "PR を見ていない")
+        self.assertEqual(code, 0, err)
+        ov = sr.read_json(os.path.join(out, "overrides.json"))
+        self.assertEqual(ov["R1.2"], {"status": "できた", "reason": "CI の結果を持ち主が見た", "by": "持ち主", "original": "未確認"})
+        eff = sr.effective_statuses(sr.read_json(os.path.join(out, "annotations.json")), ov)
+        self.assertEqual(eff["R2"], {"status": "未確認", "original": "できた", "reason": "PR を見ていない", "overridden": True})
+        self.assertEqual(eff["R1"]["status"], "一部")  # 依頼の状態は Codex の条件の判定から集める（訂正した条件は R1 に効かない）
+        code, _, _ = self.run_cli("override", "R2", "--dir", out, "--clear")
+        self.assertEqual(code, 0)
+        self.assertNotIn("R2", sr.read_json(os.path.join(out, "overrides.json")))
+
+    def test_override_rejects_bad_input(self):
+        out = self.setup_ann()
+        cases = [(["R9", "--status", "できた", "--reason", "x"], 1, "直せる項目に無い: R9"),
+                 (["R1", "--status", "答えた", "--reason", "x"], 2, "R1 の状態は"),
+                 (["R1", "--status", "できた"], 2, "--reason に、直す理由"),
+                 (["R1", "--status", "できた", "--reason", "  "], 2, "--reason に、直す理由")]
+        for argv, want_code, want in cases:
+            with self.subTest(argv=argv):
+                code, _, err = self.run_cli("override", *argv[:1], "--dir", out, *argv[1:])
+                self.assertEqual(code, want_code)
+                self.assertIn(want, err)
+        self.assertFalse(os.path.exists(os.path.join(out, "overrides.json")))
 
 
 class SearchModuleTest(unittest.TestCase):
