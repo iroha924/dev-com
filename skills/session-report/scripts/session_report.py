@@ -76,14 +76,16 @@ def _keys(obj):
     return [_name(k) for k in obj] if isinstance(obj, dict) else []
 
 
-def _shape(value):
-    """dict ならキー名の並び、数なら number、ほかは _name。"""
+def _shape(value, enum=False):
+    """dict ならキー名の並び、数なら number。文字列は、種類の値の欄（enum=True）だけ _name を通し、ほかは (str)。"""
     if isinstance(value, dict):
         return "{%s}" % "+".join(sorted(_keys(value)))
     if isinstance(value, bool):
         return "(bool)"
     if isinstance(value, (int, float)):
         return "number"
+    if isinstance(value, str) and not enum:
+        return "(str)"
     return _name(value)
 
 
@@ -111,8 +113,11 @@ def _path_state(value):
     path, form = value, "relative"
     if value.startswith("file://"):
         from urllib.parse import unquote, urlparse
-        path, form = unquote(urlparse(value).path), "file-uri"
-        if re.match(r"^/[A-Za-z]:", path):
+        url = urlparse(value)
+        path, form = unquote(url.path), "file-uri"
+        if url.netloc and url.netloc.lower() != "localhost":
+            path = "//" + url.netloc + path  # file://server/share/a.png は \\server\share\a.png
+        elif re.match(r"^/[A-Za-z]:", path):
             path = path[1:]
     elif os.path.isabs(value) or re.match(r"^[A-Za-z]:[\\/]", value):
         form = "absolute"
@@ -135,7 +140,7 @@ def probe_item(c, it):
         c["item.%s.key" % t, k] += 1
     if "status" in it:
         st = it["status"]
-        c["item.%s.status" % t, _shape(st)] += 1
+        c["item.%s.status" % t, _shape(st, enum=True)] += 1
     if t == "AgentMessage":
         c["item.AgentMessage.phase", _name(it.get("phase"))] += 1
     elif t == "UserMessage":
@@ -224,7 +229,7 @@ def probe_file(c, data):
             if typ == "session_meta":
                 c["session_meta.originator", _name(payload.get("originator"))] += 1
                 c["session_meta.cli_version", _name(payload.get("cli_version"))] += 1
-                c["session_meta.source", _shape(payload.get("source"))] += 1
+                c["session_meta.source", _shape(payload.get("source"), enum=True)] += 1
             else:
                 c["turn_context.effort", _name(payload.get("effort"))] += 1
     c["ids.item_completed", "duplicated"] += sum(1 for n in seen_ids.values() if n > 1)

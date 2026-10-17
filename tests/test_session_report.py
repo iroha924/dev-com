@@ -6,6 +6,7 @@
 import importlib.util
 import json
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -94,10 +95,32 @@ class ProbeShapeTest(_Base):
         image = os.path.join(self.tmp.name, "%s.png" % CANARY)
         with open(image, "wb") as f:
             f.write(b"x")
-        self.write(T1, canary_rollout(T1, "file://" + image))
+        self.write(T1, canary_rollout(T1, pathlib.Path(image).as_uri()))
         out = self.probe()
         self.assertNotIn(CANARY, out)
         self.assertNotIn("work", out)
+
+    def test_string_values_in_shape_fields_do_not_appear(self):
+        # command や MCP の result が知らない形（文字列）で来ても、中身を出さない
+        ts, turn = "2026-10-14T01:12:00Z", "t1"
+        self.write(T1, "\n".join([
+            line(ts, "session_meta", {"id": T1}),
+            item(ts, turn, {"type": "CommandExecution", "id": "c1", "command": CANARY, "duration": CANARY, "status": "completed"}),
+            item(ts, turn, {"type": "McpToolCall", "id": "m1", "server": "ado", "tool": "x", "result": CANARY}),
+            item(ts, turn, {"type": "FileChange", "id": "f1", "changes": {"a": CANARY}}),
+            line(ts, "session_meta", {"id": T1, "source": {"subagent": CANARY}}),
+        ]) + "\n")
+        self.assertNotIn(CANARY, self.probe())
+
+    def test_unc_file_uri_keeps_the_server(self):
+        seen = []
+        real = os.path.exists
+        os.path.exists = lambda p: seen.append(p) or False
+        try:
+            self.assertEqual(sr._path_state("file://server/share/a.png"), "file-uri,missing")
+        finally:
+            os.path.exists = real
+        self.assertEqual(seen, ["//server/share/a.png"])
 
     def test_every_line_is_category_name_count(self):
         self.write(T1, canary_rollout(T1, "C:\\nowhere\\%s.png" % CANARY))
@@ -112,7 +135,7 @@ class ProbeShapeTest(_Base):
         image = os.path.join(self.tmp.name, "seen.png")
         with open(image, "wb") as f:
             f.write(b"x")
-        self.write(T1, canary_rollout(T1, "file://" + image))
+        self.write(T1, canary_rollout(T1, pathlib.Path(image).as_uri()))
         rows = {tuple(r.split("\t")[:2]): int(r.split("\t")[2]) for r in self.probe().splitlines()}
         expect = {
             ("item.type", "CommandExecution"): 1, ("item.type", "AgentMessage"): 2,

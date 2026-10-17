@@ -32,6 +32,17 @@ base: main
   - 結果: `python3 -m unittest tests.test_session_report tests.test_layout` → 20 件 OK。`python3 -m unittest discover -s tests` → この Mac 331 件 OK（skip 24）、コンテナ（Python 3.11）331 件 OK（skip 3）
   - 結果: `session_report.py probe` → この Mac の記録 1,376 本で終了コード 0、426 行の全部が「区分・名前・件数」の形
 
+- [x] T12: probe の文字列の値の漏れと、file URI の扱いを直す
+  - 種別: 修正
+  - 計画: S1
+  - 依存: T01（直す対象の probe が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k test_string_values_in_shape_fields_do_not_appear -k test_unc_file_uri_keeps_the_server` → 2 件 FAIL（command・duration・result・change の文字列の目印が出力に出る、file://server/share/a.png の確かめる先が /share/a.png）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): probe が文字列の値を出す経路と、file URI のサーバー名の扱いを直す`
+  - 結果: red を直す前のコードで実測 → 2 件 FAIL（目印 CANARYzq7 が item.CommandExecution.command などに出た、確かめる先が /share/a.png）。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 22 件 OK
+  - 結果: `python3 -m unittest tests.test_session_report -k test_counts` → この Mac では直す前も後も OK。Windows でテストの file URI が壊れる指摘（F2）はこの Mac では再現できず、テストを pathlib.Path(...).as_uri() に変えた（Windows では未検証）
+
 ## P2: 記録から機械で取り出す
 
 1 つの会話から、発言・ターン・操作・成果物を report.json に書けるようになる。
@@ -129,6 +140,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T12 / T01 の Codex のレビュー（a85337f）の 3 件（F1 文字列の値が出る P1、F2 Windows のテストの file URI P2、F3 UNC の file URI P2）をコードで確かめて受理 / T12 を足して直した
 
 - 2026-10-18 / T01 / 目印を type の欄にも入れたら probe の出力に出た。type・phase・status・MCP の名前は Codex のコードと設定が決める値なので出す（英数字 40 文字まで）と決め、目印は本文・コマンド・出力・パス・引数・検索語・差分・作業フォルダ・ブランチに入れた / テストと probe の説明に書いた
 - 2026-10-18 / T01 / この Mac の記録で、添付の画像 45 件の本体が data URL で記録の中にある。同じ ID の item_completed が 167 件ある / T02・T03 の抽出で、画像の本体を捨てることと、同じ ID を 1 つにまとめることを扱う
