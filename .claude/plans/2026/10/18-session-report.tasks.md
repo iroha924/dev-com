@@ -298,6 +298,16 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `fix(session-report): 共有用の URL と絶対パスを広く見つけ、追記の文なら書き直させ、記録の文なら丸ごと省く`
   - 結果: red を直す前のコードで実測 → FAIL（share_risk が無い、URL を含む追記でも共有用を書く）。直した後 `python3 -m unittest discover -s tests` → 387 件 OK（skip 24）
 
+- [x] T28: 共有用の見つけ方を広げ、効いていない古い訂正で止めない
+  - 種別: 修正
+  - 計画: S8
+  - 依存: T27（直す対象の見つけ方が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k ShareRisk -k StaleOverride` → 9 か所 FAIL（/tmp・日本語や空白を含むパス・日本語の直後の www・mailto: と data: を見つけない、効いていない訂正の理由で止まり、その訂正を --clear で消せない）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 共有用の URL と絶対パスの見つけ方を広げ、効いていない古い訂正で止めない`
+  - 結果: red を直す前のコードで実測 → 9 か所 FAIL。直した後 `python3 -m unittest discover -s tests` → 391 件 OK（skip 24）、`python3 evals/session-report/fixtures.py render --twice` → 12 本とも同じバイト列
+
 - [x] T11: 追記を正解と比べる道具
   - 種別: 追加
   - 計画: S10
@@ -309,6 +319,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - 結果: `python3 evals/session-report/compare.py --dir <フォルダ>` → 流していない。Codex に追記を書かせて比べる実行は利用枠を使うので、持ち主に規模を聞いてから
 
 ## 記録
+
+- 2026-10-18 / T28 / T27 の見直し（bda90d9、high）の 4 件（F1〜F3 見つけ方の広さが足りない P2、F4 効いていない古い訂正で止まる P2（T27 の直しで入った））を再現で確かめて受理。誤って拾っても書き直しが増えるだけなので、前が英数字でない「/」は全部拾うまで広げた（「依頼/質問」も拾い、Codex が「依頼・質問」と書き直す）/ T28 を足して直した。共有用の見直しの往復はここで閉じ、最後の全体のレビュー（A7）で見てもらう
 
 - 2026-10-18 / 全体 / hirata-codex は PR を作らず main へ直接 push するので、途中で push するたびに main が進み、done の検査（base..HEAD を見る）が先に push したタスクのコミットを見られなくなった / base を main から、作業を始めたコミット b324e62 に変えた（前: main、後: b324e62）。frontmatter は「進め方」で書き換えてよい欄に入っていないが、検査の起点を作業の始まりに戻すためだけの変更
 

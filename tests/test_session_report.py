@@ -1111,6 +1111,20 @@ class ViewDetailTest(_Base):
         self.assertEqual(d1["replaced_by"], "D2")
 
 
+class StaleOverrideShareTest(_ReportBase):
+    def test_stale_override_reason_does_not_stop_share_and_can_be_cleared(self):
+        out = self.make()
+        self.write_ann(out, good_annotations(sr.read_json(os.path.join(out, "report.json"))))
+        with open(os.path.join(out, "overrides.json"), "w", encoding="utf-8") as f:
+            json.dump({"R99": {"status": "できた", "reason": "https://old.example/CANARY", "by": "持ち主", "original": "未確認",
+                               "target": "無い依頼"}}, f, ensure_ascii=False)
+        code, stdout, err = self.run_cli("render", "--dir", out, "--share")
+        self.assertEqual(code, 0, stdout + err)
+        code, stdout, err = self.run_cli("override", "R99", "--dir", out, "--clear")
+        self.assertEqual(code, 0, stdout + err)
+        self.assertEqual(sr.read_json(os.path.join(out, "overrides.json")), {})
+
+
 class ShareTest(_Base):
     def test_share_html_leaves_out_details(self):
         r = Rollout(T1, cwd="C:\\work\\CANARYCWD\\ci-pipelines").turn("t1")
@@ -1178,9 +1192,11 @@ class ShareRiskTest(unittest.TestCase):
     RISKY = ["/workspace/CANARYPARENT/x.py", "C:/Users/CANARYPARENT/x.py", "//server/CANARYSHARE/x.py",
              '"C:\\Users\\Jane Doe\\CANARYPARENT\\x.py"', '"/Users/Jane Doe/CANARYPARENT/x.py"', "参照https://example.test/CANARYURL",
              "場所は/Users/CANARYPARENT/x.py", "確認(https://example.test/x)してから", "\\\\server\\share\\a.txt", "~/CANARY/x",
-             "www.example.test/CANARY", "file:///C:/CANARY", "C:\\work\\CANARY"]
-    PLAIN = ["tests/test_retry.py は相対", "ratio 1/2 と CI/CD", "src\\clock.py を直した", "テスト/本番の両方", "and/or",
-             "_apis/wit/workitems/1287 を PATCH"]
+             "www.example.test/CANARY", "file:///C:/CANARY", "C:\\work\\CANARY", "/CANARY_ROOT", "/日本語/CANARY.txt",
+             "/Company Data/CANARY.txt", "場所は /tmp", "参照www.example.test/CANARY", "mailto:person@CANARY.example",
+             "data:text/plain,CANARY", "依頼/質問"]
+    PLAIN = ["tests/test_retry.py は相対", "ratio 1/2 と CI/CD", "src\\clock.py を直した", "and/or",
+             "_apis/wit/workitems/1287 を PATCH", "データ: 3 件", "PR #482 を作った"]
 
     def test_risky_strings_are_found(self):
         for s in self.RISKY:

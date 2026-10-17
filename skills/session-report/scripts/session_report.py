@@ -1544,7 +1544,7 @@ def cmd_override(args):
     targets = status_targets(read_json(ann_path))
     path = os.path.join(out, "overrides.json")
     overrides = read_json(path) if os.path.isfile(path) else {}
-    if args.item_id not in targets:
+    if args.item_id not in targets and not (args.clear and args.item_id in overrides):  # 古い訂正は --clear で消せる
         print("直せる項目に無い: %s（直せるのは %s）" % (args.item_id, "・".join(sorted(targets)) or "なし"), file=sys.stderr)
         return 1
     if args.clear:
@@ -1845,12 +1845,13 @@ def build_view(report, ann, overrides, stale=False):
 # 見つけたら、Codex が書いた文なら render --share を止めて書き直させ、記録から来る文なら丸ごと省く。
 # 誤って見つけても書き直しが 1 回増えるだけで、漏れる向きにはならない。
 _SHARE_RISK = re.compile(
-    r"(?i)[a-z][a-z0-9+.-]*://"            # https://、file://、ssh:// など
-    r"|\bwww\."                             # www.example.com
-    r"|[A-Za-z]:[\\/]"                       # C:\ と C:/
-    r"|\\\\|//[^\s/]"                      # UNC（\\server と //server）
-    r"|(?<![A-Za-z0-9._-])/[A-Za-z0-9._~-]+/"  # /Users/... のような、/ で始まる 2 段以上（日本語の直後も拾う）
-    r"|~[\\/]")                              # ~/...
+    r"(?i)[a-z][a-z0-9+.-]*://"                       # https://、file://、ssh:// など
+    r"|(?<![a-z0-9])(?:mailto|data|javascript|vbscript|file|tel|urn):(?=\S)"  # :// の無い URL の形
+    r"|(?<![a-z0-9])www\."                            # www.example.com（日本語の直後も拾う）
+    r"|[a-z]:[\\/]"                                   # C:\ と C:/
+    r"|\\\\|//[^\s/]"                                # UNC（\\server と //server）
+    r"|(?<![a-z0-9._-])/(?=[^\s/])"                    # 前が英数字でない / はパスの頭とみなす（/tmp、/日本語/…、依頼/質問 も拾う）
+    r"|~[\\/]")                                       # ~/...
 SHARE_OMITTED = "（パスか URL を含むため省略）"
 SHARE_NOTICE = ("共有用: 会話の全文・操作の詳細（外部の操作・ファイル・コマンド・差分）・絶対パス・URL は除いた。"
                 "要約と引用に共有してよくない内容が残っていないかは、持ち主が確かめる。")
@@ -1875,8 +1876,10 @@ def share_problems(ann, overrides):
         fields.append((x["id"], x["text"]))
     for c in ann["chapters"]:
         fields.append((c["id"], c["title"]))
+    stale = set(stale_overrides(ann, overrides))
     for item_id, o in sorted(overrides.items()):
-        fields.append(("override " + item_id, o.get("reason")))
+        if item_id not in stale:  # 効いていない古い訂正の理由は、HTML に出ないので確かめない
+            fields.append(("override " + item_id, o.get("reason")))
     return ["%s: 共有用の文に URL か絶対パスがある。書き直す（ファイルは名前だけ、場所は言葉で）" % k for k, v in fields if share_risk(v)]
 
 
