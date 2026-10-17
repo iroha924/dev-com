@@ -1365,7 +1365,11 @@ def schema_errors(value, schema, root, where="annotations"):
                 errors += schema_errors(v, schema["additionalProperties"], root, "%s[%s]" % (where, key))
     if isinstance(value, list) and "items" in schema:
         for n, v in enumerate(value):
-            errors += schema_errors(v, schema["items"], root, "%s[%d]" % (where, n))
+            # 項目 ID があれば頭に出す（R1（annotations.requests[0]）.lifecycle のように）
+            label = "%s[%d]" % (where, n)
+            if isinstance(v, dict) and isinstance(v.get("id"), str):
+                label = "%s（%s）" % (v["id"], label)
+            errors += schema_errors(v, schema["items"], root, label)
     return errors
 
 
@@ -1415,23 +1419,25 @@ def check_annotations(ann, report):
             elif _squash(ev["quote"]) not in _squash(texts[ev["ref"]]):
                 errors.append("%s: 引用が %s の本文に無い。本文からそのまま写す（空白の有無は問わない）" % (item_id, ev["ref"]))
 
-    def message(item_id, field, ref, owner=False):
+    codex_ids = {m["id"] for m in report["messages"] if m["kind"] != "user"}
+    pools = {"owner": (set(owner_ids), "持ち主の"), "codex": (codex_ids, " Codex の"), "any": (message_ids, "")}
+
+    def message(item_id, field, ref, who="any"):
         if ref is None:
             return
-        pool = set(owner_ids) if owner else message_ids
+        pool, label = pools[who]
         if ref not in pool:
-            errors.append("%s: %s の %s が%s発言に無い。%s発言の ID を書く" % (
-                item_id, field, ref, "持ち主の" if owner else "", "持ち主の" if owner else ""))
+            errors.append("%s: %s の %s が%s発言に無い。%s発言の ID を書く" % (item_id, field, ref, label, label.strip()))
 
     evidence("summary", ann["summary"]["evidence"])
     for r in ann["requests"]:
-        message(r["id"], "at", r["at"], owner=True)
+        message(r["id"], "at", r["at"], who="owner")
         evidence(r["id"], r["evidence"])
         for n, c in enumerate(r["criteria"]):
             evidence("%s.criteria[%d]" % (r["id"], n), c["evidence"], required=c["status"] != "未確認")
     for q in ann["questions"]:
-        message(q["id"], "at", q["at"], owner=True)
-        message(q["id"], "answer", q["answer"])
+        message(q["id"], "at", q["at"], who="owner")
+        message(q["id"], "answer", q["answer"], who="codex")
         if q["status"] != "未回答" and q["answer"] is None:
             errors.append("%s: 答えた発言（answer）が無い。答えの発言の ID を書くか、状態を未回答にする" % q["id"])
         evidence(q["id"], q["evidence"])

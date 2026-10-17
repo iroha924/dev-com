@@ -213,6 +213,16 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `fix(session-report): 未決の項目を伏せ字の後に切り、input の区切りでつなぐ改行を数える`
   - 結果: red を直す前のコードで実測 → 2 件 FAIL。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 64 件 OK
 
+- [x] T24: check で質問の答えを Codex の発言に限り、形の違反に項目 ID を出す
+  - 種別: 修正
+  - 計画: S5
+  - 依存: T05（直す対象の check が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Check` → FAIL（answer に持ち主の発言を書いても通る、形の違反に R1・I1 が出ない）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): check で質問の答えを Codex の発言に限り、形の違反に項目 ID を出す`
+  - 結果: red を直す前のコードで実測 → 2 か所の subTest が FAIL。直した後 `python3 -m unittest discover -s tests` → 375 件 OK（skip 24）
+
 - [ ] T07: 作り物の会話と正解の追記
   - 種別: 追加
   - 計画: S10
@@ -262,6 +272,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T24 / T05 のレビュー（78c92c4）の 2 件（F1 answer に持ち主の発言 P2、F2 形の違反に項目 ID が無い P2）を再現で確かめて受理 / T24 を足して直した
 
 - 2026-10-18 / T23 / T21 の見直し（2251185）の 2 件（F1 未決の項目を切ってから伏せ字 P2（T21 の直しで入った）、F2 つなぐ改行を数えない P2）を再現で確かめて受理 / T23 を足して直した。input の直しで新しい欠陥が入ったのはこれが 1 回目
 

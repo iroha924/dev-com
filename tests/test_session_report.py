@@ -927,7 +927,11 @@ class CheckTest(_ReportBase):
 
         def squash(a):
             a["summary"]["evidence"][0]["quote"] = "置き場所が  \n ずれていました"  # 空白の有無は問わない
-        cases = [(dup, ["L1: ID が重複"]), (schema, ["requests[0].lifecycle: 値が", "issues[0]: 知らないキー extra"]),
+        def owner_answer(a):
+            a["questions"].append({"id": "Q1", "text": "?", "at": "u1", "status": "答えた", "answer": "u2", "note": "",
+                                   "evidence": [{"ref": "u1", "quote": "Tests"}]})
+        cases = [(dup, ["L1: ID が重複"]), (schema, ["R1（annotations.requests[0]）.lifecycle: 値が", "I1（annotations.issues[0]）: 知らないキー extra"]),
+                 (owner_answer, ["Q1: answer の u2 が Codex の発言に無い"]),
                  (answer, ["Q1: 答えた発言（answer）が無い"]), (at, ["R1: at の a1 が持ち主の発言に無い"]),
                  (label, ["u1: owner_messages の R9", "a1: owner_messages のキーが持ち主の発言に無い"]),
                  (criteria, ["R2.criteria[0]: 根拠（evidence）が無い"])]
