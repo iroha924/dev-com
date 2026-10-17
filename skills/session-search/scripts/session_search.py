@@ -101,7 +101,8 @@ _SECRET_PATTERNS = [
      "[REDACTED-PRIVATE-KEY]"),
     # Authorization ヘッダーと Bearer トークン
     # Authorization ヘッダー: 方式の名前（Basic・SharedKey など、知らないものも）を含めて、行の終わりか引用符まで伏せる
-    (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)([^\r\n\"']{3,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(authorization[\"']?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(authorization[\"']?[ \t]*[:=][ \t]*)(?![ \t\"'])((?:=\"[^\"\r\n]*\"|='[^'\r\n]*'|[^\r\n\"']){3,})"), r"\1[REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
     # PowerShell: パイプで渡す '...' | ConvertTo-SecureString、引数の '...'・"..."・引用符なし、-Password などの引数
     (re.compile(r"(?i)(" + _DQ + "|" + _SQ + r")(\s*\)?\s*\|\s*ConvertTo-SecureString)"), r"'[REDACTED]'\2"),
@@ -418,10 +419,20 @@ def _str(value):
     return value if isinstance(value, str) else None
 
 
+def _owner_text(content):
+    """response_item の user の行が、持ち主の書いた文らしいか（差し込まれる AGENTS.md や環境の情報は除く）。"""
+    for part in content if isinstance(content, list) else []:
+        text = part.get("text") if isinstance(part, dict) else None
+        if isinstance(text, str) and text.strip() and not text.lstrip().startswith(("<", "# AGENTS.md")):
+            return True
+    return False
+
+
 def parse_rollout(path, data):
     """1 本の rollout から (meta, messages, counters) を取り出す。"""
     counters = {"lines": 0, "bad_json": 0, "shape_errors": 0, "skipped_elements": 0, "incomplete_tail": 0,
                 "response_messages": 0}
+    response_users = 0
     meta = {"thread_id": None, "cwd": None, "branch": None, "originator": None, "agent": None,
             "history_mode": None, "cli_version": None}
     m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", os.path.basename(path))
@@ -502,6 +513,8 @@ def parse_rollout(path, data):
         elif typ == "response_item":
             if payload.get("type") == "message" and payload.get("role") in ("user", "assistant"):
                 counters["response_messages"] += 1
+                if payload.get("role") == "user" and _owner_text(payload.get("content")):
+                    response_users += 1
         elif typ == "turn_context":
             turn_id = _str(payload.get("turn_id")) or turn_id
             cwd = _str(payload.get("cwd")) or cwd
@@ -560,6 +573,9 @@ def parse_rollout(path, data):
             add("final", last, line_no, ts, None)
             turn_id, cwd = saved_turn, saved_cwd
         finals_by_turn.add(tid)
+    if response_users and not meta["agent"] and not any(m["kind"] == "user" for m in messages):
+        # 持ち主の依頼らしい行はあるのに、読み方の分かる形で 1 件も取れなかった（子のエージェントへの指示は除く）
+        counters["shape_errors"] += response_users
     return meta, messages, counters
 
 
@@ -784,12 +800,15 @@ class Index:
         db.commit()
         if self._has_table("threads_v1"):
             # 旧い表は CODEX_HOME を区別していないので、その会話の本文を持つ CODEX_HOME ごとに行を作る
+            # （名前・作業フォルダ・ブランチは、その CODEX_HOME の記録のものではないので写さない。取り込み直しで入る）
             db.execute("INSERT OR IGNORE INTO threads (thread_id, codex_home, name, cwd, branch, originator, agent, started) "
                        "SELECT thread_id, codex_home, name, cwd, branch, originator, agent, started FROM threads_v1")
-            db.execute("INSERT OR IGNORE INTO threads (thread_id, codex_home, name, cwd, branch, originator, agent, started) "
-                       "SELECT DISTINCT o.thread_id, m.codex_home, o.name, o.cwd, o.branch, "
-                       "o.originator, o.agent, o.started FROM threads_v1 o JOIN messages m ON m.thread_id = o.thread_id")
+            db.execute("INSERT OR IGNORE INTO threads (thread_id, codex_home, originator, agent, started) "
+                       "SELECT DISTINCT o.thread_id, m.codex_home, o.originator, o.agent, o.started "
+                       "FROM threads_v1 o JOIN messages m ON m.thread_id = o.thread_id")
             db.execute("DROP TABLE threads_v1")
+            db.execute("DELETE FROM threads WHERE EXISTS (SELECT 1 FROM forgotten f WHERE f.codex_home = threads.codex_home "
+                       "AND f.thread_id = threads.thread_id)")
             db.commit()
         self._create_fts()
         versions = dict(db.execute("SELECT key, value FROM meta").fetchall())
@@ -1293,8 +1312,8 @@ class Index:
             out.append((score, r))
             if len(out) >= max(limit, RERANK_K if rerank else 0):
                 break
-        score_pairs = sem.reranker() if (sem and rerank) else None
-        if score_pairs is not None and len(out) > 1:
+        score_pairs = sem.reranker() if (sem and rerank and len(out) > 1) else None
+        if score_pairs is not None:
             head, tail = out[:RERANK_K], out[RERANK_K:]
             query = question or " ".join(terms)
             points = score_pairs([(query, rerank_window(r["text"], terms)) for _, r in head])

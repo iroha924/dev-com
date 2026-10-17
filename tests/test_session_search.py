@@ -1958,6 +1958,114 @@ class EleventhReviewTest(_Base):
         self.assertFalse(left)
 
 
+class TwelfthReviewTest(_Base):
+    """9 回目のレビュー（Codex 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_digest_authorization_is_redacted(self):
+        text = 'Authorization: Digest username="admin", realm="test", response="6629fae49393a05397450978507c4ef1"'
+        self.assertNotIn("6629fae49393a05397450978507c4ef1", ss.redact(text))
+        self.assertIn("https://x", ss.redact('curl -H "Authorization: Bearer abcdefghijklmnop1234" https://x'))  # 引用符で止まる
+
+    def _old_threads_table(self, rows):
+        idx = self.idx()
+        with idx.db:
+            idx.db.execute("CREATE TABLE threads_v1 (thread_id TEXT PRIMARY KEY, codex_home TEXT, name TEXT, cwd TEXT, branch TEXT, "
+                           "originator TEXT, agent TEXT, started TEXT)")
+            idx.db.executemany("INSERT INTO threads_v1 (thread_id, codex_home, name, cwd) VALUES (?, ?, ?, ?)", rows)
+        idx.close()
+
+    def test_migration_does_not_bring_back_forgotten_names(self):
+        self.write(T1, paginated(T1, [("旧い表の会話 みみずく", "答え", None)]))
+        self.search("みみずく")
+        self.run_cli("forget", T1)
+        self._old_threads_table([(T1, self.home, "PrivateLegacyName", None)])
+        idx = self.idx()
+        idx.rebuild()
+        idx.ingest(self.home)
+        n = idx.db.execute("SELECT COUNT(*) FROM threads WHERE name = 'PrivateLegacyName'").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 0)
+
+    def test_migration_does_not_copy_names_to_another_home(self):
+        other = os.path.join(self.tmp.name, "codex2")
+        idx = self.idx()
+        with idx.db:
+            idx.db.execute("INSERT INTO messages (codex_home, thread_id, path, line, msg_id, ts, kind, text, norm) "
+                           "VALUES (?, ?, 'p', 1, 'u1', '2026-09-01T01:00:00Z', 'user', 'B の本文', 'b の本文')", (other, T1))
+        idx.close()
+        self._old_threads_table([(T1, self.home, "A_Private_Project", "C:\\a-private")])
+        idx = self.idx()
+        row = idx.db.execute("SELECT name, cwd FROM threads WHERE codex_home = ? AND thread_id = ?", (other, T1)).fetchone()
+        idx.close()
+        self.assertEqual(tuple(row), (None, None))
+
+    def test_user_text_only_in_response_items_is_reported(self):
+        ts = "2026-09-01T01:00:00Z"
+        text = "\n".join([line(ts, "session_meta", {"id": T1}),
+                          line(ts, "response_item", {"type": "message", "role": "user",
+                                                     "content": [{"type": "input_text", "text": "missing_user_quail"}]}),
+                          line(ts, "event_msg", {"type": "task_complete", "last_agent_message": "kept_assistant"})]) + "\n"
+        self.write(T1, text)
+        out = self.search("kept_assistant")
+        self.assertTrue(any("形の分からない発言" in c for c in out["coverage"]), out["coverage"])
+
+    def test_single_result_does_not_load_the_reranker(self):
+        self.write(T1, paginated(T1, [("ひとつだけ当たる よたか", "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+        calls = []
+
+        class Sem:
+            def tokenizer(self):
+                return None
+
+            def embedder(self):
+                return None
+
+            def reranker(self):
+                calls.append(1)
+                return lambda pairs: [0.0] * len(pairs)
+        res, _, _ = idx.search(self.home, ["よたか"], ["user"], sem=Sem())
+        idx.close()
+        self.assertEqual((len(res), calls), (1, []))
+
+    def test_agent_eval_not_found_is_not_correct(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        out = os.path.join(self.tmp.name, "ae")
+
+        class Args:
+            pass
+        args = Args()
+        args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(out, "x.sqlite"), "m", "low", 10
+        q = {"id": "q1", "question": "?", "gold": [T1], "type": "exact"}
+
+        class Done:
+            returncode = 0
+        saved = ae.subprocess.run
+
+        def fake_run(cmd, **kw):
+            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as f:
+                json.dump({"found": False, "thread_id": T1, "answer": "見つかりません", "quote": ""}, f)
+            return Done()
+        ae.subprocess.run = fake_run
+        try:
+            r = ae.run_one(args, "search", q, "wrapper", "schema.json")
+        finally:
+            ae.subprocess.run = saved
+        self.assertFalse(r["correct"])
+
+    def test_byte_chunks_keep_the_whole_text(self):
+        text = "あいう" * 20000 + "abc"
+        chunks = ss._byte_chunks(text, ss.SUDACHI_MAX_BYTES)
+        self.assertEqual("".join(chunks), text)
+        self.assertTrue(all(0 < len(c.encode("utf-8")) <= ss.SUDACHI_MAX_BYTES for c in chunks))
+
+
 class SemanticLayerTest(unittest.TestCase):
     """SudachiPy が入っている環境でだけ、単語の BM25 の経路を確かめる。"""
 
@@ -1986,8 +2094,12 @@ class SemanticLayerTest(unittest.TestCase):
             sem = ss.Semantic()
             idx.fill_words(sem.tokenizer(), home)
             results, _, mode = idx.search(home, ss.parse_query(["キャッシュ"]), ss.DEFAULT_KINDS, sem=sem)
+            done = idx.db.execute("SELECT COUNT(*) FROM word_done").fetchone()[0]
+            words = idx.db.execute("SELECT COUNT(*) FROM words_fts WHERE words_fts MATCH '\"キャッシュ\"'").fetchone()[0]
             self.assertIn("SudachiPy", mode)
             self.assertNotIn("埋め込み", mode)
+            self.assertNotIn("trigram", mode)  # 単語の索引に無い発言を trigram で探していない
+            self.assertEqual((done, words), (2, 1))
             self.assertTrue(results)
             idx.close()
 
