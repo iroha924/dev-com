@@ -338,7 +338,19 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `fix(session-report): 追記と訂正の文に伏せ字をかけ、引数を並びのまま伏せ、終わりの記録の無い操作を残す (T29, T30)`
   - 結果: red を直す前のコードで実測 → FAIL。直した後 `python3 -m unittest tests.test_session_report -k Compare` → OK
 
+- [x] T31: 共有用の題名の伏せ字・引数の引用符・成果物の順序・自分を解消にする誤り・始まりだけの操作の状態を直す（2 回目の全体のレビュー）
+  - 種別: 修正
+  - 計画: S3, S5, S8
+  - 依存: T29（直す対象の直しが要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`, `README.md`
+  - red: `python3 -m unittest tests.test_session_report -k FinalReview2` → 5 件 FAIL（共有用の題名にトークンが出る、つなぎ直しで値の引用符を逃がさない、並行の操作で成果物の古い状態が残る、失敗した操作が自分を解消できる、始まりだけの Web 検索を成功と数える）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 共有用の題名を伏せ字の後から作り、成果物を終わった順に数え、始まりだけの操作を途中にする (T31)`
+  - 結果: red を直す前のコードで実測 → 5 件 FAIL。直した後 `python3 -m unittest discover -s tests` → 400 件 OK（skip 24）、fixtures の check 6 本・render --twice 12 本
+
 ## 記録
+
+- 2026-10-18 / T31 / 2 回目の全体のレビュー（b324e62..1f42edd、high）の 5 件（F1 共有用の題名 P1・F3 成果物の順序 P2・F5 始まりだけの Web 検索 P2 は T29 の直しで入った、F2 コマンドごとの秘密の引数 P1、F4 自分を解消にする P2）。直しが新しい欠陥を生むのがまた続いたので止めて持ち主に聞き、「session-report の中を直し、コマンドごとの規則は一覧へ」と決まった / T31 を足して直し、docker -p などの規則は README の「まだ直していないもの」に書いた（session-search の伏せ字の規則の抜け）。全体のレビューはもう 1 回だけ回し、重い指摘が 0 件なら終える
 
 - 2026-10-18 / T29・T30 / 全体のレビュー（A7、b324e62..cd9e0a5、high）の 4 件（F1 追記と訂正の文に伏せ字が無い P1、F2 引数をつないでから伏せ字 P1、F3 終わりの記録の無い操作が消える P2、F4 比べる道具の 1 対 1 P2）を再現で確かめて受理 / T29・T30 を足して直した。重い指摘が出たので、直した後にもう一度全体のレビューを新しい会話で頼む
 

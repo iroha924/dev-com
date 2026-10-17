@@ -1161,6 +1161,54 @@ class FinalReviewTest(_ReportBase):
         self.assertEqual([o["status"] for o in self.extract(T2)["operations"]], ["ok"])
 
 
+class FinalReview2Test(_ReportBase):
+    TOK = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
+
+    def test_share_title_is_redacted(self):
+        out = self.make()
+        report = sr.read_json(os.path.join(out, "report.json"))
+        ann = good_annotations(report)
+        ann["requests"][0]["text"] = "使う " + self.TOK
+        self.assertNotIn(self.TOK, sr.render_html(sr.build_share_view(report, ann, {})))
+        ann["requests"] = []
+        ann["summary"]["text"] = "使う " + self.TOK
+        self.assertNotIn(self.TOK, sr.render_html(sr.build_share_view(report, ann, {})))
+
+    def test_quotes_inside_arguments_are_escaped_when_joined(self):
+        # つなぎ直した 1 行で値の境目が崩れると、その後の伏せ字が値を読み違える
+        self.assertEqual(sr._redacted_words(["echo", 'a " b', "c\\d"]), 'echo "a \\" b" c\\d')
+
+    def test_artifacts_use_the_last_completed_record(self):
+        r = Rollout(T1).turn("t1").user("u1", "PR を見て")
+        start = lambda oid: r.add("event_msg", {"type": "item_started", "turn_id": "t1",
+                                                "item": {"type": "McpToolCall", "id": oid, "server": "ado", "tool": "get_pr", "status": "inProgress"}})
+        done = lambda oid, status: r.item(mcp("get_pr", oid=oid, result={"content": [{"type": "text", "text": json.dumps(
+            {"pullRequestId": 42, "title": "x", "status": status})}]}))
+        start("m1")
+        start("m2")
+        done("m2", "active")
+        done("m1", "completed")
+        r.end("x")
+        self.write(T1, r.text())
+        art = self.extract(T1)["artifacts"]
+        self.assertEqual([(a["id"], a["status"]) for a in art], [(42, "completed")])
+
+    def test_failed_operation_cannot_resolve_itself(self):
+        out = self.make()
+        report = sr.read_json(os.path.join(out, "report.json"))
+        ann = good_annotations(report)
+        ann["command_notes"] = [{"id": "N1", "failed": "c2", "resolved_by": "c2", "text": "x"}]
+        self.assertTrue(any(e.startswith("N1: resolved_by") for e in sr.check_annotations(ann, report)))
+
+    def test_started_only_web_search_is_incomplete(self):
+        r = Rollout(T1).turn("t1").user("u1", "調べて")
+        r.add("event_msg", {"type": "item_started", "turn_id": "t1", "item": {"type": "WebSearch", "id": "w1", "query": "x",
+                                                                            "action": {"type": "search"}}})
+        r.end(aborted=True)
+        self.write(T1, r.text())
+        self.assertEqual([o["status"] for o in self.extract(T1)["operations"]], ["incomplete"])
+
+
 class ShareTest(_Base):
     def test_share_html_leaves_out_details(self):
         r = Rollout(T1, cwd="C:\\work\\CANARYCWD\\ci-pipelines").turn("t1")

@@ -746,7 +746,12 @@ def _redacted_words(words):
             raise ValueError
     except ValueError:
         return "[REDACTED]"  # 伏せ字で JSON の形が崩れたら、並びごと出さない
-    return " ".join('"%s"' % w if isinstance(w, str) and (" " in w or not w) else str(w) for w in red)
+    def shown(w):
+        w = str(w)
+        if " " in w or '"' in w or not w:  # 値の中の引用符を逃がし、つないだ 1 行で値の境目が崩れないようにする
+            return '"%s"' % w.replace('"', '\\"')
+        return w
+    return " ".join(shown(w) for w in red)
 
 
 def _search_no_match(script, shell):
@@ -1082,7 +1087,7 @@ def _artifacts_in(text):
 
 def collect_operations(data):
     """記録の操作を行の順に並べる。同じ ID の項目は、最後のものを使う（作り直された完了の記録）。"""
-    order, ops, raw_outputs = [], {}, {}
+    order, ops, raw_outputs, done_at = [], {}, {}, {}
     current = None
     legacy = collections.Counter()
     for line_no, raw in ss._byte_lines(data, {"incomplete_tail": 0}):
@@ -1110,8 +1115,12 @@ def collect_operations(data):
         if op is None:
             continue
         key = op["id"] or "L%d" % line_no
-        if et == "item_started" and key in ops:
-            continue  # 始まりの記録は、終わりの記録が無いときだけ使う（状態は incomplete）
+        if et == "item_started":
+            if key in ops:
+                continue  # 始まりの記録は、終わりの記録が無いときだけ使う
+            op["status"] = "incomplete"  # 終わりの記録が無いので、どの種類でも成否は分からない
+        else:
+            done_at[key] = line_no
         op["id"] = key
         op["seq"] = ops[key]["seq"] if key in ops else line_no  # 同じ ID の記録がもう一度来ても、最初の位置に置く
         if key not in ops:
@@ -1123,7 +1132,8 @@ def collect_operations(data):
             raw_outputs[key] = it.get("aggregated_output") if isinstance(it.get("aggregated_output"), str) else None
     operations = [ops[k] for k in order]
     artifacts = {}
-    for op in operations:
+    # 成果物の「最後に見えた状態」は、操作が終わった順に数える（並行の操作は、始まった順と終わった順が違う）
+    for op in sorted(operations, key=lambda o: done_at.get(o["id"], o["seq"])):
         for kind, num, title, status in _artifacts_in(raw_outputs.get(op["id"])):
             a = artifacts.setdefault((kind, num), {"kind": kind, "id": num, "title": None, "status": None, "seen_at": None,
                                                    "operations": []})
@@ -1484,10 +1494,15 @@ def check_annotations(ann, report):
     for c in ann["chapters"]:
         message(c["id"], "from", c["from"])
         message(c["id"], "to", c["to"])
+    op_status = {op["id"]: op["status"] for op in report["operations"]}
     for n in ann["command_notes"]:
         for field in ("failed", "resolved_by"):
             if n[field] is not None and n[field] not in op_ids:
                 errors.append("%s: %s の %s が操作に無い。操作の ID を書く" % (n["id"], field, n[field]))
+        res = n["resolved_by"]
+        if res is not None and res in op_ids and (res == n["failed"] or op_status.get(res) not in ("ok", "no_match")):
+            errors.append("%s: resolved_by の %s は、失敗を解消した（成功した）別の操作ではない。成功した操作の ID を書くか null にする"
+                          % (n["id"], res))
     for mid in owner_ids:
         values = ann["owner_messages"].get(mid)
         if not values:
@@ -1945,7 +1960,7 @@ def build_share_view(report, ann, overrides, stale=False):
         "renderer_version": full["renderer_version"], "share": True,
         # 題名は会話の本文（最初の発言・会話から付いたスレッドの名前）から作らず、Codex が書いた要点から作る
         "meta": dict(full["meta"], cwd=re.split(r"[\\/]", cwd.rstrip("\\/"))[-1] if cwd else None,
-                     title=_clip(ann["requests"][0]["text"] if ann["requests"] else ann["summary"]["text"], 60) or "会話のレポート"),
+                     title=_clip(full["requests"][0]["text"] if full["requests"] else full["summary"], 60) or "会話のレポート"),
         "notices": [SHARE_NOTICE] + full["notices"], "summary": full["summary"], "requests": full["requests"],
         "questions": full["questions"], "decisions": full["decisions"], "lessons": full["lessons"], "issues": full["issues"],
         "flow": flow, "chat": None, "coverage": full["coverage"], "counts": {"messages": full["counts"]["messages"]},

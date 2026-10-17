@@ -425,6 +425,7 @@ python3 evals/session-report/fixtures.py render --twice  # 手元用と共有用
 - 古い形式（発言に ID の無い記録）の会話を、続きだけを書く revert でつないだとき、発言の参照（`L<行>-<rollout の ID>`）が session-search の参照と一致しない。続きだけを書く revert は新しい形式の記録にしか無いので、起きない見込み。
 - ADO の MCP の操作の目的（参照・作成・更新・削除）は、tool の名前を確かめるまで「不明」と出る（`MCP_PURPOSE` の表が空）。会社の PC の probe で tool の名前が分かったら埋める。成果物の PR と Work Item は、結果の中身から拾う。
 - トークン数と利用枠は出さない。probe で記録の数え方を確かめてから足す。
+- 伏せ字の漏れ: コマンドごとの秘密の引数（`docker login -p`・`az login -p`・`curl -u`・`ssh-keygen -N` の値）。伏せ字の規則は session-search のものを使うので、session-search の規則に足すときに一緒に直る。
 
 ## skill の詳細
 
