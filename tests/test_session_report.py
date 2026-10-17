@@ -967,13 +967,30 @@ class OverrideTest(_ReportBase):
         code, _, err = self.run_cli("override", "R2", "--dir", out, "--status", "未確認", "--reason", "PR を見ていない")
         self.assertEqual(code, 0, err)
         ov = sr.read_json(os.path.join(out, "overrides.json"))
-        self.assertEqual(ov["R1.2"], {"status": "できた", "reason": "CI の結果を持ち主が見た", "by": "持ち主", "original": "未確認"})
+        self.assertEqual(ov["R1.2"], {"status": "できた", "reason": "CI の結果を持ち主が見た", "by": "持ち主", "original": "未確認",
+                                      "target": "CI で確かめる"})
         eff = sr.effective_statuses(sr.read_json(os.path.join(out, "annotations.json")), ov)
         self.assertEqual(eff["R2"], {"status": "未確認", "original": "できた", "reason": "PR を見ていない", "overridden": True})
         self.assertEqual(eff["R1"]["status"], "一部")  # 依頼の状態は Codex の条件の判定から集める（訂正した条件は R1 に効かない）
         code, _, _ = self.run_cli("override", "R2", "--dir", out, "--clear")
         self.assertEqual(code, 0)
         self.assertNotIn("R2", sr.read_json(os.path.join(out, "overrides.json")))
+
+    def test_old_override_is_not_applied_to_a_changed_item(self):
+        out = self.setup_ann()
+        self.run_cli("override", "R1.2", "--dir", out, "--status", "できた", "--reason", "CI を見た")
+        ann = sr.read_json(os.path.join(out, "annotations.json"))
+        ov = sr.read_json(os.path.join(out, "overrides.json"))
+        # 追記を作り直して、条件の並びが変わった（R1.2 が別の条件になった）
+        ann["requests"][0]["criteria"].insert(0, {"text": "新しい条件", "origin": "Codex", "status": "未確認", "basis": "", "evidence": []})
+        eff = sr.effective_statuses(ann, ov)
+        self.assertEqual((eff["R1.2"]["status"], eff["R1.2"]["overridden"]), ("できた", False))
+        self.assertEqual(sr.stale_overrides(ann, ov), ["R1.2"])
+        # 同じ条件で Codex の判定だけが変わったときは、訂正したときの元の判定を出す
+        ann = sr.read_json(os.path.join(out, "annotations.json"))
+        ann["requests"][0]["criteria"][1]["status"] = "一部"
+        eff = sr.effective_statuses(ann, ov)
+        self.assertEqual((eff["R1.2"]["status"], eff["R1.2"]["original"]), ("できた", "未確認"))
 
     def test_override_rejects_bad_input(self):
         out = self.setup_ann()

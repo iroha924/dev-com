@@ -1499,25 +1499,39 @@ QUESTION_STATES = ("答えた", "一部回答", "未回答")
 
 
 def status_targets(ann):
-    """直せる項目の ID と、その状態に使える値と、Codex の判定（依頼は条件から集めた状態）。"""
+    """直せる項目の ID ごとの (状態に使える値, Codex の判定, 対象の本文)。依頼の判定は条件から集めた状態。"""
     out = {}
     for r in ann.get("requests") or []:
-        out[r["id"]] = (CRITERIA_STATES, request_status(r))
+        out[r["id"]] = (CRITERIA_STATES, request_status(r), r.get("text"))
         for n, c in enumerate(r.get("criteria") or [], 1):
-            out["%s.%d" % (r["id"], n)] = (CRITERIA_STATES, c.get("status"))
+            out["%s.%d" % (r["id"], n)] = (CRITERIA_STATES, c.get("status"), c.get("text"))
     for q in ann.get("questions") or []:
-        out[q["id"]] = (QUESTION_STATES, q.get("status"))
+        out[q["id"]] = (QUESTION_STATES, q.get("status"), q.get("text"))
     return out
+
+
+def _applies(o, target):
+    """訂正が今の項目に効くか。追記を作り直して、同じ ID が別の本文の項目になっていたら効かせない。"""
+    return bool(o) and o.get("target") == ss.redact(target or "")
 
 
 def effective_statuses(ann, overrides):
-    """項目 ID ごとの {status, original, reason}。訂正があれば status は訂正の値で、original に Codex の判定を残す。"""
+    """項目 ID ごとの {status, original, reason, overridden}。効く訂正があれば status は訂正の値で、original は
+    訂正したときに保存した Codex の判定。"""
     out = {}
-    for item_id, (_, original) in status_targets(ann).items():
+    for item_id, (_, original, target) in status_targets(ann).items():
         o = overrides.get(item_id)
-        out[item_id] = {"status": o["status"] if o else original, "original": original,
-                        "reason": o["reason"] if o else None, "overridden": bool(o)}
+        if _applies(o, target):
+            out[item_id] = {"status": o["status"], "original": o.get("original"), "reason": o["reason"], "overridden": True}
+        else:
+            out[item_id] = {"status": original, "original": original, "reason": None, "overridden": False}
     return out
+
+
+def stale_overrides(ann, overrides):
+    """今の追記に効かない訂正の ID（項目が無い、または本文が変わった）。"""
+    targets = status_targets(ann)
+    return sorted(k for k, o in overrides.items() if k not in targets or not _applies(o, targets[k][2]))
 
 
 def cmd_override(args):
@@ -1535,7 +1549,7 @@ def cmd_override(args):
     if args.clear:
         overrides.pop(args.item_id, None)
     else:
-        states, original = targets[args.item_id]
+        states, original, target = targets[args.item_id]
         if args.status not in states:
             print("%s の状態は %s のどれか" % (args.item_id, "・".join(states)), file=sys.stderr)
             return 2
@@ -1543,7 +1557,7 @@ def cmd_override(args):
             print("--reason に、直す理由を書く", file=sys.stderr)
             return 2
         overrides[args.item_id] = {"status": args.status, "reason": ss.redact(args.reason.strip()), "by": "持ち主",
-                                   "original": original}
+                                   "original": original, "target": ss.redact(target or "")}
     write_json(path, overrides)
     print("書いた: %s（訂正 %d 件）" % (path, len(overrides)))
     return 0

@@ -232,6 +232,16 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `test(session-report): 作り物の会話 6 本と正解の追記を足す`
   - 結果: `python3 evals/session-report/fixtures.py check` → 6 本とも「違反 0 件」。`python3 -m unittest tests.test_session_report -k Fixtures` → OK
 
+- [x] T25: 訂正を直した対象の本文と結び付け、訂正したときの元の判定を出す
+  - 種別: 修正
+  - 計画: S6
+  - 依存: T06（直す対象の override が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Override` → 2 件 FAIL（条件の並びが変わると古い訂正が別の条件に付く、元の判定が今の追記の判定になる）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 訂正を直した対象の本文と結び付け、訂正したときの元の判定を出す`
+  - 結果: red を直す前のコードで実測 → 2 件 FAIL。直した後 `python3 -m unittest discover -s tests` → 377 件 OK（skip 24）
+
 ## P4: HTML にする
 
 決めたデザインで、手元用と共有用の単体の HTML を作れるようになる。
@@ -273,6 +283,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T25 / T06 のレビュー（ec1863c）の 2 件（F1 追記を作り直すと古い訂正が別の項目に付く P2、F2 元の判定が今の追記の判定になる P2）を再現で確かめて受理 / T25 を足して直した。訂正に対象の本文（target）を保存し、今の本文と違えば効かせず、表示で知らせる（stale_overrides）
 
 - 2026-10-18 / T07 / 変更の欄に `tests/test_session_report.py` を足した（前: fixtures.py と gold/、後: それに加えてテスト）。正解の追記が会話とずれないように、テストから fixtures の check を流すため。長い会話（持ち主の発言 45 件）の正解は形が規則的なので、組み立てて JSON にした
 
