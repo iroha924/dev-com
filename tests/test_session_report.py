@@ -1260,7 +1260,7 @@ class WeekTest(_Base):
         self.assertEqual(sr.check_week(self.good(week), week), [])
         cases = [
             (lambda w: w["tasks"][0].update(sessions=[]), "%s: 週の会話がどのタスクにも入っていない" % T1),
-            (lambda w: w["tasks"][0].update(refs=[T1 + ":D9"]), "T1: refs の %s:D9 が週の材料に無い" % T1),
+            (lambda w: w["tasks"][0].update(refs=[T1 + ":D9"]), "T1: refs の %s:D9 が、このタスクの会話の材料に無い" % T1),
             (lambda w: w["tasks"][0].update(deliverables=[{"kind": "PR", "id": "482"}]), "T1: 成果物 PR #482 が"),
             (lambda w: w["tasks"][0].update(points=[]), "T1: 話すこと（points）は 1〜5 点"),
             (lambda w: w.update(source_digest="0"), "source_digest:"),
@@ -1272,6 +1272,48 @@ class WeekTest(_Base):
                 w = self.good(week)
                 mutate(w)
                 self.assertTrue(any(e.startswith(want) for e in sr.check_week(w, week)), sr.check_week(w, week))
+
+    def test_week_check_ties_work_items_and_refs_to_the_task_sessions(self):
+        wdir, _ = self.make_week()
+        week = sr.read_json(os.path.join(wdir, "week.json"))
+        w = self.good(week)
+        w["tasks"][0]["work_item"] = "999999"
+        self.assertTrue(any(e.startswith("T1: Work Item #999999 が") for e in sr.check_week(w, week)))
+        week["sessions"].append(dict(week["sessions"][0], id=T2 + "x", items={"D1": "決定: 別の会話"}))
+        w = self.good(week)
+        w["tasks"][0]["refs"] = [T2 + "x:D1"]
+        w["source_digest"] = week["digest"]
+        self.assertTrue(any(e.startswith("T1: refs の %s" % (T2 + "x:D1")) for e in sr.check_week(w, week)))
+
+    def test_week_view_links_and_latest_artifact_state(self):
+        week = {"since": "2026-10-12", "until": "2026-10-16", "tz_offset_minutes": 540, "digest": "d", "sessions": [
+            {"id": "a", "state": "追記あり", "started": "2026-10-12T01:00:00Z", "title": "月", "work_items": ["1287"], "items": {},
+             "artifacts": [{"kind": "Work Item", "id": 1287, "title": "x", "status": "Active"}], "report_html": "/no/such/a/report.html"},
+            {"id": "b", "state": "追記あり", "started": "2026-10-16T01:00:00Z", "title": "金", "work_items": ["1287"], "items": {},
+             "artifacts": [{"kind": "Work Item", "id": 1287, "title": "x", "status": "Resolved"}], "report_html": "/no/such/b/report.html"}]}
+        w = {"title": "週", "tasks": [{"id": "T1", "work_item": "1287", "title": "t", "one_liner": "o", "state": "できた", "points": ["p"],
+                                      "sessions": ["a", "b"], "deliverables": [{"kind": "Work Item", "id": "1287"}], "refs": [], "failures": [],
+                                      "lessons": []}], "lessons": [], "troubles": [], "carry_over": [], "demo_order": []}
+        view = sr.build_week_view(week, w, "/no/such/week")
+        self.assertEqual(view["tasks"][0]["deliverables"][0]["status"], "Resolved")
+        self.assertEqual([s["href"] for s in view["tasks"][0]["sessions"]], ["../a/report.html", "../b/report.html"])
+        real = os.path.relpath
+        os.path.relpath = lambda p, start: (_ for _ in ()).throw(ValueError("path is on mount 'C:', start on mount 'D:'"))
+        try:
+            view = sr.build_week_view(week, w, "/no/such/week")
+        finally:
+            os.path.relpath = real
+        self.assertTrue(view["tasks"][0]["sessions"][0]["href"].startswith("file://"))
+
+    def test_unreadable_records_are_reported(self):
+        self.write(T1, self.session(T1, "2026-10-12T01:00:00Z").text(), day="2026-10-12")
+        real = sr.ss.read_rollout_bytes
+        sr.ss.read_rollout_bytes = lambda p: None
+        try:
+            sessions, unreadable = sr.week_sessions(self.home, "2026-10-12", "2026-10-18", with_unreadable=True)
+        finally:
+            sr.ss.read_rollout_bytes = real
+        self.assertEqual((sessions, len(unreadable)), ([], 1))
 
     def test_week_render(self):
         wdir, _ = self.make_week()
