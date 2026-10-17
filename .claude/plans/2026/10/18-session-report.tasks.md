@@ -184,6 +184,16 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `fix(session-report): input の未決の項目に伏せ字をかけ、同じ ID の操作を最初の位置に置き、見出しを含めて上限に収める`
   - 結果: red を直す前のコードで実測 → 2 件 FAIL。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 69 件 OK（50,000 文字の発言 3 件と未決の項目 100 件で、どの input も 60,000 文字以内）
 
+- [x] T22: 切れ端を捨てる条件を範囲の端だけにし、ado.ps1 の実行の形と引数を表のとおりにだけ読む
+  - 種別: 修正
+  - 計画: S3
+  - 依存: T20（直す対象の切り詰めと ado.ps1 の読み方が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Operation` → 2 件 FAIL（伏せ字で縮んだ範囲で秘密の切れ端が残る、echo -File ado.ps1 get と省略した引数の名前を ADO の参照と分類）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 範囲の端をまたぐ語だけを捨て、ado.ps1 は実行の形と引数の名前が表のとおりのときだけ分類する`
+  - 結果: red を直す前のコードで実測 → 2 件 FAIL、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 69 件 OK
+
 - [ ] T06: override
   - 種別: 追加
   - 計画: S6
@@ -241,6 +251,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T22 / T20 の見直し（909bc5d、high）の 3 件（F1 伏せ字で縮むと切れ端が残る P2（T20 の直しで入った）、F2 省略した引数の名前 P2、F3 別のプログラムの引数の ado.ps1 P2）。操作の分類の直しで新しい欠陥が入るのが 2 回続いたので止めて持ち主に聞き、「形で直して往復は閉じる」と決まった / F1 は「伏せ字をかけた範囲の端をまたぐ語だけを捨てる」に、F2・F3 は「表に無い形は不明」に寄せて T22 で直した。操作の分類のレビューの往復はここで閉じ、直しは最後の全体のレビュー（A7）で見てもらう
 
 - 2026-10-18 / T21 / T04 のレビュー（ec379e8）の 3 件（F1 未決の項目の伏せ字 P2、F2 同じ ID の操作の位置 P2、F3 見出しを含めると上限を超える P2）を再現で確かめて受理 / T21 を足して直した。未決の項目は 3,000 文字まで書き、超えた分は件数だけにした。1 件で上限を超える発言は分けない
 

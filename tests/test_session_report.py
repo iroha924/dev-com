@@ -629,6 +629,15 @@ class OperationTest(_Base):
         self.assertFalse(self.op(cmd("python x.py", 0))["external"])
         # ado.ps1 を実行していないコマンドは、ADO の操作として分類しない
         self.assertFalse(self.op(cmd("git rm ado.ps1 get", 0))["external"])
+        self.assertFalse(self.op(cmd("echo -File ado.ps1 get _apis/projects", 0))["external"])
+        self.assertFalse(self.op(cmd("git diff -- . ado.ps1 get", 0))["external"])
+        # 表に無い引数の名前（省略した名前など）があれば、目的は不明
+        abbr = self.op(cmd('.\\ado.ps1 write _apis/wit/workitems/1 -Method PATCH -OutF "-DryRun" -Approve abc', 0,
+                           shell=("pwsh", "-NoProfile", "-Command")))
+        self.assertEqual(abbr["purpose"], "不明")
+        for script in ("pwsh ./ado.ps1 get _apis/projects", "powershell -NoProfile -File ado.ps1 get _apis/projects"):
+            with self.subTest(script=script):
+                self.assertEqual(self.op(cmd(script, 0))["purpose"], "参照")
         self.assertEqual(self.op(mcp("x", result={"content": [], "isError": True}))["status"], "failed")
 
     def test_files_web_and_images(self):
@@ -680,6 +689,12 @@ class OperationTest(_Base):
         self.assertNotIn("shortsecret", json.dumps(self.op(cmd("echo " + huge, 0))))
         self.assertNotIn("shortsecret", json.dumps(self.op(cmd("x", 0, output="A " * 900 + huge + " Z" * 30000))))
         self.assertNotIn("shortsecret", json.dumps(self.op(cmd("x", 0, output="A " * 30000 + huge + " Z" * 900))))
+        # 伏せ字で文字列が縮んでも、範囲の端をまたぐ語の切れ端は捨てる
+        shrink = "password=" + "a" * 20200 + " https://user:shortsecret" + "b" * 21000 + "@host/"
+        self.assertNotIn("shortsecret", sr._short(shrink))
+        self.assertNotIn("shortsecret", json.dumps(self.op(cmd("echo " + shrink, 0))))
+        tail = "https://user:shortsecret" + "b" * 21000 + "@host/ " + "password=" + "a" * 20200
+        self.assertNotIn("shortsecret", json.dumps(self.op(cmd("x", 0, output="A " * 30000 + tail))))
         short = self.op(cmd("echo", 0, output="token=Sup3rS3cretValue9"))
         self.assertNotIn("Sup3rS3cretValue9", json.dumps(short))
 

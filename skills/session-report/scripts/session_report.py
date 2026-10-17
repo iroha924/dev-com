@@ -778,25 +778,48 @@ _ADO_VALUE_PARAMS = {"-method", "-bodyfile", "-contenttype", "-apiversion", "-ou
                      "-accept", "-timeoutsec"}
 
 
+def _ado_script_at(words):
+    """ado.ps1 を実行している形なら、その語の位置。ほかの形（別のプログラムの引数にある ado.ps1 など）は None。
+
+    認める形: 先頭の ado.ps1、先頭の & か . の直後、pwsh / powershell の -File の直後か最初の引数（-NoProfile などの
+    オプションと、値を取る -ExecutionPolicy の値は飛ばす）。
+    """
+    if not words:
+        return None
+    if _base(words[0]) == "ado.ps1":
+        return 0
+    if words[0] in ("&", ".") and len(words) > 1 and _base(words[1]) == "ado.ps1":
+        return 1
+    if _base(words[0]) not in ("pwsh", "powershell"):
+        return None
+    i = 1
+    while i < len(words):
+        low = words[i].lower()
+        if low == "-file":
+            return i + 1 if i + 1 < len(words) and _base(words[i + 1]) == "ado.ps1" else None
+        if low in ("-executionpolicy", "-ep"):
+            i += 2
+            continue
+        if low.startswith("-"):
+            i += 1
+            continue
+        return i if _base(words[i]) == "ado.ps1" else None
+    return None
+
+
 def _ado_purpose(words):
     """ado.ps1 の呼び出し（powershell -File ...ado.ps1 <mode> <path> [-Method ...] [-DryRun]）の目的。
 
-    ado.ps1 を実行している形（先頭、-File の後、& や . の後、pwsh / powershell の最初の引数）だけを見る。
+    引数の名前が表（_ADO_VALUE_PARAMS と -DryRun）とそのまま同じときだけ読む。ほかの名前（省略した名前など）が
+    あれば、どの引数かを決められないので目的は不明。
     """
-    at = None
-    for i, w in enumerate(words):
-        if _base(w) != "ado.ps1":
-            continue
-        prev = words[i - 1].lower() if i else ""
-        if i == 0 or prev in ("-file", "&", ".") or (i == 1 and _base(prev) in ("pwsh", "powershell")):
-            at = i
-        break
+    at = _ado_script_at(words)
     if at is None or at + 1 >= len(words):
         return None
     mode = words[at + 1].lower()
     rest = words[at + 2:]
     path = rest[0] if rest and not rest[0].startswith("-") else ""
-    method, dry_run, i = None, False, 1 if path else 0
+    method, dry_run, unknown, i = None, False, False, 1 if path else 0
     while i < len(rest):
         low = rest[i].lower()
         if low in _ADO_VALUE_PARAMS:
@@ -806,9 +829,13 @@ def _ado_purpose(words):
             continue
         if low == "-dryrun":
             dry_run = True
+        elif low.startswith("-"):
+            unknown = True
         i += 1
     info = {"route": "command", "tool": "ado.ps1 " + mode, "method": method, "path": path}
-    if mode in ("get", "query", "preview"):
+    if unknown:
+        info["purpose"] = "不明"
+    elif mode in ("get", "query", "preview"):
         info["purpose"] = "参照"
     elif mode == "write" and dry_run:
         info["purpose"] = "参照"  # 承認のハッシュを出すだけで送らない
@@ -825,35 +852,36 @@ def _mcp_purpose(it):
     return MCP_PURPOSE.get((it.get("server"), it.get("tool")), "不明")
 
 
-def _head(red, n, whole=True):
+def _cut_in_run(text, at):
+    """text を at の位置で切ると、語（空白を含まない一続きの文字）の途中になるか。"""
+    return 0 < at < len(text) and not text[at].isspace() and not text[at - 1].isspace()
+
+
+def _head(red, n, edge_cut=False):
     """伏せ字をかけた red の先頭の n 文字。
 
-    red が全文でなく（whole=False、余白付きの範囲）、切れ目の語（空白を含まない一続きの文字）が範囲の端まで続くなら、
-    伏せ字はその語の全体を見ていないので、語の切れ端を捨てる（余白より長い秘密の切れ端を残さない）。
+    edge_cut は、伏せ字をかけた範囲の終わりが元の文字列の語の途中だったか。そのとき範囲の終わりの語は、伏せ字が全体を
+    見ていないので捨てる（余白より長い秘密の切れ端を残さない）。範囲の中に収まった語は伏せ字が全体を見ているので、
+    n の位置で切ってよい。
     """
-    if len(red) <= n:
-        return red
-    s = red[:n]
-    if not whole and not red[n].isspace() and not re.search(r"\s", red[n:]):
-        s = re.sub(r"\S+\Z", "", s)
-    return s
+    if edge_cut:
+        red = re.sub(r"\S+\Z", "", red)
+    return red[:n]
 
 
-def _tail(red, n, whole=True):
-    """伏せ字をかけた red の末尾の n 文字。語の切れ端の扱いは _head と同じ。"""
+def _tail(red, n, edge_cut=False):
+    """伏せ字をかけた red の末尾の n 文字。edge_cut は範囲の始まりが語の途中だったか（_head と同じ扱い）。"""
     if n <= 0:
         return ""
-    if len(red) <= n:
-        return red
-    s = red[-n:]
-    if not whole and not red[-n - 1].isspace() and not re.search(r"\s", red[:-n]):
-        s = re.sub(r"\A\S+", "", s)
-    return s
+    if edge_cut:
+        red = re.sub(r"\A\S+", "", red)
+    return red[-n:]
 
 
 def _short(text):
     """操作の対象（コマンドの文・検索語）を、伏せ字をかけてから TARGET_LIMIT 文字に切る。"""
-    return _head(ss.redact(text[:TARGET_LIMIT + REDACT_MARGIN]), TARGET_LIMIT, whole=len(text) <= TARGET_LIMIT + REDACT_MARGIN)
+    window = TARGET_LIMIT + REDACT_MARGIN
+    return _head(ss.redact(text[:window]), TARGET_LIMIT, edge_cut=_cut_in_run(text, window))
 
 
 def _cut(text, head=OUTPUT_HEAD, tail=OUTPUT_TAIL):
@@ -870,8 +898,9 @@ def _cut(text, head=OUTPUT_HEAD, tail=OUTPUT_TAIL):
             return red, False, len(text)
         start, end = _head(red, head), _tail(red, tail)
     else:
-        start = _head(ss.redact(text[:head + REDACT_MARGIN]), head, whole=False)
-        end = _tail(ss.redact(text[-(tail + REDACT_MARGIN):]), tail, whole=False)
+        start = _head(ss.redact(text[:head + REDACT_MARGIN]), head, edge_cut=_cut_in_run(text, head + REDACT_MARGIN))
+        end = _tail(ss.redact(text[-(tail + REDACT_MARGIN):]), tail,
+                    edge_cut=_cut_in_run(text, len(text) - tail - REDACT_MARGIN))
     return start + "\n…（約 %d 文字を省略）…\n" % (len(text) - head - tail) + end, True, len(text)
 
 
