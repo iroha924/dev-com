@@ -22,13 +22,15 @@ base: main
 
 会社の PC で持ち主が probe を流し、記録の形を中身を出さずに確かめられるようになる。
 
-- [ ] T01: 共通の土台と probe
+- [x] T01: 共通の土台と probe
   - 種別: 追加
   - 計画: S1
   - 依存: なし
   - 変更: `skills/session-report/scripts/session_report.py`, `skills/session-report/SKILL.md`, `skills/session-report/agents/openai.yaml`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK（作り物の記録に入れた目印の文字列が probe の出力に無い、出力の全行がキー名・型・件数の形）
   - コミット: `feat(session-report): 記録の形を中身を出さずに数える probe を足す`
+  - 結果: `python3 -m unittest tests.test_session_report tests.test_layout` → 20 件 OK。`python3 -m unittest discover -s tests` → この Mac 331 件 OK（skip 24）、コンテナ（Python 3.11）331 件 OK（skip 3）
+  - 結果: `session_report.py probe` → この Mac の記録 1,376 本で終了コード 0、426 行の全部が「区分・名前・件数」の形
 
 ## P2: 記録から機械で取り出す
 
@@ -127,3 +129,6 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T01 / 目印を type の欄にも入れたら probe の出力に出た。type・phase・status・MCP の名前は Codex のコードと設定が決める値なので出す（英数字 40 文字まで）と決め、目印は本文・コマンド・出力・パス・引数・検索語・差分・作業フォルダ・ブランチに入れた / テストと probe の説明に書いた
+- 2026-10-18 / T01 / この Mac の記録で、添付の画像 45 件の本体が data URL で記録の中にある。同じ ID の item_completed が 167 件ある / T02・T03 の抽出で、画像の本体を捨てることと、同じ ID を 1 つにまとめることを扱う
