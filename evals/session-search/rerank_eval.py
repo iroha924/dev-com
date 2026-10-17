@@ -65,19 +65,21 @@ def main():
     base = []
     for q in qs:
         terms = ss.parse_query(q["keywords"])
-        res, _, _ = idx.search(home, terms, ss.DEFAULT_KINDS, question=q["question"], limit=args.k, sem=sem, rerank=False)
+        res, _, _ = idx.search(home, terms, ss.DEFAULT_KINDS, question=q["question"], limit=max(args.k, 100), sem=sem,
+                               rerank=False)
         base.append((q, terms, [r for _, r in res]))
-    report("並べ直しなし（上位 %d 件）" % args.k, [rows for _, _, rows in base], base)
+    report("並べ直しなし", [rows for _, _, rows in base], base)
     from sentence_transformers import CrossEncoder
     for path in args.models.split(","):
         model = CrossEncoder(path, max_length=512, device="cpu")
         times, ranked = [], []
         for q, terms, rows in base:
-            pairs = [(q["question"], ss.rerank_window(r["text"], terms, args.window)) for r in rows]
+            head, tail = rows[:args.k], rows[args.k:]
+            pairs = [(q["question"], ss.rerank_window(r["text"], terms, args.window)) for r in head]
             start = time.time()
             scores = model.predict(pairs, batch_size=16, show_progress_bar=False) if pairs else []
             times.append(time.time() - start)
-            ranked.append([rows[i] for i in sorted(range(len(rows)), key=lambda i: -scores[i])])
+            ranked.append([head[i] for i in sorted(range(len(head)), key=lambda i: -scores[i])] + tail)
         name = os.path.basename(path.rstrip("/").split("/snapshots/")[0]).replace("models--", "")
         report("%s（並べ直しの時間の中央値 %.2f 秒）" % (name, statistics.median(times) if times else 0), ranked, base)
 

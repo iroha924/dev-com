@@ -95,7 +95,8 @@ _ENV_NAMES = [
     ("(?i)", r"(?:[a-z0-9]+_)*(?:access|account|storage|subscription|private|master|shared|signing|encryption|client|app|api|"
              r"function|functions|host|service|sas|auth|admin|deploy|ssh)_key(?:_[a-z0-9]+)*"),
 ]
-_DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"'     # "..."（\" と `" は閉じる引用符ではない。改行も含める）
+_DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"' 
+_DQ_PS = r'"(?:[^"`]|`.){1,100000}"'  # PowerShell の "..."（\ は逃がしの文字ではない。逃がしはバッククォートだけ）    # "..."（\" と `" は閉じる引用符ではない。改行も含める）
 _SQ = r"'(?:[^']|''){1,100000}'(?!')"         # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
 
 
@@ -113,22 +114,28 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(\$(?:env:)?\w*(?:" + _KEY_NAME + "|" + _SECRET_WORD + r")\w*[ \t]*=[ \t]*)(\"(?:[^\"`]|`.){1,100000}\")"),
      _keep_quote),
     # Python の代入: password = 'abc\'def'（$ の付かない名前は、\' を閉じる引用符と見ない。$ の付く PowerShell は後の規則）
-    (re.compile(r"(?i)(?<![\w$])((?:[a-z_]\w*?)?" + _KEY_NAME + r"[ \t]*:?=[ \t]*)('(?:[^'\\\n]|\\.)*')"), _keep_quote),
+    (re.compile(r"(?i)(?<![\w$])((?:[a-z_]\w*?)?" + _KEY_NAME + r"[ \t]*:?=[ \t]*(?:[rbuf]{1,2}(?=['\"]))?)('(?:[^'\\\n]|\\.)*')"),
+     _keep_quote),
+    (re.compile(r"(?i)([\"'](?:[a-z_]\w*?)?" + _KEY_NAME + r"[\"'][ \t]*:[ \t]*(?:[rbuf]{1,2}(?=['\"]))?)('(?:[^'\\\n]|\\.)*'|"
+                r"\"(?:[^\"\\\n]|\\.)*\")"), _keep_quote),
     # Authorization ヘッダーと Bearer トークン
     # Authorization ヘッダー: 方式の名前（Basic・SharedKey など、知らないものも）を含めて、行の終わりか引用符まで伏せる
     (re.compile(r"(?i)(authorization[\"']?\]?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(authorization[\"']?\]?[ \t]*[:=][ \t]*)(?![ \t\"'])((?:=\"[^\"\r\n]*\"|='[^'\r\n]*'|[^\r\n\"']){3,})"), r"\1[REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
     # PowerShell: パイプで渡す '...' | ConvertTo-SecureString、引数の '...'・"..."・引用符なし、-Password などの引数
-    (re.compile(r"(?i)(" + _DQ + "|" + _SQ + r")(\s*\)?\s*\|\s*ConvertTo-SecureString)"), r"'[REDACTED]'\2"),
-    (re.compile(r"(?i)(ConvertTo-SecureString\b[^'\"\n|;]*?)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _DQ_PS + "|" + _SQ + r")(\s*\)?\s*\|\s*ConvertTo-SecureString)"), r"'[REDACTED]'\2"),
+    (re.compile(r"(?i)(ConvertTo-SecureString\b[^'\"\n|;]*?)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?\s)(?=[^\s'\"|;-])([^\s|;]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?-String(?:\s+|:))([^\s'\"|;]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(-" + _SECRET_KEYS + r"\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(-" + _SECRET_KEYS + r"\s+)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
     # 引用符なしの引数: -Password X / --password X / --token=X / az devops login --token X
     (re.compile(r"(?i)((?:^|\s)--?(?:password|passwd|pwd|secret|token|pat|api[_-]?key|access[_-]?token|client[_-]?secret|"
                 r"personalaccesstoken|securepassword|passphrase)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(-(?:personalaccesstoken|securepassword|passphrase)\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(-(?:personalaccesstoken|securepassword|passphrase)\s+)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
+    # PowerShell の $headers.Add("Authorization", "Basic ...")
+    (re.compile(r"(?i)(\.Add\(\s*[\"'](?:Authorization|Ocp-Apim-Subscription-Key|x-functions-key|x-api-key)[\"']\s*,\s*)"
+                r"(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
     # 環境変数に入れる書き方: os.environ["X_TOKEN"] = / setx X_PAT v / SetEnvironmentVariable("X_TOKEN", v) / Set-Item Env:X -Value v
     (re.compile(r"(?i)(environ\[[\"'][^\"'\]\n]*" + _SECRET_WORD + r"[^\"'\]\n]*[\"']\][ \t]*=[ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(environ\[[\"'][^\"'\]\n]*" + _SECRET_WORD + r"[^\"'\]\n]*[\"']\][ \t]*=[ \t]*)(?![\"'])([^\s;,]+)"), r"\1[REDACTED]"),
@@ -189,8 +196,8 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(\bnet\s+use\s+(?:[a-z]:\s+)?\\\\\S+\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(\bnet\s+use\s+(?:[a-z]:\s+)?\\\\\S+\s+)(?![/\"'])(\S+)"), r"\1[REDACTED]"),
     # nuget.config などの XML: <add key="ClearTextPassword" value="X" /> / <password>X</password>
-    (re.compile(r"(?i)(key=([\"'])(?:ClearTextPassword|Password|Token|ApiKey)\2\s+value=([\"']))((?:(?!\3).)*)"),
-     r"\1[REDACTED]"),
+    (re.compile(r"(?i)<add\b[^<>]*\bkey\s*=\s*[\"'](?:ClearTextPassword|Password|Token|ApiKey)[\"'][^<>]*>"),
+     lambda m: re.sub(r"(?i)(\bvalue\s*=\s*([\"']))((?:(?!\2).)*)", r"\1[REDACTED]", m.group(0))),
     (re.compile(r"(?i)(<(password|clearTextPassword|token|apiKey)>)([^<]*)(</\2>)"), r"\1[REDACTED]\4"),
     # PowerShell の here-string: $password = @"...\n"@
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
@@ -205,10 +212,13 @@ _SECRET_PATTERNS = [
     *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]")
       for flags, name in _ENV_NAMES],
     # Azure Pipelines の変数: - name: DB_PASSWORD / value: X（名前の行の次の value）
-    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*\r?\n[ \t]*value:[ \t]*)(" + _DQ + "|" + _SQ + ")"),
-     _keep_quote),
-    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*\r?\n[ \t]*value:[ \t]*)(?![\"'|>])([^\s#]+)"),
-     r"\1[REDACTED]"),
+    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*(?:#[^\n]*)?\r?\n([ \t]*)value:[ \t]*"
+                r"[|>](?:[-+]?[1-9]?|[1-9][-+])[ \t]*(?:#[^\n]*)?\r?\n)((?:(?:[ \t]*\r?\n)*\2[ \t]+\S.*(?:\n|$))+)"),
+     lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
+    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*(?:#[^\n]*)?\r?\n[ \t]*value:[ \t]*)"
+                r"(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*(?:#[^\n]*)?\r?\n[ \t]*value:[ \t]*)"
+                r"(?![\"'|>])([^\s#]+)"), r"\1[REDACTED]"),
     # PowerShell の変数: $pass = '...' / $pw = "..." / $adminPass = ...
     (re.compile(r"(?i)(\$\w*(?:pass|pw)\w*[ \t]*=[ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(\$\w*(?:pass|pw)\w*[ \t]*=[ \t]*)(?![\"'$(@\[])([^\s;|]+)"), r"\1[REDACTED]"),
@@ -236,13 +246,13 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
     # password= / "password": "..." / $password = '...'。引用符があれば閉じるまで伏せ、引用符の種類を保つ
     (re.compile(r"(?i)(" + _KEY_NAME + r"[\"']?[ \t]*:?[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*[\"']?[ \t]*:?[:=][ \t]*[\"']?)([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*[\"']?[ \t]*:?[:=][ \t]*[\"']?)(?![rbuf]{1,2}[\"'])([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
     # 日本語の書き方: パスワードは X / トークン: X。値が英数字と記号で 6 文字以上のときだけ伏せる
     # （「シークレットは使わず」「パスは C:\...」のような、ふつうの言葉やパスを消さない）
     (re.compile(r"((?:パスワード|トークン|アクセストークン|シークレット)\s*(?:は|を|[:：=])\s*[「『]?)"
                 r"(?=[!-~]*[A-Za-z0-9])([!-~]{6,})(?![!-~])"), r"\1[REDACTED]"),
     # URL に埋め込まれた資格情報（https のほか postgresql:// mongodb+srv:// redis:// なども。user:password@ も PAT@ も）
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#]*@"), r"\1[REDACTED]@"),
+    (re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/?#]*@"), r"\1[REDACTED]@"),
     # Azure DevOps の PAT らしい長い英数字（旧形式は 52 文字の小文字と数字、新形式は 84 文字前後）
     (re.compile(r"(?<![A-Za-z0-9])[a-z2-7]{52}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
     # 書き方の規則に当たらなかった値の網: 20 文字以上の、大文字・小文字・数字が混ざった、でたらめらしい文字列
@@ -460,6 +470,9 @@ def _texts(content, allowed, skipped_types, counters):
             counters["shape_errors"] += 1
             continue
         t = el.get("type")
+        if not isinstance(t, str):
+            counters["shape_errors"] += 1
+            continue
         if t in allowed and isinstance(el.get("text"), str):
             parts.append(el["text"])
         elif t in skipped_types:
@@ -483,6 +496,26 @@ def _owner_text(content):
     return False
 
 
+def _byte_lines(data, counters):
+    """(行番号, 行の bytes) を 1 行ずつ返す。最後の行は、改行が無くても JSON として閉じていれば読む。"""
+    start, n, i = 0, len(data), 0
+    while start < n:
+        end = data.find(b"\n", start)
+        last = end < 0
+        if last:
+            end = n
+        i += 1
+        raw = data[start:end]
+        if last and raw.strip():
+            try:
+                json.loads(raw.decode("utf-8", errors="replace"))
+            except ValueError:
+                counters["incomplete_tail"] = 1  # 書き込みの途中で終わった行。次の取り込みで読む。
+                return
+        yield i, raw
+        start = end + 1
+
+
 def parse_rollout(path, data):
     """1 本の rollout から (meta, messages, counters) を取り出す。"""
     counters = {"lines": 0, "bad_json": 0, "shape_errors": 0, "skipped_elements": 0, "incomplete_tail": 0,
@@ -496,16 +529,7 @@ def parse_rollout(path, data):
     # 発言 ID の無い古い形式は行番号で ID を作る。revert で同じ会話のファイルが 2 本になると行番号がぶつかるので、
     # ファイル名の rollout ID の末尾を付ける（圧縮の前後のように同じ名前のファイルどうしは同じ ID になる）。
     rollout_tag = m.group(1)[-12:] if m else "x"
-    text = data.decode("utf-8", errors="replace")
-    lines = text.split("\n")
-    if lines and lines[-1] != "":
-        try:  # 改行が無くても、JSON として閉じている行は読む
-            json.loads(lines[-1])
-        except ValueError:
-            counters["incomplete_tail"] = 1  # 書き込みの途中で終わった行。次の取り込みで読む。
-            lines = lines[:-1]
-    else:
-        lines = lines[:-1]
+    lines = _byte_lines(data, counters)
 
     messages = []
     turn_id = None
@@ -525,12 +549,12 @@ def parse_rollout(path, data):
         if kind == "final":
             finals_by_turn.add(turn_id)
 
-    for i, raw in enumerate(lines, 1):
+    for i, raw in lines:
         if not raw.strip():
             continue
         counters["lines"] += 1
         try:
-            item = json.loads(raw)
+            item = json.loads(raw.decode("utf-8", errors="replace"))
         except ValueError:
             counters["bad_json"] += 1
             continue
@@ -638,9 +662,11 @@ def parse_rollout(path, data):
                 ordered.insert(at, messages[-1])
                 lines.insert(at, line_no)
         finals_by_turn.add(tid)
-    if response_users and not meta["agent"] and not any(m["kind"] == "user" for m in messages):
-        # 持ち主の依頼らしい行はあるのに、読み方の分かる形で 1 件も取れなかった（子のエージェントへの指示は除く）
-        counters["shape_errors"] += response_users
+    users = sum(1 for m in messages if m["kind"] == "user")
+    if response_users > users and not meta["agent"]:
+        # 持ち主の依頼らしい行のほうが、読み方の分かる形で取れた依頼より多い（子のエージェントへの指示は除く。
+        # 手元の記録 1,066 本では、取れた依頼のほうが少ない記録は 0 本）
+        counters["shape_errors"] += response_users - users
     return meta, messages, counters
 
 
@@ -871,6 +897,13 @@ class Index:
                    "AND f.thread_id = threads.thread_id)")
         db.execute("DROP TABLE IF EXISTS forgotten_keys")
         db.commit()
+        if db.execute("SELECT value FROM meta WHERE key = 'rawhash'").fetchone() is None:
+            had = db.execute("SELECT 1 FROM messages WHERE raw_hash IS NOT NULL LIMIT 1").fetchone()
+            with db:
+                db.execute("UPDATE messages SET raw_hash = NULL")
+                db.execute("INSERT OR REPLACE INTO meta VALUES ('rawhash', 'hmac1')")
+            if had:
+                db.execute("VACUUM")
         if self._has_table("threads_v1"):
             # 旧い表は CODEX_HOME を区別していないので、その会話の本文を持つ CODEX_HOME ごとに行を作る
             # （名前・作業フォルダ・ブランチは、その CODEX_HOME の記録のものではないので写さない。取り込み直しで入る）
@@ -1132,6 +1165,7 @@ class Index:
     def _replace(self, path, home, meta, messages, counters, st, status):
         counts = {k: 0 for k in KINDS}
         sig = _redact_signature()
+        key = self._hash_key()
         with self.db:  # 1 ファイル 1 トランザクション。失敗したら前の内容が残る。
             tid = meta["thread_id"]
             # 同じ会話のファイルがほかにもあるとき（thread/revert は前半を元のファイルに残す）は両方を持ち、
@@ -1152,7 +1186,7 @@ class Index:
                                []).append(r)
             fresh = []
             for msg in messages:
-                h = _raw_hash(sig, msg)
+                h = _raw_hash(key, sig, msg)
                 same = old.get((msg["line"], msg["msg_id"], msg["turn_id"], msg["seq"], msg["ts"], msg["kind"], h))
                 if same:
                     same.pop()
@@ -1179,6 +1213,22 @@ class Index:
                 self._delete_message(r["id"])
             self._write_file_row(path, home, meta, st, status, counters, counts)
         self._vec_cache = None
+
+    def _hash_key(self):
+        """HMAC の鍵。無ければ作る（作り直すと、次の取り込みで全部の発言を入れ直すだけ）。"""
+        if getattr(self, "_key", None) is None:
+            path = self.path + ".key"
+            try:
+                with open(path, "rb") as f:
+                    self._key = f.read()
+            except OSError:
+                self._key = b""
+            if len(self._key) < 32:
+                self._key = os.urandom(32)
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(self._key)
+        return self._key
 
     def _carry(self, old_id, new_id):
         """前の行の単語の索引と埋め込みを、新しい行へ移す。"""
@@ -1492,10 +1542,16 @@ def _file_stem(path):
     return name[:-4] if name.endswith(".zst") else name
 
 
-def _raw_hash(sig, msg):
-    """原文（伏せる前）と伏せ字の規則から作るハッシュ。変わっていない発言を見分ける（本文そのものは残さない）。"""
+def _raw_hash(key, sig, msg):
+    """原文（伏せる前）と伏せ字の規則から作る HMAC。変わっていない発言を見分ける（本文そのものは残さない）。
+
+    鍵なしのハッシュだと、索引に残る伏せた後の本文に候補を入れて比べれば、伏せた値を総当たりで当てられる。
+    鍵は索引とは別のファイル（<索引>.key）に置くので、索引のファイルだけが手を離れても当てられない。
+    """
     import hashlib
-    return hashlib.sha256("\x1f".join((sig, msg["text"] or "", msg["cwd"] or "")).encode("utf-8", "replace")).hexdigest()
+    import hmac
+    return hmac.new(key, "\x1f".join((sig, msg["text"] or "", msg["cwd"] or "")).encode("utf-8", "replace"),
+                    hashlib.sha256).hexdigest()
 
 
 def _dedupe_key(r):

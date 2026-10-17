@@ -259,7 +259,7 @@ flowchart LR
     rr --> x2["Codex: 上位を show で読み、<br/>日時・引用・codex resume を添えて答える"]
 ```
 
-- 取り込むのは、ユーザーの依頼・最終の回答（・途中の回答）と、Codex の memories が書いた要点のファイル。ツールやコマンドの出力、推論、AGENTS.md などの差し込みは入れない。シークレットらしい値は伏せてから入れる。伏せるのは、よく使う書き方（`password=`・`Authorization`・`Bearer`・URL の中の資格情報・秘密鍵・PAT の形・パスワードを渡すコマンドの引数など）と、書き方によらず、20 文字以上で大文字・小文字・数字の混ざった、でたらめらしい文字列（16 進のハッシュ・UUID・rollout のファイル名と、4 文字以上の単語をつないだ名前は残す）。でたらめな 24 文字の英数字は 95% 前後、32 文字以上は 98% 以上を拾う。代わりに、3 文字の単語が多い数字入りの名前（`GetAppKeyV2ForWebJob` など）は伏せることがあり、その名前そのものでは検索できない（漏れを防ぐ側に寄せた）。短いパスワード（`hunter2` など）は、よく使う書き方でないと漏れる。
+- 取り込むのは、ユーザーの依頼・最終の回答（・途中の回答）と、Codex の memories が書いた要点のファイル。ツールやコマンドの出力、推論、AGENTS.md などの差し込みは入れない。シークレットらしい値は伏せてから入れる。変わっていない発言を見分けるため、伏せる前の原文から作った印（HMAC）を索引に持つ。その鍵は索引の隣の `sessions.sqlite.key` に置くので、索引を人に渡すときは鍵のファイルを渡さない（両方がそろうと、伏せた値を総当たりで当てられる）。鍵が消えても、次の取り込みで発言を入れ直すだけで済む。伏せるのは、よく使う書き方（`password=`・`Authorization`・`Bearer`・URL の中の資格情報・秘密鍵・PAT の形・パスワードを渡すコマンドの引数など）と、書き方によらず、20 文字以上で大文字・小文字・数字の混ざった、でたらめらしい文字列（16 進のハッシュ・UUID・rollout のファイル名と、4 文字以上の単語をつないだ名前は残す）。でたらめな 24 文字の英数字は 95% 前後、32 文字以上は 98% 以上を拾う。代わりに、3 文字の単語が多い数字入りの名前（`GetAppKeyV2ForWebJob` など）は伏せることがあり、その名前そのものでは検索できない（漏れを防ぐ側に寄せた）。短いパスワード（`hunter2` など）は、よく使う書き方でないと漏れる。
 - 取り込みは検索のたびに、増えた・変わった記録だけ。元の記録は Codex のものが正で、索引は消しても `rebuild` で作り直せる。原本が消えた会話（`codex delete` で消したものも）は索引に残して検索し、出力のまとめに「原本が見つからない記録のファイル N 本」と出す。検索から外すのは `forget`。memories のファイルは会話から作り直される要約なので、Codex が消したら索引からも消す。同じ会話のファイルが複数ある（Codex の revert は、前半を元のファイルに残して別のファイルを作る）ときは両方を取り込み、同じ発言は 1 つにまとめて出す。
 - 圧縮された記録（`.jsonl.zst`）は Python 3.14 で読む。手元の Mac では、記録の約 85% が圧縮されていた。3.14 が無い Python で動いたときは、3.14（`py -3.14`、`python3.14`、`mise exec python@3.14`）を探して自分を起動し直す。見つからなければ、読めなかった数を出す。
 
@@ -782,7 +782,7 @@ sequenceDiagram
   **`-Force` は `AGENTS.md` にも効く。**自分で書いた `~\.codex\AGENTS.md` を使っているなら、置き換わった後に退避先（`$HOME\.hirata-codex-backup\<日時>\.codex\AGENTS.md`）から戻すか、先に `-WhatIf` で何が置き換わるかを見る。
 - 削除: 次を消す。
   - `$HOME\.agents\skills\` の下の 17 個のフォルダ（`ado`、`ci-failure-triage`、`code-comments`、`grill`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`review-triage`、`root-cause`、`session-search`、`sprint-report`、`work-item-ready`、`writing-quality`）
-  - 会話の検索の索引と専用の環境: `%LOCALAPPDATA%\hirata-codex\`（`sessions.sqlite`、`venv\`、`models\`）
+  - 会話の検索の索引と専用の環境: `%LOCALAPPDATA%\hirata-codex\`（`sessions.sqlite`、`sessions.sqlite.key`、`venv\`、`models\`）
   - `$HOME\.codex\agents\` の下の 5 つ（`change-risk-reviewer.toml`、`design-challenger.toml`、`incident-evidence-analyst.toml`、`prose-reviewer.toml`、`researcher.toml`。`CODEX_HOME` があればその下）
   - `$HOME\.codex\AGENTS.md`（このパッケージのものなら。`CODEX_HOME` があればその下）
   - `$HOME\.codex\hooks.json` の中の `"statusMessage": "hirata-codex usage status"` のハンドラーを先に消し、そのあと `$HOME\.codex\hooks\hirata-codex\` を消す（順番を逆にすると、残ったハンドラーが無いスクリプトを呼び、Python が終了コード 2 を返して依頼が止まる）。ハンドラーを消した後に `hooks.json` にほかのハンドラーが残っていなければ、ファイルごと消してよい

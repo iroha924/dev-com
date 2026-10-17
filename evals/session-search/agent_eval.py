@@ -92,26 +92,32 @@ def run_condition(args, mode, q, prompt):
     import hashlib
     h = hashlib.sha256()
     for part in (prompt, json.dumps(q.get("gold"), sort_keys=True), mode, args.model, args.effort, getattr(args, "codex_version", ""),
+                 args.timeout,
                  os.path.abspath(args.db),
                  os.path.abspath(args.plain), os.path.abspath(getattr(args, "snapshot", "") or ""),
                  os.path.abspath(getattr(args, "data", "") or "")):
         h.update(str(part).encode("utf-8") + b"\x1f")
     with open(SCRIPT, "rb") as f:
         h.update(f.read())
-    for root in (args.db, getattr(args, "snapshot", None), getattr(args, "data", None)):
-        h.update(_tree_stamp(root).encode("utf-8"))
+    # 索引のファイルは検索のたびに更新時刻が変わるので入れない。索引は写しと検索の実装から作られる
+    for root in (getattr(args, "snapshot", None), getattr(args, "data", None), args.plain):
+        h.update(_tree_stamp(root, skip=args.out).encode("utf-8"))
     return h.hexdigest()
 
 
-def _tree_stamp(root):
-    """ファイルかフォルダの中身の印（パス・大きさ・更新時刻）。中身が変われば変わる。"""
+def _tree_stamp(root, skip=None):
+    """ファイルかフォルダの中身の印（パス・大きさ・更新時刻）。中身が変われば変わる。skip の下（結果の置き場）は見ない。"""
     if not root or not os.path.exists(root):
         return "-"
     if os.path.isfile(root):
         st = os.stat(root)
         return "%d:%d" % (st.st_size, st.st_mtime_ns)
     out = []
-    for d, _, files in os.walk(root):
+    skip = os.path.abspath(skip) if skip else None
+    for d, dirs, files in os.walk(root):
+        if skip and (os.path.abspath(d) == skip or os.path.abspath(d).startswith(skip + os.sep)):
+            dirs[:] = []
+            continue
         for f in files:
             try:
                 st = os.stat(os.path.join(d, f))

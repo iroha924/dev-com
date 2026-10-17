@@ -200,7 +200,7 @@ def main():
     if args.codex_home:
         home = os.path.abspath(args.codex_home)
     else:
-        home = os.path.join(args.work, "codex_home")
+        home = os.path.abspath(os.path.join(args.work, "codex_home"))
         if not os.path.exists(home):
             make_rollouts.main(args.corpus, home)
     idx = ss.Index(os.path.join(args.work, "index.sqlite"))

@@ -2429,17 +2429,19 @@ class SeventeenthReviewTest(_Base):
             ae.subprocess.run = saved
         self.assertEqual((r["correct"], r["usage"]["input_tokens"], bool(r.get("error"))), (False, 1234, True))
 
-    def test_agent_eval_reruns_when_the_index_changes(self):
+    def test_agent_eval_follows_the_copy_not_the_index_file(self):
         spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
         ae = importlib.util.module_from_spec(spec2)
         spec2.loader.exec_module(ae)
         out = os.path.join(self.tmp.name, "ae")
-        os.makedirs(out)
+        snap = os.path.join(self.tmp.name, "snap")
+        os.makedirs(snap)
 
         class Args:
             pass
         args = Args()
         args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(self.tmp.name, "x.sqlite"), "m", "low", 10
+        args.snapshot, args.data = snap, None
         runs = []
 
         class Done:
@@ -2448,18 +2450,22 @@ class SeventeenthReviewTest(_Base):
 
         def fake_run(cmd, **kw):
             runs.append(1)
+            with open(args.db, "a") as f:  # 検索を流すと、索引のファイルは中身が同じでも書かれる
+                f.write("x")
             with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as f:
                 json.dump({"found": True, "thread_id": T1, "answer": "a", "quote": "q"}, f)
             return Done()
         ae.subprocess.run = fake_run
         try:
-            for content in ("v1", "v2-longer"):
-                with open(args.db, "w") as f:
-                    f.write(content)
+            for content in ("v1", "v1", "v2"):
+                path = os.path.join(snap, "r.jsonl")
+                if not os.path.exists(path) or open(path).read() != content:
+                    with open(path, "w") as f:
+                        f.write(content)
                 ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json")
         finally:
             ae.subprocess.run = saved
-        self.assertEqual(len(runs), 2)
+        self.assertEqual(len(runs), 2)  # 写しが同じ 2 回目は使い回し、写しが変わった 3 回目は流し直す
 
     def test_run_eval_with_a_subset_of_methods(self):
         spec2 = importlib.util.spec_from_file_location("run_eval", os.path.join(ROOT, "evals", "session-search", "run_eval.py"))
@@ -2520,9 +2526,12 @@ class EighteenthReviewTest(_Base):
             return Done()
         ae.subprocess.run = fake_run
         try:
+            written = None
             for model_file, version in (("a", "codex 1"), ("ab", "codex 1"), ("ab", "codex 2")):
-                with open(os.path.join(data, "model.bin"), "w") as f:
-                    f.write(model_file)
+                if model_file != written:  # 中身が変わるときだけ書く（CLI の版だけが変わる 3 回目を確かめる）
+                    with open(os.path.join(data, "model.bin"), "w") as f:
+                        f.write(model_file)
+                    written = model_file
                 args = Args()
                 args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(out, "x.sqlite"), "m", "low", 10
                 args.snapshot, args.data, args.codex_version = "/copy", data, version
@@ -2530,6 +2539,147 @@ class EighteenthReviewTest(_Base):
         finally:
             ae.subprocess.run = saved
         self.assertEqual(len(runs), 3)
+
+
+class NineteenthReviewTest(_Base):
+    """13 回目のレビュー（Codex 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def test_pipelines_python_powershell_and_nuget_forms(self):
+        cases = ["variables:\n  - name: DB_PASSWORD # login\n    value: hunter22",
+                 "variables:\n  - name: DB_PASSWORD\n    value: |\n      hunter22\n  - name: x\n    value: keep",
+                 'variables:\n  - name: DB_PASSWORD\n    value: "hunter22"',
+                 "{'password': 'abc\\'hunter22'}", '{"password": r"abc\\hunter22"}',
+                 'ConvertTo-SecureString "hunter22\\" -AsPlainText -Force', '"hunter22\\" | ConvertTo-SecureString -AsPlainText -Force',
+                 '$headers.Add("Authorization", "Basic aHVudGVyMjI=hunter22")',
+                 '<add value="hunter22" key="ClearTextPassword" />', '<add key = "ClearTextPassword" value = "hunter22" />']
+        for text in cases:
+            self.assertNotIn("hunter22", ss.redact(text), text)
+        self.assertIn("value: keep", ss.redact(cases[1]))
+        self.assertIn('value="keepme"', ss.redact('<add key="Username" value="keepme" />'))
+        self.assertIn('r"[REDACTED]"', ss.redact('{"password": r"abc\\hunter22"}'))  # 文字列の頭の r は残す
+
+    def test_response_item_only_turns_are_reported(self):
+        ts = "2026-09-01T01:00:00Z"
+        text = "\n".join([line(ts, "session_meta", {"id": T1}),
+                          line(ts, "event_msg", {"type": "user_message", "message": "最初の依頼 ごじゅうから"}),
+                          line(ts, "response_item", {"type": "message", "role": "user",
+                                                     "content": [{"type": "input_text", "text": "最初の依頼 ごじゅうから"}]}),
+                          line(ts, "response_item", {"type": "message", "role": "user",
+                                                     "content": [{"type": "input_text", "text": "後の依頼 ごじゅうから"}]}),
+                          line(ts, "response_item", {"type": "message", "role": "assistant",
+                                                     "content": [{"type": "output_text", "text": "後の答え"}]})]) + "\n"
+        self.write(T1, text)
+        out = self.search("ごじゅうから")
+        self.assertTrue(any("形の分からない発言" in c for c in out["coverage"]), out["coverage"])
+
+    def test_content_type_of_wrong_shape_is_counted(self):
+        text = paginated(T1, [("形の違う要素 えなが", "答え", [{"type": [], "text": "bad shape"}, {"type": {"x": 1}}])])
+        _, msgs, counters = ss.parse_rollout("x", text.encode())
+        self.assertEqual((len(msgs), counters["shape_errors"]), (2, 2))
+
+    def test_rerank_eval_keeps_the_tail(self):
+        src = open(os.path.join(ROOT, "evals", "session-search", "rerank_eval.py"), encoding="utf-8").read()
+        self.assertIn("head, tail = rows[:args.k], rows[args.k:]", src)
+        self.assertIn("limit=max(args.k, 100)", src)
+
+    def test_run_eval_stores_an_absolute_home(self):
+        src = open(os.path.join(ROOT, "evals", "session-search", "run_eval.py"), encoding="utf-8").read()
+        self.assertIn('home = os.path.abspath(os.path.join(args.work, "codex_home"))', src)
+
+    def test_agent_eval_reruns_when_plain_or_timeout_change(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        out = os.path.join(self.tmp.name, "ae")
+        plain = os.path.join(self.tmp.name, "plain")
+        os.makedirs(plain)
+
+        class Args:
+            pass
+        runs = []
+
+        class Done:
+            returncode = 0
+        saved = ae.subprocess.run
+
+        def fake_run(cmd, **kw):
+            runs.append(1)
+            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as f:
+                json.dump({"found": True, "thread_id": T1, "answer": "a", "quote": "q"}, f)
+            return Done()
+        ae.subprocess.run = fake_run
+        try:
+            written = None
+            for content, timeout in (("a", 10), ("ab", 10), ("ab", 900), ("ab", 900)):
+                if content != written:  # 中身が変わるときだけ書く（書き直すと更新時刻も変わる）
+                    with open(os.path.join(plain, "r.jsonl"), "w") as f:
+                        f.write(content)
+                    written = content
+                args = Args()
+                args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, plain, os.path.join(out, "x.sqlite"), "m", "low", timeout
+                ae.run_one(args, "grep", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json")
+        finally:
+            ae.subprocess.run = saved
+        self.assertEqual(len(runs), 3)  # 中身と制限時間が変わった 3 回だけ流し、同じ条件の 4 回目は使い回す
+
+
+class TwentiethReviewTest(_Base):
+    """13 回目のレビュー（Claude 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_stored_hash_does_not_reveal_redacted_values(self):
+        import hashlib
+        self.write(T1, paginated(T1, [("接続できない。$password = 'Winter2026!' で試した", "答え", None)]))
+        self.search("接続できない")
+        idx = self.idx()
+        row = idx.db.execute("SELECT text, cwd, raw_hash FROM messages WHERE kind = 'user'").fetchone()
+        sig = idx.db.execute("SELECT value FROM meta WHERE key = 'redact'").fetchone()[0]
+        idx.close()
+        found = [c for c in ("hunter2", "Winter2026!", "Password1")
+                 if hashlib.sha256("\x1f".join((sig, row["text"].replace("[REDACTED]", c), row["cwd"] or "")).encode()).hexdigest()
+                 == row["raw_hash"]]
+        self.assertEqual(found, [])
+        self.assertTrue(os.path.exists(self.db + ".key"))
+
+    def test_old_unkeyed_hashes_are_removed(self):
+        self.write(T1, paginated(T1, [("古いハッシュ るりびたき", "答え", None)]))
+        self.search("るりびたき")
+        idx = self.idx()
+        with idx.db:
+            idx.db.execute("UPDATE messages SET raw_hash = 'deadbeefdeadbeef'")
+            idx.db.execute("DELETE FROM meta WHERE key = 'rawhash'")
+        idx.close()
+        idx = self.idx()
+        idx.close()
+        with open(self.db, "rb") as f:
+            self.assertNotIn(b"deadbeefdeadbeef", f.read())
+
+    def test_big_rollout_is_read_line_by_line(self):
+        text = paginated(T1, [("大きな記録 %d みそさざい" % n, "答え", None) for n in range(50)])
+        _, msgs, counters = ss.parse_rollout("x", text.encode())
+        self.assertEqual(len(msgs), 100)
+        _, msgs2, c2 = ss.parse_rollout("x", (text + '{"timestamp": "x", "type": "event_msg", "payl').encode())
+        self.assertEqual((len(msgs2), c2["incomplete_tail"]), (100, 1))
+        bad = (text.split("\n", 1)[0] + "\n").encode() + b'{"type": "event_msg", "payload": {"type": "user_message", "message": "\xff\xfe \xe3\x81\x82"}}\n'
+        _, msgs3, _ = ss.parse_rollout("x", bad)
+        self.assertEqual(len(msgs3), 1)  # 壊れた UTF-8 も、置き換えて読む
+
+    def test_url_rule_is_not_quadratic(self):
+        import time
+        t0 = time.time()
+        ss.redact("x-" * 30000)
+        self.assertLess(time.time() - t0, 2.0)
+
+    def test_legacy_final_is_not_duplicated(self):
+        ts = "2026-09-01T01:00:00Z"
+        text = "\n".join([line(ts, "session_meta", {"id": T1}),
+                          line(ts, "event_msg", {"type": "user_message", "message": "依頼 こまどり"}),
+                          line(ts, "event_msg", {"type": "task_complete", "last_agent_message": "同じ答え"}),
+                          line(ts, "event_msg", {"type": "task_complete", "last_agent_message": "同じ答え"})]) + "\n"
+        _, msgs, _ = ss.parse_rollout("x", text.encode())
+        self.assertEqual([m["kind"] for m in msgs], ["user", "final"])
 
 
 class SemanticLayerTest(unittest.TestCase):
