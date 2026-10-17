@@ -54,25 +54,39 @@ def texts_from_tests():
 
 
 def variants(text):
-    """前の直しで漏れた形の変化を、自動で作る（前に記号を付ける、引用符の中に \\"・""・\\' を入れる）。"""
+    """前の直しで漏れた形の変化を、自動で作る。
+
+    前に記号を付ける / 引用符の中に \\"・""・\\' を入れる / 閉じた引用符の後ろに " を付ける /
+    閉じる前に \\ を入れる / cmd /c "..."・powershell -Command "..." で包む。
+    """
     yield text
     for head in ("-", ".", "+", "x"):
         yield head + text
     for quote, inserts in (('"', ('\\"', '""')), ("'", ("\\'", "''"))):
         at = text.find(quote)
-        if at >= 0 and text.find(quote, at + 1) > at + 1:
+        end = text.find(quote, at + 1) if at >= 0 else -1
+        if at >= 0 and end > at + 1:
             for ins in inserts:
                 yield text[:at + 2] + ins + "Zq9w" + text[at + 2:]
+            yield text[:end + 1] + quote + text[end + 1:]
+            yield text[:end] + "\\" + text[end:]
+    if "\n" not in text:
+        yield 'cmd /c "%s"' % text
+        yield 'powershell -Command "%s"' % text
 
 
 def shape(s):
-    return re.sub(r"(.)\1+", r"\1", "".join("a" if c.islower() else "A" if c.isupper() else "9" if c.isdigit() else c
-                                             for c in s))[:40]
+    """文字の種類だけの形（英小文字 a・英大文字 A・数字 9・ASCII の記号はそのまま・それ以外の文字は「字」）。本文は出さない。"""
+    def kind(c):
+        if c.isascii():
+            return "a" if c.islower() else "A" if c.isupper() else "9" if c.isdigit() else c
+        return "字"
+    return re.sub(r"(.)\1+", r"\1", "".join(kind(c) for c in s))[:40]
 
 
 def revealed(text, old_out, new_out):
     """old で伏せていて new で見える、元の文の英数字の並び（4 文字以上）。"""
-    words = set(re.findall(r"[A-Za-z0-9]{4,}", text))
+    words = set(re.findall(r"[A-Za-z0-9]{4,}", text)) | set(re.findall(r"[^\s\"'`=:,;()\[\]{}<>|]{4,}", text))
     return sorted(w for w in words if w in new_out and w not in old_out)
 
 

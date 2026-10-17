@@ -30,6 +30,12 @@ def threads_of(rows):
     return out
 
 
+def apply_now(value):
+    """新しさの補正の基準の時刻を固定する（run_eval と同じ既定。流す日で順位が変わらないように）。"""
+    import datetime
+    ss.NOW = datetime.datetime.fromisoformat(value)
+
+
 def rerank_head(rows, k, score):
     """本番と同じく、上位 k 件だけを点で並べ直し、その後ろの候補は順のまま残す。"""
     head, tail = rows[:k], rows[k:]
@@ -60,8 +66,7 @@ def main():
     p.add_argument("--mock", action="store_true")
     p.add_argument("--now", default="2026-10-17T00:00:00+00:00", help="新しさの補正の基準の時刻（run_eval と同じ既定）")
     args = p.parse_args()
-    import datetime
-    ss.NOW = datetime.datetime.fromisoformat(args.now)
+    apply_now(args.now)
     qs = json.load(open(args.queries, encoding="utf-8"))["queries"]
     for q in qs:
         q["gold"] = q["gold"] if isinstance(q["gold"], list) else [q["gold"]]

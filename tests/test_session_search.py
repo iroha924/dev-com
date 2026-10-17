@@ -2736,8 +2736,14 @@ class TwentyFirstReviewTest(_Base):
         re_mod = self._eval_module("rerank_eval")
         rows = list("abcdefghijkl")
         self.assertEqual(re_mod.rerank_head(rows, 3, lambda head: [1, 3, 2]), ["b", "c", "a"] + rows[3:])
+        saved = re_mod.ss.NOW
+        try:
+            re_mod.apply_now("2027-01-17T00:00:00+00:00")
+            self.assertEqual(re_mod.ss.NOW.year, 2027)  # 新しさの補正の基準が、渡した時刻になる
+        finally:
+            re_mod.ss.NOW = saved
         src = open(os.path.join(ROOT, "evals", "session-search", "rerank_eval.py"), encoding="utf-8").read()
-        self.assertIn("ss.NOW = datetime.datetime.fromisoformat(args.now)", src)
+        self.assertIn("apply_now(args.now)", src)
 
     def test_run_eval_mixtures_and_home(self):
         rv = self._eval_module("run_eval")
@@ -2861,6 +2867,247 @@ class TwentySecondReviewTest(_Base):
         before = ae.run_condition(args, "search", q, "p")
         for name in ("sessions.sqlite", "sessions.sqlite.key"):  # 検索を流すと、索引と鍵が書かれる
             with open(os.path.join(data, name), "w") as f:
+                f.write("x")
+        self.assertEqual(before, ae.run_condition(args, "search", q, "p"))
+
+
+class TwentyThirdReviewTest(_Base):
+    """15 回目のレビュー（Codex 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def _swap_row(self, mid):
+        """別の接続で、発言を消して、同じ ID に別の本文を入れる（forget の後に ID が使い回された形）。"""
+        con = sqlite3.connect(self.db)
+        with con:
+            con.execute("DELETE FROM messages WHERE id = ?", (mid,))
+            con.execute("INSERT INTO messages (id, codex_home, thread_id, path, line, msg_id, ts, kind, text, norm) "
+                        "VALUES (?, ?, ?, 'new.jsonl', 1, 'n1', '2026-09-02T01:00:00Z', 'user', '新しい本文', '新しい本文')",
+                        (mid, self.home, T2))
+        con.close()
+
+    def test_words_do_not_attach_to_a_reused_id(self):
+        self.write(T1, paginated(T1, [("消される本文 よしごい", "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+        mid = idx.db.execute("SELECT id FROM messages WHERE kind = 'user'").fetchone()[0]
+
+        def tokenize(text):
+            if "よしごい" in text:
+                self._swap_row(mid)
+            return text.split()
+        idx.fill_words(tokenize, self.home)
+        done = idx.db.execute("SELECT COUNT(*) FROM word_done WHERE message_id = ?", (mid,)).fetchone()[0]
+        idx.close()
+        self.assertEqual(done, 0)  # 区切った本文はもう無いので、済みにしない（新しい本文を次に区切る）
+
+    def test_vectors_are_not_written_for_a_swapped_row(self):
+        self.write(T1, paginated(T1, [("埋め込みの途中 ささい", "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+        mid = idx.db.execute("SELECT id FROM messages WHERE kind = 'user'").fetchone()[0]
+        import array
+
+        def encode(texts):
+            self._swap_row(mid)  # 埋め込んでいる間に、forget と ID の使い回しが起きた
+            return [type("V", (), {"tobytes": lambda self: array.array("f", [1.0]).tobytes()})() for _ in texts]
+        idx.fill_vectors(encode, self.home)
+        n = idx.db.execute("SELECT COUNT(*) FROM vectors WHERE message_id = ?", (mid,)).fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 0)
+
+    def test_new_trigram_table_gets_the_existing_messages(self):
+        self.write(T1, paginated(T1, [("前からある発言 くろつぐみ", "答え", None)]))
+        self.search("くろつぐみ")
+        idx = self.idx()
+        if not idx.fts:
+            idx.close()
+            self.skipTest("trigram の無い SQLite")
+        with idx.db:  # trigram の無い SQLite で作った索引の形にする
+            idx.db.execute("DROP TABLE msg_fts")
+        idx.close()
+        idx = self.idx()
+        res, _, _ = idx.search(self.home, ["くろつぐみ"], ss.DEFAULT_KINDS)
+        idx.close()
+        self.assertEqual(len(res), 1)
+
+    def test_show_rejects_negative_context(self):
+        self.write(T1, paginated(T1, [("負の前後 あまつばめ", "答え", None)]))
+        self.search("あまつばめ")
+        code, out = self.run_cli("show", T1 + "/u1", "--context", "-1")
+        self.assertEqual(code, 2, out)
+        self.assertNotIn("Traceback", out)
+
+    def test_more_forms(self):
+        cases = ['$password = "abc""hunterB"', 'headers = {"Authorization": b"Basic dXNlcjpodW50ZXIy"}',
+                 "variables:\n- name: API_TOKEN\n  value:\n    hunterB", 'password = "first" "hunterB"',
+                 'ADO_PAT = ("abcdefghijklmnopqrstuvwxyz" "hunterBabcdefghijklmnopqrs")']
+        for text in cases:
+            self.assertNotRegex(ss.redact(text), r"hunterB|dXNlcjpodW50ZXIy", text)
+        self.assertIn('"user": "bob"', ss.redact('{"password": "x1", "user": "bob"}'))
+
+    def test_redaction_diff_counts_symbol_separated_values(self):
+        spec2 = importlib.util.spec_from_file_location("redaction_diff", os.path.join(ROOT, "evals", "session-search", "redaction_diff.py"))
+        rd = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(rd)
+        self.assertEqual(rd.revealed("password=a1_B2-c3", "password=[REDACTED]", "password=a1_B2-c3"), ["a1_B2-c3"])
+
+    def test_parse_does_not_hold_all_lines(self):
+        import tracemalloc
+        data = paginated(T1, [("行 %d %s" % (n, "x" * 900), "答え", None) for n in range(4000)]).encode()
+        tracemalloc.start()
+        before = tracemalloc.get_traced_memory()[0]
+        lines = ss._byte_lines(data, {"incomplete_tail": 0})
+        for _ in lines:
+            pass
+        peak = tracemalloc.get_traced_memory()[1] - before
+        tracemalloc.stop()
+        self.assertLess(peak, len(data) // 4)  # 全部の行を先に分けて持つと、記録と同じくらい使う
+
+    def test_stats_shows_models_that_cannot_load(self):
+        saved_ready, saved_emb, saved_rr = ss.model_ready, ss.Semantic.embedder, ss.Semantic.reranker
+
+        def no_emb(self):
+            self._emb_error = "ImportError: sentence_transformers"
+            return None
+
+        def no_rr(self):
+            self._rerank_error = "ImportError: sentence_transformers"
+            return None
+        ss.model_ready, ss.Semantic.embedder, ss.Semantic.reranker = (lambda kind="embed": True), no_emb, no_rr
+        saved_env = dict(os.environ)
+        os.environ.update(self.env)
+        import contextlib
+        import io
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                ss.cmd_stats(ss.build_parser().parse_args(["--db", self.db, "stats"]))
+        finally:
+            ss.model_ready, ss.Semantic.embedder, ss.Semantic.reranker = saved_ready, saved_emb, saved_rr
+            os.environ.clear()
+            os.environ.update(saved_env)
+        self.assertIn("埋め込みなし（モデルを読み込めない", buf.getvalue())
+        self.assertIn("並べ直しなし（モデルを読み込めない", buf.getvalue())
+
+
+
+class TwentyFourthReviewTest(_Base):
+    """15 回目のレビュー（Claude 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_orphan_vectors_do_not_break_later_ingests(self):
+        self.write(T1, paginated(T1, [("消される会話 さめびたき", "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+        import array
+        mids = [r[0] for r in idx.db.execute("SELECT id FROM messages ORDER BY id")]
+        with idx.db:  # 埋め込みの途中で forget が済み、持ち主のいない埋め込みと単語の索引が残った形
+            for mid in mids:
+                idx.db.execute("INSERT OR REPLACE INTO vectors VALUES (?, 0, ?, ?)", (mid, ss.EMBED_MODEL, array.array("f", [1.0]).tobytes()))
+                idx.db.execute("INSERT OR IGNORE INTO word_done VALUES (?)", (mid,))
+            idx.db.execute("DELETE FROM messages")
+        idx.close()
+        self.write(T2, paginated(T2, [("新しい会話 %d さめびたき" % n, "答え %d" % n, None) for n in range(3)]))
+        idx = self.idx()  # 開くときに、持ち主のいない行を消す
+        idx.ingest(self.home)
+        left = idx.db.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
+        pending = idx.db.execute("SELECT COUNT(*) FROM messages WHERE id NOT IN (SELECT message_id FROM vectors)").fetchone()[0]
+        idx.close()
+        self.assertEqual(left, 0)
+        self.assertGreater(pending, 0)  # 新しい発言は、自分の埋め込みをこれから作る
+
+    def test_carry_does_not_collide_with_a_leftover_row(self):
+        path = self.write(T1, paginated(T1, [("移し替え %d こじゅけい" % n, "答え %d" % n, None) for n in range(3)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+        import array
+
+        def encode(texts):
+            return [type("V", (), {"tobytes": lambda self: array.array("f", [1.0]).tobytes()})() for _ in texts]
+        idx.fill_vectors(encode, self.home)
+        top = idx.db.execute("SELECT MAX(id) FROM messages").fetchone()[0]
+        with idx.db:  # 次に使われる ID に、前に消した発言の埋め込みが残っている
+            idx.db.execute("INSERT INTO vectors VALUES (?, 0, ?, ?)", (top + 1, ss.EMBED_MODEL, array.array("f", [2.0]).tobytes()))
+            idx.db.execute("UPDATE messages SET raw_hash = 'old'")
+            idx.db.execute("UPDATE files SET size = -1")  # 読み直させる
+        idx.ingest(self.home)  # 規則が変わった形で、全部を入れ直す（埋め込みは移す。残っていた行とぶつからない）
+        n = idx.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 6)
+
+    def test_nested_quotes_and_agent_options(self):
+        leak = ['cmd /c "x -Password "Zq9winter""', 'cmd /c "nuget push x.nupkg -ApiKey "Zq9abc""', 'ConvertTo-SecureString "Zq9abc"" -AsPlainText',
+                'az login --service-principal -u id --password "Zq9abc\\" --tenant t', 'config.cmd --windowsLogonPassword "Zq9abc"',
+                '--proxypassword Zq9abc', '--sslclientcertpassword Zq9abc', 'powershell -Command "x -Password \\"Zq9abc\\""',
+                '(ConvertTo-SecureString ""Zq9abc"" -AsPlainText)', '"args": ["-Password", "Zq9abc"]']
+        for text in leak:
+            self.assertNotIn("Zq9", ss.redact(text), text)
+        for text in ("docker login --password-stdin -u me", "--tokenizer sudachi", "git config --get user.name"):
+            self.assertEqual(ss.redact(text), text)
+        for text in ('-SECRET_KEY = b"Zq9abc"', '-DB_PASSWORD = r"Zq9abc"', "-api_token: Zq9abc"):  # 前に - が付いた代入
+            self.assertNotIn("Zq9", ss.redact(text), text)
+
+    def test_pipelines_logging_commands(self):
+        for text in ("##vso[task.setvariable variable=ADO_PAT]Zq9abc", "##vso[task.setvariable variable=dbPassword;isoutput=true]Zq9abc",
+                     "##vso[task.setsecret]Zq9abc", "##vso[task.setvariable variable=x;issecret=true;isoutput=true]Zq9abc"):
+            self.assertNotIn("Zq9", ss.redact(text), text)
+        self.assertEqual(ss.redact("##vso[task.setvariable variable=buildNumber]1.2.3"), "##vso[task.setvariable variable=buildNumber]1.2.3")
+
+    def test_credential_objects_and_python_prefixes(self):
+        for text in ['NetworkCredential($user, "Zq9abc")', 'HttpNtlmAuth(username, "Zq9abc")', "auth=('', 'Zq9abc')",
+                     'password = (\n r"Zq9abc"\n)', 'password = (\n "a"\n "Zq9abc"\n)', 'os.environ["ADO_TOKEN"] = r"Zq9 abc"',
+                     'AZURE_OPENAI_KEY = r"Zq9abc"', "storage_account_key = b'Zq9abc'"]:
+            self.assertNotIn("Zq9", ss.redact(text), text)
+
+    def test_coverage_counts_broken_lines_and_skips_missing(self):
+        path = self.write(T1, paginated(T1, [("壊れた行のある会話 ほしむくどり", "答え", None)]) + "{broken\n")
+        out = self.search("ほしむくどり")
+        line_ = next(c for c in out["coverage"] if "壊れた行" in c)
+        self.assertIn("（1 本のファイル）", line_)
+        os.remove(path)
+        out = self.search("ほしむくどり")
+        self.assertFalse([c for c in out["coverage"] if "壊れた行" in c], out["coverage"])
+
+    def test_signature_follows_function_rules(self):
+        saved = ss._RULES_VERSION
+        before = ss._redact_signature()
+        ss._RULES_VERSION = saved + "x"
+        try:
+            self.assertNotEqual(before, ss._redact_signature())
+        finally:
+            ss._RULES_VERSION = saved
+
+    def test_key_file_is_reused(self):
+        self.write(T1, paginated(T1, [("鍵を使い回す まみじろ", "答え", None)]))
+        self.search("まみじろ")
+        first = open(self.db + ".key", "rb").read()
+        idx = self.idx()
+        self.assertEqual(idx._hash_key(), first)
+        idx.close()
+        self.search("まみじろ")
+        self.assertEqual(open(self.db + ".key", "rb").read(), first)
+
+    def test_agent_eval_skips_index_journal_files(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        data = os.path.join(self.tmp.name, "data")
+        os.makedirs(data)
+
+        class Args:
+            pass
+        args = Args()
+        args.out, args.plain, args.db, args.model, args.effort, args.timeout = (os.path.join(self.tmp.name, "out"), os.path.join(self.tmp.name, "plain"),
+                                                                                os.path.join(data, "s.sqlite"), "m", "low", 10)
+        args.snapshot, args.data = None, data
+        q = {"id": "q1", "question": "?", "gold": [T1]}
+        before = ae.run_condition(args, "search", q, "p")
+        for suffix in ("-journal", "-wal", "-shm"):
+            with open(args.db + suffix, "w") as f:
                 f.write("x")
         self.assertEqual(before, ae.run_condition(args, "search", q, "p"))
 

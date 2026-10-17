@@ -96,8 +96,11 @@ _ENV_NAMES = [
              r"function|functions|host|service|sas|auth|admin|deploy|ssh)_key(?:_[a-z0-9]+)*"),
 ]
 _DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"'  # "..."（\" と `" は閉じる引用符ではない。改行も含める）
-_DQ_PS = r'"(?:[^"`]|`.|""){1,100000}"(?!")'  # PowerShell の "..."（\ は逃がしの文字ではない。逃がしはバッククォートと ""）
+_DQ_PS = r'"(?:[^"`]|`.|""){1,100000}"'  # PowerShell の "..."（\ は逃がしの文字ではない。逃がしはバッククォートと ""）
 _PFX = r"(?:[rRbBuUfF]{1,2}(?=[\"']))?"  # Python の文字列の頭（r"..."・b"..."・f"..."）
+# 秘密を渡す引数の名前（--password・--token・--windowsLogonPassword・--proxypassword・--sslclientcertpassword など。
+# --password-stdin は値を取らないので除く）
+_OPT_NAME = r"(?:[\w-]*?(?:password|passwd|pwd|secret|token(?!iz)|api[_-]?key|passphrase)(?!-stdin)[\w-]*|pat)"
 _SQ = r"'(?:[^']|''){1,100000}'(?!')"         # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
 
 
@@ -123,10 +126,10 @@ _SECRET_PATTERNS = [
      "[REDACTED-PRIVATE-KEY]"),
     # PowerShell の変数への代入: $env:SSH_KEY_DIR = "C:\dir\" / $password = "...（改行も）..."。PowerShell では \ は
     # 逃がしの文字ではないので、バッククォートだけを逃がしと見て、閉じる引用符で止める（次の行まで消さない）
-    (re.compile(r"(?i)(\$(?:env:)?\w*(?:" + _KEY_NAME + "|" + _SECRET_WORD + r")\w*[ \t]*=[ \t]*)(\"(?:[^\"`]|`.){1,100000}\")"),
+    (re.compile(r"(?i)(\$(?:env:)?\w*(?:" + _KEY_NAME + "|" + _SECRET_WORD + r")\w*[ \t]*=[ \t]*)(" + _DQ_PS + ")"),
      _keep_quote),
     # Python の括弧で次の行に書いた値: password = (\n    "X"\n)
-    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*=[ \t]*\(\s*)(\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*')"), _keep_quote),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*=[ \t]*\(\s*" + _PFX + r")(\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*')"), _keep_quote),
     # Python の代入: password = 'abc\'def'（$ の付かない名前は、\' を閉じる引用符と見ない。$ の付く PowerShell は後の規則）
     (re.compile(r"(?i)(?<![\w$])((?:[a-z_]\w*?)?" + _KEY_NAME + r"[ \t]*:?=[ \t]*(?:[rbuf]{1,2}(?=['\"]))?)('(?:[^'\\\n]|\\.)*')"),
      _keep_quote),
@@ -134,26 +137,33 @@ _SECRET_PATTERNS = [
                 r"\"(?:[^\"\\\n]|\\.)*\")"), _keep_quote),
     # Authorization ヘッダーと Bearer トークン
     # Authorization ヘッダー: 方式の名前（Basic・SharedKey など、知らないものも）を含めて、行の終わりか引用符まで伏せる
-    (re.compile(r"(?i)(authorization[\"']?\]?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(authorization[\"']?\]?[ \t]*[:=][ \t]*)(?![ \t\"'])((?:=\"[^\"\r\n]*\"|='[^'\r\n]*'|[^\r\n\"']){3,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(authorization[\"']?\]?[ \t]*[:=][ \t]*" + _PFX + ")(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(authorization[\"']?\]?[ \t]*[:=][ \t]*)(?![ \t\"'])(?![rRbBuUfF]{1,2}[\"'])((?:=\"[^\"\r\n]*\"|='[^'\r\n]*'|[^\r\n\"']){3,})"), r"\1[REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
     # PowerShell: パイプで渡す '...' | ConvertTo-SecureString、引数の '...'・"..."・引用符なし、-Password などの引数
     (re.compile(r"(?i)(" + _DQ_PS + "|" + _SQ + r")(\s*\)?\s*\|\s*ConvertTo-SecureString)"), r"'[REDACTED]'\2"),
     (re.compile(r"(?i)(ConvertTo-SecureString\b(?:[^'\"\n|;`]|`\r?\n|`.)*?)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?\s)(?=[^\s'\"|;-])([^\s|;]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?-String(?:\s+|:))([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    # 引用符を逃がして入れ子にした形: powershell -Command "... -Password \"X\""（引用符なしの値の規則より先に掛ける）
+    (re.compile(r"(?i)(-" + _SECRET_KEYS + r"\s+\\\")((?:[^\"\\\n]|\\[^\"])*)(?=\\\")"), r"\1[REDACTED]"),
     (re.compile(r"(?i)((?<!-)-" + _SECRET_KEYS + r"\s+)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(--(?:password|passwd|pwd|secret|token|pat|api[_-]?key|access[_-]?token|client[_-]?secret|passphrase)"
-                r"(?:\s+|=))(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    # 引用符なしの引数: -Password X / --password X / --token=X / az devops login --token X
-    (re.compile(r"(?i)((?:^|\s)--?(?:password|passwd|pwd|secret|token|pat|api[_-]?key|access[_-]?token|client[_-]?secret|"
-                r"personalaccesstoken|securepassword|passphrase)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(--" + _OPT_NAME + r"(?:\s+|=))(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(--" + _OPT_NAME + r"(?:\s+|=))(" + _DQ_PS + ")"), _keep_quote),
+    # 引用符なしの引数: -Password X / --password X / --token=X / az devops login --token X / config.cmd --windowsLogonPassword X
+    (re.compile(r"(?i)((?:^|\s)--?(?:" + _OPT_NAME + r"|personalaccesstoken|securepassword|passphrase)(?:\s+|=))"
+                r"(?=[^\s'\"|;=:-])(?!\\\")([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    # 引用符を入れ子にした形: ConvertTo-SecureString ""X"" / "args": ["-Password", "X"]
+    (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;]*?\"\")([^\"\n]+)(?=\"\")"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)([\"']--?(?:" + _OPT_NAME + r"|personalaccesstoken|securepassword)[\"']\s*,\s*)(" + _DQ + "|" + _SQ + ")"),
+     _keep_quote),
     (re.compile(r"(?i)(-(?:personalaccesstoken|securepassword|passphrase)\s+)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
     # PowerShell の $headers.Add("Authorization", "Basic ...")
     (re.compile(r"(?i)(\.Add\(\s*[\"'](?:Authorization|Ocp-Apim-Subscription-Key|x-functions-key|x-api-key)[\"']\s*,\s*)"
                 r"(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
     # 環境変数に入れる書き方: os.environ["X_TOKEN"] = / setx X_PAT v / SetEnvironmentVariable("X_TOKEN", v) / Set-Item Env:X -Value v
-    (re.compile(r"(?i)(environ\[[\"'][^\"'\]\n]*" + _SECRET_WORD + r"[^\"'\]\n]*[\"']\][ \t]*=[ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(environ\[[\"'][^\"'\]\n]*" + _SECRET_WORD + r"[^\"'\]\n]*[\"']\][ \t]*=[ \t]*" + _PFX + ")(" + _DQ + "|" + _SQ + ")"),
+     _keep_quote),
     (re.compile(r"(?i)(environ\[[\"'][^\"'\]\n]*" + _SECRET_WORD + r"[^\"'\]\n]*[\"']\][ \t]*=[ \t]*)(?![\"'])([^\s;,]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(\bsetx\s+(?:/m\s+)?[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(\bsetx\s+(?:/m\s+)?[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?\s+)(?![\"'/])(\S+)"), r"\1[REDACTED]"),
@@ -229,7 +239,9 @@ _SECRET_PATTERNS = [
     *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*)(?![\"'])(?![rRbBuUfF]{1,2}[\"'])([^\s\"';,]+)"),
        _keep_token_counts)
       for flags, name in _ENV_NAMES],
-    # Azure Pipelines の変数: - name: DB_PASSWORD / value: X（名前の行の次の value）
+    # Azure Pipelines の変数: - name: DB_PASSWORD / value: X（名前の行の次の value）。value を次の行に書いた形も
+    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[^\n]*\r?\n(?:[ \t]+(?![ \t]|-|value:)[^\n]*\r?\n){0,5}"
+                r"[ \t]+value:[ \t]*(?:#[^\n]*)?\r?\n[ \t]+)(?![-#])([^\s#][^\n]*)"), r"\1[REDACTED]"),
     (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*(?:#[^\n]*)?\r?\n([ \t]*)value:[ \t]*"
                 r"[|>](?:[-+]?[1-9]?|[1-9][-+])[ \t]*(?:#[^\n]*)?\r?\n)((?:(?:[ \t]*\r?\n)*\2[ \t]+\S.*(?:\n|$))+)"),
      lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
@@ -238,7 +250,7 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*(?:#[^\n]*)?\r?\n[ \t]*value:[ \t]*)"
                 r"(?![\"'|>])([^\s#]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[^\n]*\r?\n(?:[ \t]+(?![ \t]|-|value:)[^\n]*\r?\n){1,5}"
-                r"[ \t]+value:[ \t]*)(" + _DQ + "|" + _SQ + "|(?![\"'|>])[^\s#]+)"), r"\1[REDACTED]"),
+                r"[ \t]+value:[ \t]*)(" + _DQ + "|" + _SQ + r"|(?![\"'|>])[^\s#]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?im)(-[ \t]+value:[ \t]*)(" + _DQ + "|" + _SQ + r"|[^\s#]+)(?=[^\n]*\r?\n(?:[ \t]+(?![ \t]|-|name:)[^\n]*\r?\n){0,5}?"
                 r"[ \t]+name:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + ")"), r"\1[REDACTED]"),
     # PowerShell の変数: $pass = '...' / $pw = "..." / $adminPass = ...
@@ -248,7 +260,12 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?<![A-Za-z])((?:PW|PWD|PASS|Pass|pw|pass)[ \t]*[:=][ \t]*)(?![\"'])([^\s、。,，]+)"), r"\1[REDACTED]"),
     # 資格情報のオブジェクト: NetworkCredential("u", "X") / HttpNtlmAuth("u", "X") / HTTPBasicAuth / auth=("u", "X")
     (re.compile(r"(?i)((?:NetworkCredential\s*(?:\]::new)?|HttpNtlmAuth|HTTPBasicAuth|HTTPDigestAuth|\bauth\s*=\s*)\s*\(\s*"
-                + _PFX + r"(?:" + _DQ + "|" + _SQ + r")\s*,\s*" + _PFX + ")(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+                r"(?:" + _PFX + r"(?:" + _DQ + "|" + _SQ + r"|\"\"|'')|\$?[\w.]+)\s*,\s*" + _PFX + ")(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    # Azure Pipelines のログのコマンド: ##vso[task.setsecret]V / ##vso[task.setvariable variable=秘密の名前;...]V /
+    # ##vso[task.setvariable ...;issecret=true;...]V
+    (re.compile(r"(?i)(##vso\[task\.setsecret\])([^\r\n]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(##vso\[task\.setvariable\b(?=[^\]\n]*(?:variable=[^;\]\n]*" + _SECRET_WORD + r"|issecret=true))[^\]\n]*\])"
+                r"([^\r\n]+)"), r"\1[REDACTED]"),
     # TFVC: tf ... /login:DOMAIN\user,X
     (re.compile(r"(?i)(/login:[^,\s\"']+,)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(/login:[^,\s\"']+,)([^\s\"']+)"), r"\1[REDACTED]"),
@@ -279,6 +296,9 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(?<![a-z0-9+.-])([a-z0-9+.-]*?[a-z][a-z0-9+.-]{0,30}://)[^\s/?#]*@"), r"\1[REDACTED]@"),
     # Azure DevOps の PAT らしい長い英数字（旧形式は 52 文字の小文字と数字、新形式は 84 文字前後）
     (re.compile(r"(?<![A-Za-z0-9])[a-z2-7]{52}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
+    # 伏せた値の後ろに続く、隣り合う文字列（Python の "前半" "後半"、括弧の中の改行も）
+    (re.compile(r"((?:\"\[REDACTED\]\"|'\[REDACTED\]')\s*)((?:[rRbBuUfF]{0,2}(?:\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*')\s*)+)"),
+     lambda m: m.group(1) + re.sub(r"([\"'])(?:[^\"'\\\n]|\\.)*\1", r"\1[REDACTED]\1", m.group(2))),
     # 書き方の規則に当たらなかった値の網: 20 文字以上の、大文字・小文字・数字が混ざった、でたらめらしい文字列
     (re.compile(r"(?<![A-Za-z0-9+/=_~.-])[A-Za-z0-9+/=_~.-]{20,}(?<!\.)(?![A-Za-z0-9+/=_~-])"), lambda m: _random_token(m.group(0))),
     # 16 進だけの並び（SHA-384 などのハッシュ）は伏せない
@@ -311,12 +331,17 @@ _PLAIN_PART = re.compile(r"[0-9a-f]+|[0-9A-F]+|[0-9]{1,4}(?:T[0-9]{2})?|[0-9]{1,
 RANDOM_WORDY = 0.6
 
 
+# 置き換えに関数を使う規則（網・XML・token の数）の中身を変えたら上げる。正規表現の文字列だけでは指紋に表れないため
+_RULES_VERSION = "16"
+
+
 def _redact_signature():
     """伏せ字の規則の指紋。規則を変えたら、保存してある本文に伏せ字を掛け直す（取り込み直しはしない）。"""
     import hashlib
     # 正規表現と置き換えの文字列だけから作る（関数の中身は Python のバージョンで変わるので使わない）
     src = "\n".join("%s\t%s" % (p.pattern, r if isinstance(r, str) else "fn") for p, r in _SECRET_PATTERNS)
     src += "\nrandom:%s:%s:%s" % (RANDOM_WORDY, _WORDY.pattern, _PLAIN_PART.pattern)
+    src += "\ncount:%s\nrules:%s" % (_TOKEN_COUNT.pattern, _RULES_VERSION)
     return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
 
 
@@ -871,10 +896,10 @@ class Index:
             # 前のバージョンで forget した会話の、ファイルの行の無い本文（取り込みの途中で止まったもの）も消す
             orphans = self.db.execute("SELECT m.id FROM messages m JOIN forgotten f ON f.codex_home = m.codex_home "
                                       "AND f.thread_id = m.thread_id").fetchall()
-            if orphans:
-                with self.db:
-                    for (mid,) in orphans:
-                        self._delete_message(mid)
+            with self.db:
+                for (mid,) in orphans:
+                    self._delete_message(mid)
+                self._drop_orphans()
 
     def close(self):
         self.db.close()
@@ -972,6 +997,7 @@ class Index:
         if not self._has_table("msg_fts"):
             try:
                 db.execute("CREATE VIRTUAL TABLE msg_fts USING fts5(norm, tokenize='trigram')")
+                db.execute("INSERT INTO msg_fts (rowid, norm) SELECT id, norm FROM messages")
             except sqlite3.OperationalError:
                 pass  # FTS5 か trigram が無い SQLite。instr() だけで検索する。
         if commit:
@@ -1261,12 +1287,28 @@ class Index:
 
     def _carry(self, old_id, new_id):
         """前の行の単語の索引と埋め込みを、新しい行へ移す。"""
+        # 移す先の ID に、前に消した発言の行が残っていることがある（埋め込みの途中で forget が済んだとき）
+        self.db.execute("DELETE FROM vectors WHERE message_id = ?", (new_id,))
+        self.db.execute("DELETE FROM word_done WHERE message_id = ?", (new_id,))
+        if self.words:
+            self.db.execute("DELETE FROM words_fts WHERE rowid = ?", (new_id,))
         if self.words and self.db.execute("SELECT 1 FROM word_done WHERE message_id = ?", (old_id,)).fetchone():
             row = self.db.execute("SELECT words FROM words_fts WHERE rowid = ?", (old_id,)).fetchone()
             if row:
                 self.db.execute("INSERT INTO words_fts (rowid, words) VALUES (?, ?)", (new_id, row[0]))
                 self.db.execute("INSERT INTO word_done VALUES (?)", (new_id,))
         self.db.execute("UPDATE vectors SET message_id = ? WHERE message_id = ?", (new_id, old_id))
+
+    def _drop_orphans(self):
+        """持ち主の発言が無い全文検索・単語の索引・埋め込みの行（埋め込みの途中で forget が済んだもの）を消す。"""
+        gone = "NOT IN (SELECT id FROM messages)"
+        self.db.execute("DELETE FROM vectors WHERE message_id %s" % gone)
+        self.db.execute("DELETE FROM word_done WHERE message_id %s" % gone)
+        if self.words:
+            self.db.execute("DELETE FROM words_fts WHERE rowid %s" % gone)
+        if self.fts:
+            self.db.execute("DELETE FROM msg_fts WHERE rowid %s" % gone)
+        self._vec_cache = None
 
     def _update_thread_names(self, home):
         index_path = os.path.join(home, "session_index.jsonl")
@@ -1304,8 +1346,10 @@ class Index:
                 except Exception:  # 区切れない発言は済みにしない（次に試す。それまでは trigram で探す）
                     failed += 1
                     continue
-                self.db.execute("INSERT INTO words_fts (rowid, words) VALUES (?, ?)", (r["id"], words))
-                self.db.execute("INSERT INTO word_done VALUES (?)", (r["id"],))
+                still = "SELECT 1 FROM messages WHERE id = ? AND text = ?"
+                self.db.execute("INSERT INTO words_fts (rowid, words) SELECT ?, ? WHERE EXISTS (%s)" % still,
+                                (r["id"], words, r["id"], r["text"]))
+                self.db.execute("INSERT INTO word_done SELECT ? WHERE EXISTS (%s)" % still, (r["id"], r["id"], r["text"]))
         self.word_failures = failed
         return len(rows)
 
@@ -1323,11 +1367,12 @@ class Index:
             if budget is not None and time.time() - start > budget:
                 break
             batch = rows[i:i + 16]
-            pieces = [(r["id"], n, c) for r in batch for n, c in enumerate(embed_chunks(r["text"]))]
-            vecs = encode([DOC_PREFIX + c for _, _, c in pieces])
-            with self.db:  # 1 つの発言の断片は同じトランザクションで入れる（途中までの発言を残さない）
-                self.db.executemany("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?)",
-                                    [(mid, n, EMBED_MODEL, v.tobytes()) for (mid, n, _), v in zip(pieces, vecs)])
+            pieces = [(r["id"], n, c, r["text"]) for r in batch for n, c in enumerate(embed_chunks(r["text"]))]
+            vecs = encode([DOC_PREFIX + c for _, _, c, _ in pieces])
+            with self.db:  # 1 つの発言の断片は同じトランザクションで入れる。本文がまだ同じ ID にあるときだけ
+                self.db.executemany("INSERT OR REPLACE INTO vectors SELECT ?, ?, ?, ? WHERE EXISTS "
+                                    "(SELECT 1 FROM messages WHERE id = ? AND text = ?)",
+                                    [(mid, n, EMBED_MODEL, v.tobytes(), mid, text) for (mid, n, _, text), v in zip(pieces, vecs)])
             done += len(batch)
             if progress:
                 progress(done, len(rows))
@@ -1372,9 +1417,8 @@ class Index:
             self.db.execute("DROP TABLE IF EXISTS msg_fts")
             self.db.execute("DROP TABLE IF EXISTS words_fts")
             self.db.execute("DELETE FROM word_done")
-            self._create_fts(commit=False)
-            if self.fts:
-                self.db.execute("INSERT INTO msg_fts (rowid, norm) SELECT id, norm FROM messages")
+            self._create_fts(commit=False)  # 作った表には、残した発言（原本が消えた会話の分など）も入る
+            self._drop_orphans()
         self.db.execute("VACUUM")
 
     # 検索
@@ -1544,13 +1588,14 @@ class Index:
         q = self.db.execute
         return {
             "zst_unreadable": q("SELECT COUNT(*) FROM files WHERE codex_home=? AND status='zst_unreadable'", (home,)).fetchone()[0],
-            "partial": q("SELECT COUNT(*) FROM files WHERE codex_home=? AND status='partial'", (home,)).fetchone()[0],
+            "partial": q("SELECT COUNT(*) FROM files WHERE codex_home=? AND status NOT IN ('forgotten', 'no_messages', 'missing') "
+                         "AND (shape_errors > 0 OR bad_json > 0)", (home,)).fetchone()[0],
             "no_messages": q("SELECT COUNT(*) FROM files WHERE codex_home=? AND status='no_messages'", (home,)).fetchone()[0],
             "missing": self._missing_count(home),
-            "bad_json": q("SELECT COALESCE(SUM(bad_json),0) FROM files WHERE codex_home=? AND status != 'forgotten'",
+            "bad_json": q("SELECT COALESCE(SUM(bad_json),0) FROM files WHERE codex_home=? AND status NOT IN ('forgotten', 'missing')",
                           (home,)).fetchone()[0],
             "shape_errors": q("SELECT COALESCE(SUM(shape_errors),0) FROM files WHERE codex_home=? "
-                              "AND status NOT IN ('forgotten', 'no_messages')",
+                              "AND status NOT IN ('forgotten', 'no_messages', 'missing')",
                               (home,)).fetchone()[0],
             "last_ingest": q("SELECT MAX(ingested_at) FROM files WHERE codex_home=?", (home,)).fetchone()[0],
         }
@@ -1893,8 +1938,18 @@ def cmd_stats(args):
     print("除外した会話: %d" % len(idx.forgotten(home)))
     sem = Semantic()
     words = "単語の BM25（SudachiPy）" if sem.tokenizer() else "trigram の BM25（SudachiPy が無い: %s）" % sem._tok_error
-    emb = "埋め込み（ruri-v3-130m、%d 本）" % q("SELECT COUNT(*) FROM vectors").fetchone()[0] if model_ready() else "埋め込みなし（モデルが無い）"
-    rr = "並べ直し（ruri-v3-reranker-310m）" if model_ready("rerank") else "並べ直しなし（モデルが無い）"
+    if not model_ready():
+        emb = "埋め込みなし（モデルが無い）"
+    elif sem.embedder() is None:
+        emb = "埋め込みなし（モデルを読み込めない: %s）" % sem._emb_error
+    else:
+        emb = "埋め込み（ruri-v3-130m、%d 本）" % q("SELECT COUNT(*) FROM vectors").fetchone()[0]
+    if not model_ready("rerank"):
+        rr = "並べ直しなし（モデルが無い）"
+    elif sem.reranker() is None:
+        rr = "並べ直しなし（モデルを読み込めない: %s）" % sem._rerank_error
+    else:
+        rr = "並べ直し（ruri-v3-reranker-310m）"
     print("方式: %s + %s + %s" % (words, emb, rr))
     for line in coverage_lines(idx, home, report, note):
         print(line)
@@ -2067,6 +2122,16 @@ def cmd_rebuild(args):
     return 0
 
 
+def _nonneg_int(value):
+    try:
+        n = int(value)
+    except ValueError:
+        n = -1
+    if n < 0:
+        raise argparse.ArgumentTypeError("0 以上の整数で書く: %s" % value)
+    return n
+
+
 def _date_type(value):
     try:
         datetime.date.fromisoformat(value)
@@ -2104,7 +2169,7 @@ def build_parser():
     s.set_defaults(func=cmd_search)
     sh = sub.add_parser("show", help="参照の発言と前後を表示する")
     sh.add_argument("ref")
-    sh.add_argument("--context", type=int, default=1, help="前後に出すターンの数")
+    sh.add_argument("--context", type=_nonneg_int, default=1, help="前後に出すターンの数（0 以上）")
     sh.add_argument("--around", help="参照の発言のうち、この言葉の周りを表示する")
     sh.add_argument("--offset", type=int, default=0)
     sh.add_argument("--length", type=int, default=2000)
