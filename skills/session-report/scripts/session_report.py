@@ -458,14 +458,19 @@ def fill_turn_ids(data):
     return b"\n".join(out) + b"\n" if out else b""
 
 
+HISTORY_DEPTH = 100  # revert をつなぐ段の上限（輪になった記録で止まらないため）
+
+
 def effective_record(path, data, home, depth=0):
     """続きだけを書く revert の記録（session_meta.history_base）なら、前半のファイルのその位置までをつないだ記録と、
     読んだファイルの一覧を返す。前半のファイルが無ければ、続きだけで返し、prefix_missing を True にする。"""
     meta = _first_meta(data) or {}
     base = meta.get("history_base") if isinstance(meta.get("history_base"), dict) else None
     sources = [{"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}]
-    if not base or depth >= 10:
+    if not base:
         return data, sources, False
+    if depth >= HISTORY_DEPTH:
+        return data, sources, True  # これより前は読まない。読み切れなかったことを coverage に残す
     rid, end = ss._str(base.get("thread_id")), base.get("end_byte_offset")
     if not rid or not isinstance(end, int) or isinstance(end, bool) or end < 0:
         return data, sources, True
@@ -551,22 +556,29 @@ def _source_name(meta_source):
     return None
 
 
-def redact_tree(obj):
-    """report の全部の文字列（dict のキーも）に伏せ字をかける。同じ文字列は同じ結果になるので、ID の対応は崩れない。"""
+# Codex が作る ID の欄。秘密は入らず、伏せ字をかけると別の ID が同じ文字になって対応が崩れるので、かけない
+ID_KEYS = {"id", "turn_id", "forked_from_id", "sha256", "operations"}
+
+
+def redact_tree(obj, key=None):
+    """report の文字列（dict のキーも）に伏せ字をかける。ID_KEYS の欄の文字列（と、その list の中の文字列）は除く。"""
     if isinstance(obj, str):
-        return ss.redact(obj)
+        return obj if key in ID_KEYS else ss.redact(obj)
     if isinstance(obj, list):
-        return [redact_tree(v) for v in obj]
+        return [redact_tree(v, key) if isinstance(v, str) else redact_tree(v) for v in obj]
     if isinstance(obj, dict):
-        return {redact_tree(k) if isinstance(k, str) else k: redact_tree(v) for k, v in obj.items()}
+        return {(ss.redact(k) if isinstance(k, str) else k): redact_tree(v, k) for k, v in obj.items()}
     return obj
 
 
 def build_report(path, data, home, other_files=0):
+    # 会話の情報（作業フォルダ・ブランチ・版）と書きかけの最後の行は、選んだファイルそのものから取る。
+    # revert の前半をつなぐと前半の session_meta が先に来て、ID を入れ直すと書きかけの行が落ちるため
+    meta, _, own_counters = ss.parse_rollout(path, data)
+    raw_meta = _first_meta(data) or {}
     data, sources, prefix_missing = effective_record(path, data, home)
     data = fill_turn_ids(data)
-    meta, messages, counters = ss.parse_rollout(path, data)
-    raw_meta = _first_meta(data) or {}
+    _, messages, counters = ss.parse_rollout(path, data)
     scan = scan_rollout(data)
     tid = meta["thread_id"]
     rows, seen = [], set()
@@ -598,7 +610,7 @@ def build_report(path, data, home, other_files=0):
                     "forked_from_id": _red(ss._str(raw_meta.get("forked_from_id"))), "agent": _red(meta["agent"])},
         "sources": sources,
         "coverage": {"lines": counters["lines"], "bad_json": counters["bad_json"], "shape_errors": counters["shape_errors"],
-                     "incomplete_tail": counters["incomplete_tail"], "duplicated_ids": scan["duplicated_ids"],
+                     "incomplete_tail": own_counters["incomplete_tail"], "duplicated_ids": scan["duplicated_ids"],
                      "other_files": other_files, "unknown_items": unknown, "events": events,
                      "prefix_missing": prefix_missing, "legacy_operations": legacy_ops,
                      "subagents_included": False},

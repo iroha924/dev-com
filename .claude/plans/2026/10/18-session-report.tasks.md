@@ -111,6 +111,16 @@ base: main
   - 結果: `python3 -m unittest tests.test_session_report -k Operation` → 5 件 OK。`python3 -m unittest discover -s tests` → 356 件 OK（skip 24）
   - 結果: `session_report.py extract <id> --out <一時フォルダ>` → この Mac の大きい記録 3 本で終了コード 0、操作 134・243・183 件、いちばん大きい記録で 5.7 秒（件数だけを見て消した）
 
+- [x] T17: revert の長いつながり・つないだときの会話の情報・ID の伏せ字・書きかけの行を直す
+  - 種別: 修正
+  - 計画: S2
+  - 依存: T16（直す対象の extract が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`, `README.md`
+  - red: `python3 -m unittest tests.test_session_report -k Extract` → 4 件 FAIL（11 段より前の前半が落ちる、つないだときに前半の作業フォルダ・ブランチ・版が出る、別の ID が同じ伏せ字になる、書きかけの最後の行が coverage に出ない）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): revert を 100 段までつなぎ、会話の情報と書きかけの行を選んだファイルから取り、ID の欄を伏せ字から外す`
+  - 結果: red を直す前のコードで実測 → 4 件 FAIL、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 48 件 OK
+
 ## P3: Codex の追記を読ませて確かめる
 
 Codex が読む input を作り、書いた追記の根拠と漏れをスクリプトで確かめ、持ち主が判定を直せるようになる。
@@ -188,6 +198,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T17 / T16 の見直し（0be4e95、high）の 5 件（すべて P2）は、どれも T16 の直しで入ったものだった。T14 に続いて直しが新しい欠陥を生むのが 2 回続いたので止めて持ち主に聞き、F1・F2・F3・F5 を直して F4（古い形式をつないだときの発言の参照）は README の「まだ直していないもの」へ、と決まった。F2 の大もとは、T14 の見直しの「ID に伏せ字が無い」を、脅威を決めずに受け入れたこと。ID は Codex が作る値なので、伏せ字から外した / T17 を足して直した。もう 1 回だけ見直しを回し、重い指摘が 0 件なら extract は閉じる
 
 - 2026-10-18 / T03 / 長い出力の全文に伏せ字をかけると、実際の記録の 1 本で 20 秒かかった（17 秒が伏せ字）。残す部分に 20,000 文字の余白を付けた範囲にだけかける形にして 5.7 秒になった。古い形式の操作（exec_command_end など）は取り出さず、coverage.legacy_operations に数える / 会社の PC の probe で古い形式の操作があれば、取り出すタスクを足す
 

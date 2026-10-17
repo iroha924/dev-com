@@ -431,15 +431,19 @@ class ExtractTest(_Base):
         finally:
             sr.ss.read_rollout_bytes = real
 
-    def test_ids_models_and_types_are_redacted(self):
+    def test_models_and_types_are_redacted_but_ids_are_kept(self):
+        # ID は Codex が作る値で、秘密は入らない。伏せ字をかけると別の ID が同じ文字になり、対応が崩れる
         tok = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
+        tok2 = "ghp_" + "Z9y8X7w6V5" * 3 + "u4t3s2"
         r = Rollout(T1).turn("t-" + tok, model=tok, effort=tok)
         r.user("u-" + tok, "a").item({"type": tok, "id": "x"}).agent("a1", "b").end("b")
+        r.turn("t-" + tok2).user("u-" + tok2, "c").end("d")
         self.write(T1, r.text())
         rep = self.extract(T1)
-        self.assertNotIn(tok, json.dumps(rep, ensure_ascii=False))
-        # 伏せ字をかけても、発言のターンとの対応は崩れない
-        self.assertEqual(rep["messages"][0]["turn_id"], rep["turns"][0]["id"])
+        self.assertEqual([t["id"] for t in rep["turns"]], ["t-" + tok, "t-" + tok2])
+        self.assertEqual([m["turn_id"] for m in rep["messages"] if m["kind"] == "user"], ["t-" + tok, "t-" + tok2])
+        self.assertEqual(rep["turns"][0]["model"], "[REDACTED-TOKEN]")
+        self.assertNotIn(tok, json.dumps({k: v for k, v in rep["coverage"].items()}, ensure_ascii=False))
 
     def test_paginated_revert_reads_the_prefix_file(self):
         first = Rollout(T1).turn("t1").user("u1", "最初の依頼").agent("a1", "最初の答え").end("最初の答え")
@@ -458,6 +462,43 @@ class ExtractTest(_Base):
         self.assertEqual([m["text"] for m in rep["messages"]], ["最初の依頼", "最初の答え", "やり直した依頼", "やり直した答え"])
         self.assertEqual([s["path"] for s in rep["sources"]], [prefix, newer])
         self.assertEqual(rep["sources"][0]["bytes"], cut)
+
+    def test_long_revert_chain_is_read_to_the_start(self):
+        tids = ["%08d-0000-4000-8000-%012d" % (n, n) for n in range(12)]
+        prev, prev_len = None, 0
+        for n, rid in enumerate(tids):
+            r = Rollout(T1)
+            meta = {"id": T1, "cwd": "C:\\w"}
+            if prev:
+                meta["history_base"] = {"thread_id": prev, "end_ordinal_exclusive": 1, "end_byte_offset": prev_len}
+            r.lines[0] = line(r.ts(), "session_meta", meta)
+            r.turn("t%d" % n).user("u%d" % n, "依頼 %d" % n).end("答え %d" % n)
+            path = self.write(rid, r.text())
+            os.utime(path, (1000 + n, 1000 + n))
+            prev, prev_len = rid, len(r.text().encode("utf-8"))
+        rep = self.extract(T1)
+        self.assertEqual([m["text"] for m in rep["messages"] if m["kind"] == "user"], ["依頼 %d" % n for n in range(12)])
+        self.assertFalse(rep["coverage"]["prefix_missing"])
+
+    def test_revert_keeps_the_continuation_metadata(self):
+        first = Rollout(T1, cwd="C:\\old", branch="old").turn("t1").user("u1", "前").end("前の答え")
+        cut = len(first.text().encode("utf-8"))
+        prefix = self.write(T1, first.text())
+        cont = Rollout(T1)
+        cont.lines[0] = line(cont.ts(), "session_meta", {"id": T1, "cwd": "C:\\new", "git": {"branch": "new"},
+                                                         "cli_version": "0.163.0", "history_mode": "paginated",
+                                                         "history_base": {"thread_id": T1, "end_ordinal_exclusive": 3,
+                                                                          "end_byte_offset": cut}})
+        cont.turn("t2").user("u2", "後").end("後の答え")
+        newer = self.write(T2, cont.text())
+        os.utime(prefix, (1000, 1000))
+        os.utime(newer, (2000, 2000))
+        s = self.extract(T1)["session"]
+        self.assertEqual((s["cwd"], s["branch"], s["cli_version"]), ("C:\\new", "new", "0.163.0"))
+
+    def test_incomplete_last_line_is_reported(self):
+        self.write(T1, sample(T1).text() + '{"timestamp": "x", "type": "ev')
+        self.assertEqual(self.extract(T1)["coverage"]["incomplete_tail"], 1)
 
     def test_a_broken_unrelated_record_does_not_stop_the_choice(self):
         good = self.write(T1, sample(T1).text())
