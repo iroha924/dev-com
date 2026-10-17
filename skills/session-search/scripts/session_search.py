@@ -82,9 +82,10 @@ SEMANTIC_REQUIREMENTS = [
 # --- 伏せ字 -----------------------------------------------------------------------------------------
 
 _SECRET_KEYS = r"(?:password|passwd|pwd|secret|token|api[_-]?key|pat|accountkey|sharedaccesskey)"
-# 代入の名前の続き（password2・passwordValue・DB_PASSWORD_HASH）。大文字・数字・_ で始まるものだけを許し、
-# path・patch・tokenizer・secretary のような、ふつうの語に続く小文字は許さない
-_KEY_SUFFIX = r"(?-i:[0-9_A-Z][0-9A-Za-z_]*)?(?![a-z])"
+# 代入の名前（password2・passwordValue・secretkey・DB_PASSWORD_HASH）。続きは何でもよいが、ふつうの語
+# （tokenizer・tokens・secretary）は外す。pat は PAT・pat・Pat の後に _ か数字が続くものだけ（PATH・path・patch・pattern を外す）
+_KEY_NAME = (r"(?:(?:password|passwd|pwd|secret(?!ar)|token(?!iz|s(?![A-Za-z]))|api[_-]?key|accountkey|sharedaccesskey)\w*"
+             r"|(?-i:pat|PAT|Pat)(?:[_0-9]\w*)?(?![A-Za-z]))")
 _DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"'     # "..."（\" と `" は閉じる引用符ではない。改行も含める）
 _SQ = r"'(?:[^']|''){1,100000}'(?!')"         # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
 
@@ -106,26 +107,38 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _DQ + "|" + _SQ + r")(\s*\)?\s*\|\s*ConvertTo-SecureString)"), r"'[REDACTED]'\2"),
     (re.compile(r"(?i)(ConvertTo-SecureString\b[^'\"\n|;]*?)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?\s)(?=[^\s'\"|;-])([^\s|;]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?-String\s+)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?-String(?:\s+|:))([^\s'\"|;]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(-" + _SECRET_KEYS + r"\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     # 引用符なしの引数: -Password X / --password X / --token=X / az devops login --token X
     (re.compile(r"(?i)((?:^|\s)--?(?:password|passwd|pwd|secret|token|pat|api[_-]?key|access[_-]?token|client[_-]?secret|"
                 r"personalaccesstoken|securepassword)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(-(?:personalaccesstoken|securepassword)\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     # 短いオプションでパスワードを渡すコマンド: docker login -p X / sqlcmd -P X / nuget ... -p X / mysql -p X
-    (re.compile(r"(?i)(\b(?:docker\s+login|sqlcmd|nuget|dotnet\s+nuget|mysql|psql)\b[^\n|;]*?\s-[pP]\s+)(" + _DQ + "|" + _SQ + ")"),
+    (re.compile(r"(?i)(\b(?:docker\s+login|sqlcmd|nuget|dotnet\s+nuget|mysql(?:dump)?|psql)\b[^\n|;]*?\s-[pP]\s*)(" + _DQ + "|" + _SQ + ")"),
      _keep_quote),
     (re.compile(r"(?i)(\b(?:docker\s+login|sqlcmd|nuget|dotnet\s+nuget|mysql|psql)\b[^\n|;]*?\s-[pP]\s+)([^\s'\"|;]+)"),
      r"\1[REDACTED]"),
     # az login --service-principal -p X / az acr login -p X / psexec -p X / sshpass -p X / schtasks /rp X
-    (re.compile(r"(?i)(\b(?:az\s+(?:login|acr\s+login)|psexec|sshpass)\b[^\n|;]*?\s-p\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\b(?:az\s+(?:login|acr\s+login)|psexec|sshpass)\b[^\n|;]*?\s-p\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(\b(?:az\s+(?:login|acr\s+login)|psexec|sshpass)\b[^\n|;]*?\s-p\s+)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bschtasks\b[^\n|;]*?\s/rp\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(\bschtasks\b[^\n|;]*?\s/rp\s+)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    # net user <名前> <パスワード>（* と /delete などは除く）
+    (re.compile(r"(?i)(\bnet\s+user\s+[^\s/]+\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\bnet\s+user\s+[^\s/]+\s+)(?![/*\"'])(\S+)"), r"\1[REDACTED]"),
+    # --password-stdin に渡す値: echo X | docker login --password-stdin / ... --password-stdin <<< X
+    (re.compile(r"(?i)(\becho\s+)(" + _DQ + "|" + _SQ + r")(?=\s*\|[^\n]*--password-stdin)"), _keep_quote),
+    (re.compile(r"(?i)(\becho\s+)([^\s|'\"]+)(?=\s*\|[^\n]*--password-stdin)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(--password-stdin\b[^\n]*?<<<\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(--password-stdin\b[^\n]*?<<<\s*)([^\s'\"]+)"), r"\1[REDACTED]"),
     # mysql -pPASSWORD（-p に続けて書く）
     (re.compile(r"(?i)(\bmysql(?:dump)?\b[^\n|;]*?\s-p)([^\s'\"|;-][^\s'\"|;]*)"), r"\1[REDACTED]"),
     # curl -u user:pw / --user user:pw
     (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)\s+[^\s:'\"]*:)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)\s+([\"'])[^\s:'\"]*:)((?:(?!\2)[^\n])+)"), r"\1[REDACTED]"),
     # -StorageAccountKey X / --account-key X / --sas-token X
+    (re.compile(r"(?i)((?:^|\s)--?(?:storageaccountkey|account-key|sas-token|client-secret)(?:\s+|=))(" + _DQ + "|" + _SQ + ")"),
+     _keep_quote),
     (re.compile(r"(?i)((?:^|\s)--?(?:storageaccountkey|account-key|sas-token|client-secret)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"),
      r"\1[REDACTED]"),
     # API のキーのヘッダー: Ocp-Apim-Subscription-Key / x-functions-key / x-api-key
@@ -142,14 +155,15 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(\bnet\s+use\s+(?:[a-z]:\s+)?\\\\\S+\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(\bnet\s+use\s+(?:[a-z]:\s+)?\\\\\S+\s+)(?![/\"'])(\S+)"), r"\1[REDACTED]"),
     # nuget.config などの XML: <add key="ClearTextPassword" value="X" /> / <password>X</password>
-    (re.compile(r"(?i)(key=\"(?:ClearTextPassword|Password|Token|ApiKey)\"\s+value=\")([^\"]*)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(key=([\"'])(?:ClearTextPassword|Password|Token|ApiKey)\2\s+value=([\"']))((?:(?!\3).)*)"),
+     r"\1[REDACTED]"),
     (re.compile(r"(?i)(<(password|clearTextPassword|token|apiKey)>)([^<]*)(</\2>)"), r"\1[REDACTED]\4"),
     # PowerShell の here-string: $password = @"...\n"@
-    (re.compile(r"(?i)(" + _SECRET_KEYS + _KEY_SUFFIX + r"\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
      lambda m: m.group(1) + m.group(2)[:2] + "[REDACTED]" + m.group(2)[-2:]),
     # YAML のブロック: secret: | の次の行から、字下げが続くところまで
-    (re.compile(r"(?im)^([ \t]*[\w.-]*(?:password|passwd|secret|token|api[_-]?key|pat)[\w.-]*[ \t]*:[ \t]*[|>][-+]?[ \t]*\n)"
-                r"((?:[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + "  [REDACTED]\n"),
+    (re.compile(r"(?im)^(([ \t]*)(?:-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>][-+]?[ \t]*\n)"
+                r"((?:\2[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
     # 環境変数の名前: AWS_SECRET_ACCESS_KEY=... / GITHUB_TOKEN: ...（区切りの語が secret・token・password・key・pat）
     (re.compile(r"(?i)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:secret|token|password|passwd|key|pat)(?:_[a-z0-9]+)*[\"']?\s*[:=]\s*)"
                 r"(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
@@ -161,9 +175,12 @@ _SECRET_PATTERNS = [
     # password = """...""" / '''...'''（Python の三重の引用符）
     (re.compile(r"(?i)(" + _SECRET_KEYS + r"[\"']?\s*[:=]\s*)(\"\"\"[\s\S]{1,4000}?\"\"\"|'''[\s\S]{1,4000}?''')"),
      lambda m: m.group(1) + m.group(2)[:3] + "[REDACTED]" + m.group(2)[:3]),
+    # 型注釈の付いた代入: password: str = "X" / token: Optional[str] = X
+    (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
     # password= / "password": "..." / $password = '...'。引用符があれば閉じるまで伏せ、引用符の種類を保つ
-    (re.compile(r"(?i)(" + _SECRET_KEYS + _KEY_SUFFIX + r"[\"']?\s*[:=]\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(" + _SECRET_KEYS + _KEY_SUFFIX + r"\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[\"']?\s*[:=]\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
     # 日本語の書き方: パスワードは X / トークン: X。値が英数字と記号で 6 文字以上のときだけ伏せる
     # （「シークレットは使わず」「パスは C:\...」のような、ふつうの言葉やパスを消さない）
     (re.compile(r"((?:パスワード|トークン|アクセストークン|シークレット)\s*(?:は|を|[:：=])\s*[「『]?)"
@@ -172,9 +189,29 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#]*@"), r"\1[REDACTED]@"),
     # Azure DevOps の PAT らしい長い英数字（旧形式は 52 文字の小文字と数字、新形式は 84 文字前後）
     (re.compile(r"(?<![A-Za-z0-9])[a-z2-7]{52}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
+    # 書き方の規則に当たらなかった値の網: 20 文字以上の、大文字・小文字・数字が混ざった、でたらめらしい文字列
+    (re.compile(r"(?<![A-Za-z0-9+=_-])[A-Za-z0-9+=_-]{20,}(?![A-Za-z0-9+=_-])"), lambda m: _random_token(m.group(0))),
     # 16 進だけの並び（SHA-384 などのハッシュ）は伏せない
     (re.compile(r"(?<![A-Za-z0-9])(?=[A-Za-z0-9]*[g-zG-Z])[A-Za-z0-9]{76,100}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
 ]
+
+
+def _random_token(tok):
+    """でたらめな文字列らしければ伏せる。16 進（ハッシュ・UUID）と、単語をつないだ名前は残す。
+
+    名前（AzureDevOpsServer2020・HIRATA_CODEX_DB2）は、3 文字以上の語と数字の並びがほとんどを占める。
+    でたらめな英数字は短い切れ端ばかりになる（24 文字で、単語らしい部分が 55% 未満になるのが 9 割以上）。
+    """
+    if re.fullmatch(r"[0-9a-fA-F-]+", tok) or not (re.search(r"[a-z]", tok) and re.search(r"[A-Z]", tok)):
+        return tok
+    if len(tok) < 32 and not re.search(r"[0-9]", tok):
+        return tok
+    wordy = sum(len(m.group(0)) for m in _WORDY.finditer(tok)) / len(tok)
+    return "[REDACTED-TOKEN]" if wordy < RANDOM_WORDY else tok
+
+
+_WORDY = re.compile(r"[A-Z]?[a-z]{3,}|[A-Z]{3,}(?![a-z])|[0-9]{3,}")
+RANDOM_WORDY = 0.55
 
 
 def _redact_signature():
@@ -182,6 +219,7 @@ def _redact_signature():
     import hashlib
     # 正規表現と置き換えの文字列だけから作る（関数の中身は Python のバージョンで変わるので使わない）
     src = "\n".join("%s\t%s" % (p.pattern, r if isinstance(r, str) else "fn") for p, r in _SECRET_PATTERNS)
+    src += "\nrandom:%s:%s" % (RANDOM_WORDY, _WORDY.pattern)
     return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
 
 
@@ -447,7 +485,6 @@ def parse_rollout(path, data):
             meta["agent"] = (payload.get("agent_role") or payload.get("agent_path") or payload.get("agent_type")
                              or sub_agent or None)
             meta["history_mode"] = payload.get("history_mode")
-            meta["forked_from"] = payload.get("forked_from_id") or None
             meta["cli_version"] = payload.get("cli_version")
             meta.setdefault("started", ts)
         elif typ == "response_item":
@@ -709,28 +746,25 @@ class Index:
                 bad_json INTEGER, shape_errors INTEGER, skipped_elements INTEGER, ingested_at TEXT);
             CREATE TABLE IF NOT EXISTS threads (
                 thread_id TEXT, codex_home TEXT, name TEXT, cwd TEXT, branch TEXT,
-                originator TEXT, agent TEXT, started TEXT, forked_from TEXT, PRIMARY KEY (codex_home, thread_id));
+                originator TEXT, agent TEXT, started TEXT, PRIMARY KEY (codex_home, thread_id));
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY, codex_home TEXT, thread_id TEXT, path TEXT, line INTEGER,
-                msg_id TEXT, turn_id TEXT, seq INTEGER, ts TEXT, kind TEXT, cwd TEXT, text TEXT, norm TEXT);
+                msg_id TEXT, turn_id TEXT, seq INTEGER, ts TEXT, kind TEXT, cwd TEXT, text TEXT, norm TEXT, raw_hash TEXT);
             CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id, ts, seq);
             CREATE INDEX IF NOT EXISTS messages_path ON messages(path);
             CREATE TABLE IF NOT EXISTS forgotten (codex_home TEXT, thread_id TEXT, at TEXT,
                 PRIMARY KEY (codex_home, thread_id));
-            CREATE TABLE IF NOT EXISTS forgotten_copies (codex_home TEXT, thread_id TEXT, key TEXT,
-                PRIMARY KEY (codex_home, thread_id, key));
             CREATE TABLE IF NOT EXISTS word_done (message_id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS vectors (message_id INTEGER, chunk INTEGER, model TEXT, vec BLOB,
                 PRIMARY KEY (message_id, chunk));
         """)
-        if "forked_from" not in [r[1] for r in db.execute("PRAGMA table_info(threads)")]:
-            db.execute("ALTER TABLE threads ADD COLUMN forked_from TEXT")
-            db.execute("DELETE FROM meta WHERE key LIKE 'keyed%'")  # forget した会話の写しの鍵を、原本から作り直す
-            # 取り込み済みの記録を読み直して、fork の元を入れる（入れないと、前に forget した親の写しを外せない）
-            db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'no_messages')")
-        if self._has_table("forgotten_keys"):
-            db.execute("DROP TABLE forgotten_keys")  # 時刻を含む前の形の鍵（fork の写しは時刻が書き換わるので効かない）
-            db.execute("DELETE FROM meta WHERE key LIKE 'keyed%'")
+        if "raw_hash" not in [r[1] for r in db.execute("PRAGMA table_info(messages)")]:
+            db.execute("ALTER TABLE messages ADD COLUMN raw_hash TEXT")
+        # 前のバージョンの、fork の写しを外す仕組みの名残（forget した会話の本文のハッシュと行）を消す
+        db.execute("DROP TABLE IF EXISTS forgotten_copies")
+        db.execute("DELETE FROM threads WHERE EXISTS (SELECT 1 FROM forgotten f WHERE f.codex_home = threads.codex_home "
+                   "AND f.thread_id = threads.thread_id)")
+        db.execute("DROP TABLE IF EXISTS forgotten_keys")
         db.commit()
         if self._has_table("threads_v1"):
             # 旧い表は CODEX_HOME を区別していないので、その会話の本文を持つ CODEX_HOME ごとに行を作る
@@ -755,8 +789,7 @@ class Index:
             # 原本のある記録は新しい規則で読み直す（規則を狭めたときに、前に伏せすぎた本文も元に戻る。
             # 本文の変わらない発言は埋め込みを引き継ぐ）。原本の無い記録は、保存してある本文に掛け直す
             self.reredact_stored()
-            # forget した原本も読み直す（写しを外す鍵は伏せた本文から作るので、新しい規則の鍵を足す）
-            db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'no_messages', 'forgotten')")
+            db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'no_messages')")
         db.execute("INSERT OR REPLACE INTO meta VALUES ('redact', ?)", (_redact_signature(),))
         db.commit()
         if versions.get("schema") != SCHEMA_VERSION or versions.get("extract") != EXTRACT_VERSION:
@@ -826,11 +859,6 @@ class Index:
     def ingest(self, home):
         report = {"files": 0, "updated": 0, "zst_unreadable": 0, "partial": 0, "missing": 0, "errors": []}
         forgotten = self.forgotten(home)
-        if forgotten and self.db.execute("SELECT value FROM meta WHERE key = ?", ("keyed:" + home,)).fetchone() is None:
-            # 写しを外すハッシュを持たないバージョンで forget した会話は、原本を一度読み直してハッシュを作る
-            with self.db:
-                self.db.execute("UPDATE files SET size = -1 WHERE codex_home = ? AND status = 'forgotten'", (home,))
-                self.db.execute("INSERT OR REPLACE INTO meta VALUES (?, '1')", ("keyed:" + home,))
         seen = set()
         failed_dirs = []
         rollouts = rollout_files(home, failed_dirs)
@@ -849,6 +877,12 @@ class Index:
                 continue
             seen.add(path)
             row = self.db.execute("SELECT size, mtime_ns, status FROM files WHERE path = ?", (path,)).fetchone()
+            name_tid = _thread_id_in_name(path)
+            if name_tid in forgotten:
+                if not row or row["status"] != "forgotten" or row["size"] != st.st_size:
+                    self._delete_path(path)
+                    self._record_file(path, home, {"thread_id": name_tid}, st, "forgotten", {}, {})
+                continue
             # 読めなかった .zst が読めるようになった、または「原本なし」にしたファイルが戻ってきたら、読み直す
             retry = row and ((row["status"] == "zst_unreadable" and zstd is not None) or row["status"] == "missing")
             if row and row["size"] == st.st_size and row["mtime_ns"] == st.st_mtime_ns and not retry:
@@ -864,8 +898,7 @@ class Index:
                 continue
             if data is None:
                 report["zst_unreadable"] += 1
-                m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", os.path.basename(path))
-                self._record_file(path, home, {"thread_id": m.group(1) if m else None}, st, "zst_unreadable", {}, {})
+                self._record_file(path, home, {"thread_id": name_tid}, st, "zst_unreadable", {}, {})
                 continue
             meta, messages, counters = parse_rollout(path, data)
             try:
@@ -878,9 +911,6 @@ class Index:
                 st = os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid,
                                      -1, st.st_atime, st.st_mtime, st.st_ctime))
             if meta["thread_id"] in forgotten:
-                # 読み直した原本（書き足しや、ハッシュを持たない前のバージョンの forget）の発言も、写しを外すハッシュに足す
-                self._hide_copies(home, meta["thread_id"], {_msg_key({"kind": m["kind"], "norm": normalize(redact(m["text"]))})
-                                                            for m in messages})
                 self._record_file(path, home, meta, st, "forgotten", counters, {})
                 continue
             status = "partial" if counters["shape_errors"] else "ok"
@@ -919,7 +949,12 @@ class Index:
             report["updated"] += 1
         # 原本が見つからなくなったファイル（archive への移動は別のパスで取り込み済み）。
         # memories は会話から作り直される要約で、Codex が消したものは古くなった要点なので、索引からも消す。
-        for row in self.db.execute("SELECT path, thread_id, status FROM files WHERE codex_home = ?", (home,)).fetchall():
+        rows = self.db.execute("SELECT path, thread_id, status FROM files WHERE codex_home = ?", (home,)).fetchall()
+        by_stem = {}
+        for r in rows:
+            if r["path"] in seen and r["status"] in ("ok", "partial"):
+                by_stem.setdefault(_file_stem(r["path"]), []).append(r["path"])
+        for row in rows:
             if row["path"] in seen:
                 continue
             if any(_under(row["path"], d) for d in failed_dirs):
@@ -927,11 +962,11 @@ class Index:
             # 同じ名前のファイル（archive への移動や圧縮）が別の場所にあり、その中身を取り込めているときだけ移動とみなす。
             # 読めない .zst に変わっただけなら、前の中身を残す。
             # 同じ名前の記録がほかにあって、消えた側の発言を全部持っているときだけ、移動（や圧縮）とみなす
-            mine = self._path_keys(row["path"])
-            moved = any(_file_stem(r["path"]) == _file_stem(row["path"]) and mine <= self._path_keys(r["path"])
-                        for r in self.db.execute(
-                            "SELECT path FROM files WHERE codex_home = ? AND path != ? AND status IN ('ok', 'partial')",
-                            (home, row["path"])).fetchall() if r["path"] in seen)
+            same = [p for p in by_stem.get(_file_stem(row["path"]), []) if p != row["path"]]
+            if row["status"] == "missing" and not same:
+                continue  # 前の検索で「原本なし」にしたまま
+            mine = self._path_msgs(row["path"]) if same else None
+            moved = any(not (mine - self._path_msgs(p)) for p in same)
             with self.db:
                 empty_zst = row["status"] in ("zst_unreadable", "no_messages") and not self.db.execute(
                     "SELECT 1 FROM messages WHERE path = ? LIMIT 1", (row["path"],)).fetchone()
@@ -942,8 +977,6 @@ class Index:
                     self.db.execute("UPDATE files SET status = 'missing' WHERE path = ?", (row["path"],))
         report["missing"] = self.db.execute(
             "SELECT COUNT(*) FROM files WHERE codex_home = ? AND status = 'missing'", (home,)).fetchone()[0]
-        if report["updated"]:
-            self._sweep_forgotten_copies(home)
         error = self._update_thread_names(home)
         if error:
             report["errors"].append(error)
@@ -959,56 +992,11 @@ class Index:
                  counts.get("final", 0), counts.get("memory", 0), counters.get("bad_json", 0),
                  counters.get("shape_errors", 0), counters.get("skipped_elements", 0), _now()))
 
-    def _path_keys(self, path):
-        return {_msg_key(r) for r in self.db.execute("SELECT kind, norm FROM messages WHERE path = ?", (path,))}
-
-    def _descendants(self, home, thread_id):
-        """thread_id を fork の元にした会話（子・孫…）。"""
-        out, frontier = set(), {thread_id}
-        while frontier:
-            marks = ",".join("?" * len(frontier))
-            kids = {r[0] for r in self.db.execute(
-                "SELECT thread_id FROM threads WHERE codex_home = ? AND forked_from IN (%s)" % marks, [home] + list(frontier))}
-            frontier = kids - out - {thread_id}
-            out |= frontier
-        return out
-
-    def _hidden_keys_for(self, home, thread_id):
-        """この会話の fork の元（親・祖父…）のうち forget したものの、写しを外す鍵。"""
-        keys, seen, cur = set(), set(), thread_id
-        for _ in range(32):
-            row = self.db.execute("SELECT forked_from FROM threads WHERE codex_home = ? AND thread_id = ?", (home, cur)).fetchone()
-            parent = row[0] if row else None
-            if not parent or parent in seen:
-                break
-            seen.add(parent)
-            keys |= {r[0] for r in self.db.execute(
-                "SELECT key FROM forgotten_copies WHERE codex_home = ? AND thread_id = ?", (home, parent))}
-            cur = parent
-        return keys
-
-    def _sweep_forgotten_copies(self, home):
-        for (tid,) in self.db.execute("SELECT DISTINCT thread_id FROM forgotten_copies WHERE codex_home = ?", (home,)).fetchall():
-            self._hide_copies(home, tid, set())
-
-    def _hide_copies(self, home, thread_id, keys):
-        """forget した会話の発言の鍵（種類と本文のハッシュ）を残し、その会話の fork の子孫にある写しを消す。
-
-        コピー型の fork は写した行の時刻を書き換えるので、鍵に時刻は使わない。消す先を fork の子孫に限るので、
-        親や無関係の会話にたまたま同じ文があっても消さない。
-        """
-        with self.db:
-            self.db.executemany("INSERT OR IGNORE INTO forgotten_copies VALUES (?, ?, ?)", [(home, thread_id, k) for k in keys])
-            kids = self._descendants(home, thread_id)
-            if not kids:
-                return
-            all_keys = {r[0] for r in self.db.execute(
-                "SELECT key FROM forgotten_copies WHERE codex_home = ? AND thread_id = ?", (home, thread_id))}
-            marks = ",".join("?" * len(kids))
-            for r in self.db.execute("SELECT id, kind, norm FROM messages WHERE codex_home = ? AND thread_id IN (%s)" % marks,
-                                     [home] + list(kids)).fetchall():
-                if _msg_key(r) in all_keys:
-                    self._delete_message(r["id"])
+    def _path_msgs(self, path):
+        """そのファイルの発言の多重集合（発言 ID・種類・本文）。同じ文の別の発言も区別して数える。"""
+        import collections
+        return collections.Counter((r["msg_id"], r["kind"], r["norm"])
+                                   for r in self.db.execute("SELECT msg_id, kind, norm FROM messages WHERE path = ?", (path,)))
 
     def _delete_message(self, mid):
         if self.fts:
@@ -1032,58 +1020,63 @@ class Index:
 
     def _replace(self, path, home, meta, messages, counters, st, status):
         counts = {k: 0 for k in KINDS}
+        sig = _redact_signature()
         with self.db:  # 1 ファイル 1 トランザクション。失敗したら前の内容が残る。
-            # 本文の変わらない発言は、単語の索引と埋め込みを引き継ぐ（会話が伸びるたびに全部を作り直さない）
-            carried = self._carry_out(path)
-            self._delete_path(path)
             tid = meta["thread_id"]
             # 同じ会話のファイルがほかにもあるとき（thread/revert は前半を元のファイルに残す）は両方を持ち、
             # 同じ発言は検索と show でまとめる。archive への移動で消えた前の場所の分は、ingest の最後に消す。
             self.db.execute(
-                "INSERT INTO threads (thread_id, codex_home, cwd, branch, originator, agent, started, forked_from) "
-                "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(codex_home, thread_id) DO UPDATE SET cwd=excluded.cwd, "
+                "INSERT INTO threads (thread_id, codex_home, cwd, branch, originator, agent, started) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(codex_home, thread_id) DO UPDATE SET cwd=excluded.cwd, "
                 "branch=excluded.branch, originator=excluded.originator, agent=excluded.agent, "
-                "started=COALESCE(threads.started, excluded.started), forked_from=excluded.forked_from",
+                "started=COALESCE(threads.started, excluded.started)",
                 (tid, home, redact(meta.get("cwd")), redact(meta.get("branch")), meta.get("originator"),
-                 meta.get("agent"), meta.get("started"), meta.get("forked_from")))
-            hidden = self._hidden_keys_for(home, tid)
+                 meta.get("agent"), meta.get("started")))
+            # 前と同じ発言（位置・ID・時刻・原文・伏せ字の規則が同じ）は、そのまま残す。会話が伸びるたびに、
+            # 伏せ字・全文検索・単語の索引・埋め込みを全部作り直さない
+            old = {}
+            for r in self.db.execute("SELECT id, line, msg_id, turn_id, seq, ts, kind, raw_hash, norm FROM messages "
+                                     "WHERE path = ?", (path,)).fetchall():
+                old.setdefault((r["line"], r["msg_id"], r["turn_id"], r["seq"], r["ts"], r["kind"], r["raw_hash"]),
+                               []).append(r)
+            fresh = []
             for msg in messages:
-                text = redact(msg["text"])
-                if hidden and _msg_key({"kind": msg["kind"], "norm": normalize(text)}) in hidden:
-                    continue  # forget した会話から写された発言（コピー型の fork）
-                cur = self.db.execute(
-                    "INSERT INTO messages (codex_home, thread_id, path, line, msg_id, turn_id, seq, ts, kind, cwd, text, norm) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (home, tid, path, msg["line"], msg["msg_id"], msg["turn_id"], msg["seq"], msg["ts"], msg["kind"],
-                     redact(msg["cwd"]), text, normalize(text)))
-                if self.fts:
-                    self.db.execute("INSERT INTO msg_fts (rowid, norm) VALUES (?, ?)", (cur.lastrowid, normalize(text)))
-                self._carry_in(carried.get((msg["msg_id"], msg["kind"], normalize(text))), cur.lastrowid)
+                h = _raw_hash(sig, msg)
+                same = old.get((msg["line"], msg["msg_id"], msg["turn_id"], msg["seq"], msg["ts"], msg["kind"], h))
+                if same:
+                    same.pop()
+                else:
+                    fresh.append((msg, h))
                 counts[msg["kind"]] += 1
+            # 残らなかった前の発言のうち、本文が同じものの単語の索引と埋め込みは、新しい行へ引き継ぐ
+            left = [r for rows in old.values() for r in rows]
+            reuse = {(r["msg_id"], r["kind"], r["norm"]): r["id"] for r in left}
+            for msg, h in fresh:
+                text = redact(msg["text"])
+                norm = normalize(text)
+                cur = self.db.execute(
+                    "INSERT INTO messages (codex_home, thread_id, path, line, msg_id, turn_id, seq, ts, kind, cwd, text, norm, "
+                    "raw_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (home, tid, path, msg["line"], msg["msg_id"], msg["turn_id"], msg["seq"], msg["ts"], msg["kind"],
+                     redact(msg["cwd"]), text, norm, h))
+                if self.fts:
+                    self.db.execute("INSERT INTO msg_fts (rowid, norm) VALUES (?, ?)", (cur.lastrowid, norm))
+                prev = reuse.pop((msg["msg_id"], msg["kind"], norm), None)
+                if prev is not None:
+                    self._carry(prev, cur.lastrowid)
+            for r in left:
+                self._delete_message(r["id"])
         self._vec_cache = None
         self._record_file(path, home, meta, st, status, counters, counts)
 
-    def _carry_out(self, path):
-        """入れ直す前の発言の、単語の索引と埋め込み。鍵は (発言 ID, 種類, 正規化した本文)。"""
-        out = {}
-        for r in self.db.execute("SELECT id, msg_id, kind, norm FROM messages WHERE path = ?", (path,)).fetchall():
-            words = None
-            if self.words and self.db.execute("SELECT 1 FROM word_done WHERE message_id = ?", (r["id"],)).fetchone():
-                row = self.db.execute("SELECT words FROM words_fts WHERE rowid = ?", (r["id"],)).fetchone()
-                words = row[0] if row else None
-            vecs = self.db.execute("SELECT chunk, model, vec FROM vectors WHERE message_id = ?", (r["id"],)).fetchall()
-            out[(r["msg_id"], r["kind"], r["norm"])] = (words, [tuple(v) for v in vecs])
-        return out
-
-    def _carry_in(self, carried, new_id):
-        if not carried:
-            return
-        words, vecs = carried
-        if words is not None:
-            self.db.execute("INSERT INTO words_fts (rowid, words) VALUES (?, ?)", (new_id, words))
-            self.db.execute("INSERT INTO word_done VALUES (?)", (new_id,))
-        for chunk, model, vec in vecs:
-            self.db.execute("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?)", (new_id, chunk, model, vec))
+    def _carry(self, old_id, new_id):
+        """前の行の単語の索引と埋め込みを、新しい行へ移す。"""
+        if self.words and self.db.execute("SELECT 1 FROM word_done WHERE message_id = ?", (old_id,)).fetchone():
+            row = self.db.execute("SELECT words FROM words_fts WHERE rowid = ?", (old_id,)).fetchone()
+            if row:
+                self.db.execute("INSERT INTO words_fts (rowid, words) VALUES (?, ?)", (new_id, row[0]))
+                self.db.execute("INSERT INTO word_done VALUES (?)", (new_id,))
+        self.db.execute("UPDATE vectors SET message_id = ? WHERE message_id = ?", (new_id, old_id))
 
     def _update_thread_names(self, home):
         index_path = os.path.join(home, "session_index.jsonl")
@@ -1166,22 +1159,14 @@ class Index:
                     or q("SELECT 1 FROM messages WHERE codex_home = ? AND thread_id = ? LIMIT 1", (home, thread_id)).fetchone())
 
     def forget(self, home, thread_id):
-        """会話を検索から外す。コピー型の fork が子の記録に写した同じ発言も外し、二度と取り込まない。
-
-        同じ発言かは、種類・時刻・本文から作ったハッシュで見分ける（本文そのものは残さない）。
-        """
+        """会話を検索から外し、二度と取り込まない。"""
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO forgotten VALUES (?, ?, ?)", (home, thread_id, _now()))
-            keys = {_msg_key(r) for r in self.db.execute(
-                "SELECT kind, norm FROM messages WHERE codex_home = ? AND thread_id = ?", (home, thread_id))}
-            self._hide_copies(home, thread_id, keys)
             for row in self.db.execute("SELECT path FROM files WHERE thread_id = ? AND codex_home = ?",
                                        (thread_id, home)).fetchall():
                 self._delete_path(row["path"])
                 self.db.execute("UPDATE files SET status = 'forgotten' WHERE path = ?", (row["path"],))
-            # threads の行は残す（孫から forget した親・祖父へ fork の元をたどるため）。名前は消す
-            self.db.execute("UPDATE threads SET name = NULL, cwd = NULL, branch = NULL WHERE thread_id = ? AND codex_home = ?",
-                            (thread_id, home))
+            self.db.execute("DELETE FROM threads WHERE thread_id = ? AND codex_home = ?", (thread_id, home))
 
     def rebuild(self):
         """取り込んだ内容を作り直す。forget の一覧と、原本が消えた会話の分は残す。
@@ -1268,13 +1253,19 @@ class Index:
             scores = _rrf(*lists)
         if not scores:
             return [], 0, " + ".join(modes)
-        placeholders = ",".join("?" * len(scores))
-        rows = {r["id"]: r for r in self.db.execute(
-            "SELECT m.*, t.name, t.branch, t.originator FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id AND t.codex_home = m.codex_home "
-            "WHERE m.id IN (%s)" % placeholders, list(scores))}
-        ranked = sorted(scores.items(), key=lambda x: (-x[1], -(_ts_num(rows[x[0]]["ts"]))))
+        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        ts = {}
+        for chunk in _chunks([mid for mid, _ in ranked], 500):  # 同じ点のときは新しい順
+            ts.update(self.db.execute("SELECT id, ts FROM messages WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk).fetchall())
+        ranked.sort(key=lambda x: (-x[1], -_ts_num(ts.get(x[0]))))
+        rows = {}
         per_thread, out, seen_keys = {}, [], set()
-        for mid, score in ranked:
+        for n, (mid, score) in enumerate(ranked):
+            if mid not in rows:
+                chunk = [m for m, _ in ranked[n:n + 200]]
+                rows.update((r["id"], r) for r in self.db.execute(
+                    "SELECT m.*, t.name, t.branch, t.originator FROM messages m LEFT JOIN threads t ON t.thread_id = m.thread_id "
+                    "AND t.codex_home = m.codex_home WHERE m.id IN (%s)" % ",".join("?" * len(chunk)), chunk))
             r = rows[mid]
             if _dedupe_key(r) in seen_keys:  # 同じ会話の別のファイルにある同じ発言
                 continue
@@ -1336,8 +1327,14 @@ class Index:
             if _dedupe_key(r) in seen_keys:
                 continue
             seen_keys.add(_dedupe_key(r))
-            if not turns or turns[-1][0] != (r["turn_id"] or r["msg_id"]):
-                turns.append([(r["turn_id"] or r["msg_id"]), []])
+            if r["turn_id"]:
+                key = ("turn", r["turn_id"])
+            elif r["kind"] == "user" or not turns or turns[-1][0][0] != "legacy":
+                key = ("legacy", len(turns))  # turn_id の無い旧い形式は、依頼から次の依頼の前までを 1 ターンとする
+            else:
+                key = turns[-1][0]
+            if not turns or turns[-1][0] != key:
+                turns.append([key, []])
             turns[-1][1].append(r)
         idx = next((i for i, (_, ms) in enumerate(turns) if any(m["msg_id"] == around_id for m in ms)), None)
         if idx is None:
@@ -1345,21 +1342,10 @@ class Index:
         return turns[max(0, idx - context): idx + context + 1]
 
     def _missing_count(self, home):
-        """原本が見つからない記録の数。同じ名前の記録（圧縮した .zst など）がほかにあるものは数えない。"""
+        """原本が見つからない記録の数。同じ名前の読めない .zst があるもの（圧縮されただけ）は数えない。"""
         rows = self.db.execute("SELECT path, status FROM files WHERE codex_home = ?", (home,)).fetchall()
-        count = 0
-        for r in rows:
-            if r["status"] != "missing":
-                continue
-            same = [o for o in rows if o["path"] != r["path"] and _file_stem(o["path"]) == _file_stem(r["path"])]
-            # 圧縮されて読めない写し（中身はこちらに残っている）か、発言を全部持つ写しがあれば、原本なしに数えない
-            if any(o["status"] == "zst_unreadable" for o in same):
-                continue
-            mine = self._path_keys(r["path"])
-            if any(o["status"] in ("ok", "partial") and mine <= self._path_keys(o["path"]) for o in same):
-                continue
-            count += 1
-        return count
+        compressed = {_file_stem(r["path"]) for r in rows if r["status"] == "zst_unreadable"}
+        return sum(1 for r in rows if r["status"] == "missing" and _file_stem(r["path"]) not in compressed)
 
     def coverage(self, home):
         q = self.db.execute
@@ -1376,6 +1362,11 @@ class Index:
         }
 
 
+def _thread_id_in_name(path):
+    m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", os.path.basename(path))
+    return m.group(1) if m else None
+
+
 def _under(path, folder):
     folder = os.path.abspath(folder)
     return os.path.abspath(path) == folder or os.path.abspath(path).startswith(folder.rstrip(os.sep) + os.sep)
@@ -1387,14 +1378,19 @@ def _file_stem(path):
     return name[:-4] if name.endswith(".zst") else name
 
 
-def _msg_key(r):
-    """fork の写しを見分ける鍵。種類と本文から作る（写しは時刻が書き換わるので、時刻は使わない）。"""
+def _raw_hash(sig, msg):
+    """原文（伏せる前）と伏せ字の規則から作るハッシュ。変わっていない発言を見分ける（本文そのものは残さない）。"""
     import hashlib
-    return hashlib.sha256(("%s\x1f%s" % (r["kind"], r["norm"])).encode("utf-8")).hexdigest()
+    return hashlib.sha256("\x1f".join((sig, msg["text"] or "", msg["cwd"] or "")).encode("utf-8", "replace")).hexdigest()
 
 
 def _dedupe_key(r):
     return (r["thread_id"], r["msg_id"], r["kind"], r["ts"], r["norm"])
+
+
+def _chunks(items, size):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 
 def _ts_num(ts):
@@ -1484,11 +1480,37 @@ def parse_query(parts):
     return out
 
 
+def find_original(text, needle):
+    """正規化した文で needle を探し、元の文での位置を返す（無ければ -1）。
+
+    半角カナの濁点（ｶﾞ → ガ）や合字（ﬁ → fi）は正規化で長さが変わるので、文字のまとまりごとに正規化して位置を対応させる。
+    """
+    needle = normalize(needle)
+    if not needle:
+        return -1
+    parts, starts, i = [], [], 0
+    while i < len(text):
+        j = i + 1
+        while j < len(text) and (unicodedata.combining(text[j]) or text[j] in "\uff9e\uff9f"):
+            j += 1
+        parts.append(normalize(text[i:j]))
+        starts.append(i)
+        i = j
+    joined = "".join(parts)
+    pos = joined.find(needle)
+    if pos < 0:
+        return -1
+    acc = 0
+    for k, part in enumerate(parts):
+        if acc + len(part) > pos:
+            return starts[k]
+        acc += len(part)
+    return len(text)
+
+
 def snippet(text, terms, width=SNIPPET):
     text = redact(text)  # 切る前に伏せる（窓の端で鍵の名前や URL のスキームが切れると、規則に当たらない）
-    norm = normalize(text)
-    pos = min((p for p in (norm.find(t) for t in terms) if p >= 0), default=0)
-    # 正規化で長さが変わる文字は少ないので、元の文の同じ位置を中心にする。
+    pos = min((p for p in (find_original(text, t) for t in terms) if p >= 0), default=0)
     start = max(0, pos - width)
     end = min(len(text), pos + width * 2)
     s = text[start:end].replace("\n", " ")
@@ -1633,7 +1655,7 @@ def cmd_show(args):
         for m in msgs:
             text = redact(m["text"])
             if args.around and m["msg_id"] == msg_id:
-                pos = max(0, normalize(text).find(normalize(args.around)))
+                pos = max(0, find_original(text, args.around))
                 start = max(0, pos - args.length // 2)
             else:
                 start = args.offset
@@ -1836,8 +1858,11 @@ def cmd_rebuild(args):
         print("索引に書けないので作り直せない: %s" % note, file=sys.stderr)
         return 1
     idx.rebuild()
-    report = idx.ingest(codex_home())
+    home = codex_home()
+    report = idx.ingest(home)
     print("作り直した: ファイル %d 本、取り込み %d 本" % (report["files"], report["updated"]))
+    for line in coverage_lines(idx, home, report, note):
+        print(line)
     idx.close()
     return 0
 

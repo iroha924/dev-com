@@ -259,7 +259,7 @@ flowchart LR
     rr --> x2["Codex: 上位を show で読み、<br/>日時・引用・codex resume を添えて答える"]
 ```
 
-- 取り込むのは、ユーザーの依頼・最終の回答（・途中の回答）と、Codex の memories が書いた要点のファイル。ツールやコマンドの出力、推論、AGENTS.md などの差し込みは入れない。シークレットらしい値（PAT の形、`Authorization`、`Bearer`、`password=`、URL の中の資格情報、秘密鍵）は伏せてから入れる。
+- 取り込むのは、ユーザーの依頼・最終の回答（・途中の回答）と、Codex の memories が書いた要点のファイル。ツールやコマンドの出力、推論、AGENTS.md などの差し込みは入れない。シークレットらしい値は伏せてから入れる。伏せるのは、よく使う書き方（`password=`・`Authorization`・`Bearer`・URL の中の資格情報・秘密鍵・PAT の形・パスワードを渡すコマンドの引数など）と、書き方によらず、20 文字以上で大文字・小文字・数字の混ざった、でたらめらしい文字列（単語をつないだ名前や 16 進のハッシュ・UUID は残す）。でたらめな 24 文字の英数字は 9 割以上を拾うが、短いパスワード（`hunter2` など）は、よく使う書き方でないと漏れる。
 - 取り込みは検索のたびに、増えた・変わった記録だけ。元の記録は Codex のものが正で、索引は消しても `rebuild` で作り直せる。原本が消えた会話（`codex delete` で消したものも）は索引に残して検索し、出力のまとめに「原本が見つからない記録のファイル N 本」と出す。検索から外すのは `forget`。memories のファイルは会話から作り直される要約なので、Codex が消したら索引からも消す。同じ会話のファイルが複数ある（Codex の revert は、前半を元のファイルに残して別のファイルを作る）ときは両方を取り込み、同じ発言は 1 つにまとめて出す。
 - 圧縮された記録（`.jsonl.zst`）は Python 3.14 で読む。手元の Mac では、記録の約 85% が圧縮されていた。3.14 が無い Python で動いたときは、3.14（`py -3.14`、`python3.14`、`mise exec python@3.14`）を探して自分を起動し直す。見つからなければ、読めなかった数を出す。
 
@@ -305,7 +305,7 @@ flowchart LR
 - 生の記録には、ツールの出力や子のエージェント・レビューの会話が大量に混ざるので、rg では同じ言葉を含む別の会話をつかみやすい（「見つけた」と答えて外した 25 問のうち 20 問が、別の会話を答えていた）。
 - 会話の検索で外した 3 問は、どれも似た会話が複数ある問いで、並べ直しはこの種類の問いを上げる。
 
-作りを変えたら、評価を流し直す（専用の環境の Python で）。
+作りを変えたら、評価を流し直す（専用の環境の Python で）。`--work` には空のフォルダを渡す。前の索引とモックの記録があると、それをそのまま使う（corpus.json を変えても前のモックで測る）。
 
 ```powershell
 python evals\session-search\run_eval.py --corpus evals\session-search\corpus.json --queries evals\session-search\queries.json --work $env:TEMP\ss-eval --methods product,product-norerank,product-trigram
@@ -335,6 +335,10 @@ python "$HOME\.agents\skills\session-search\scripts\session_search.py" index
 writable_roots = ['C:\Users\<ユーザー名>\AppData\Local\hirata-codex']
 ```
 
+`[features] prefer_mxc = true` があると、`[windows] sandbox = "elevated"` と書いてあっても、Windows の MXC が使える PC では MXC が選ばれる（Codex のソース、2026-10-15 時点）。MXC は、サンドボックスの中で動くコマンドの `%LOCALAPPDATA%` を別のフォルダに差し替えることがある（`codex-rs/mxc-sandbox/README.md`）。差し替えられると、ふつうのターミナルで `setup` した専用の環境が Codex の中から見えず、trigram だけで探すことになり、索引も 2 か所にできる（推測。会社 PC では未検証）。
+
+確かめ方は、Codex の中とふつうのターミナルの両方で `session_search.py stats` を流し、「索引:」の場所と「方式:」の行が同じかを見る。違ったら、`HIRATA_CODEX_DATA` を `%LOCALAPPDATA%` の外（`C:\Users\<ユーザー名>\hirata-codex` など）に向け、そのフォルダを `writable_roots` に足す。
+
 ### memories と組み合わせる
 
 Codex の memories（既定は無効）は、過去の会話から要点を自動でまとめ、次の会話の文脈に入れる。会話の検索は原文を探して引用する。役割が違うので、両方を使うのがいちばん良い（意見）。memories が書いた要点のファイルも、会話の検索の対象に入る。
@@ -361,7 +365,7 @@ min_rate_limit_remaining_percent = 40
 - 「9 月に ECONNRESET の原因を調べたやつ、何だった？」（期間で絞る）
 - 「このリポジトリで前に `--no-verify` の話をした会話を出して」（作業フォルダで絞る）
 
-会話を検索に出したくないときは、`session_search.py forget <thread_id>`。Codex の記録そのものは消えない。逆に `codex delete` で Codex の記録を消しても索引には残るので、検索から外すのは `forget` で行う。`forget` は検索に出なくするところまでで、索引のファイルから痕跡を消すなら `rebuild` で作り直す（全文検索の表も作り直す）。コピー型の fork（親の会話を写して分かれた会話）に写された親の発言も、親を `forget` すると一緒に外れる。
+会話を検索に出したくないときは、`session_search.py forget <thread_id>`。Codex の記録そのものは消えない。逆に `codex delete` で Codex の記録を消しても索引には残るので、検索から外すのは `forget` で行う。`forget` は検索に出なくするところまでで、索引のファイルから痕跡を消すなら `rebuild` で作り直す（全文検索の表も作り直す）。今の形式の会話を fork しても、子の記録は親の会話を写さずに参照するだけなので、子の会話の検索には子の発言だけが出る（Codex のソースと、この Mac にある子のエージェントの fork の記録 6 本で確かめた）。古い形式の会話の fork だけは親の発言を子の記録に写すので、親の発言を検索から外すなら、子の会話も `forget` する。
 
 索引のファイルが壊れて開けないときは、「索引のファイルが壊れている」と出て止まる。`session_search.py rebuild --discard-broken` で、壊れた索引を脇に置いて新しく作れる（`forget` の一覧は引き継げないので、外したい会話はもう一度 `forget` する）。
 
