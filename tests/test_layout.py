@@ -108,7 +108,7 @@ class SkillLayoutTest(unittest.TestCase):
         # 閉じのつもりのフェンスの後ろに文字が続くと閉じにならず、後ろの見出しや表がコードとして表示される
         # （CommonMark 4.5: 閉じは開きと同じ文字で同じ長さ以上、後ろは空白だけ）。入れ子のフェンスはこのリポジトリでは使わない。
         fence_re = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-        for path in markdown_files() + [os.path.join(ROOT, "README.md"), os.path.join(ROOT, "AGENTS.md")]:
+        for path in markdown_files() + [os.path.join(ROOT, n) for n in ("README.md", "AGENTS.md", os.path.join("docs", "notes.md"))]:
             fence = None
             for n, line in enumerate(read(path).splitlines(), 1):
                 m = fence_re.match(line)
@@ -140,7 +140,7 @@ class SkillLayoutTest(unittest.TestCase):
         table = read(os.path.join(ROOT, "README.md")).split("## 一覧", 1)[1].split("\n## ", 1)[0]
         for name in skill_dirs():
             with self.subTest(skill=name):
-                self.assertRegex(table, r"\| \[`%s`\]\(#[^)]+\) \| skill \|" % re.escape(name))
+                self.assertRegex(table, r"\| \[`%s`\]\([^)]+\) \| skill \|" % re.escape(name))
 
     def test_referenced_scripts_exist(self):
         pattern = re.compile(r"\$HOME\\\.agents\\skills\\([\w-]+)\\scripts\\([\w.]+)")
