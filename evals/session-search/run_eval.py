@@ -185,6 +185,11 @@ def rrf(*lists):
 # --- 本体 ----------------------------------------------------------------------------------------
 
 
+def needs_semantic(wanted):
+    """単語の索引と埋め込みを作る要るか（trigram の方式だけなら要らない）。"""
+    return not wanted or any(w in ("product", "product-norerank") for w in wanted)
+
+
 def mock_home(work):
     """モックの CODEX_HOME。相対の --work でも絶対パスにする（rerank_eval が絶対パスで探すので、索引の home をそろえる）。"""
     return os.path.abspath(os.path.join(work, "codex_home"))
@@ -281,7 +286,7 @@ def main():
             f.mode = mode
             return [r["id"] for _, r in results]
         return f
-    if not wanted or any(w.startswith("product") for w in wanted):
+    if needs_semantic(wanted):
         idx.fill_words(sem.tokenizer(), home)
         idx.fill_vectors(sem.embedder(), home)
     for name, fn in (("product", product_with(sem, True)), ("product-norerank", product_with(sem, False)),

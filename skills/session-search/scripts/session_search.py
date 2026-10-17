@@ -104,13 +104,14 @@ _OPT_NAME = r"(?:[\w-]*?(?:password|passwd|pwd|secret|token(?!iz)|api[_-]?key|pa
 _SQ = r"'(?:[^']|''){1,100000}'(?!')"         # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
 
 
-_TOKEN_COUNT = re.compile(r"(?i)token(?:s|_?(?:count|usage|limit|budget|length|size|num))|"
-                          r"(?:max|total|num|input|output|prompt|completion|context)_?tokens?")
+_TOKEN_COUNT = re.compile(r"(?i)(?<![a-z])(?:token(?:s|_?(?:count|usage|limit|budget|length|size|num))|"
+                          r"(?:max|total|num|input|output|prompt|completion|context)_?tokens?)(?![a-z])")
 
 
 def _keep_token_counts(m):
     """token の名前（total_token_usage・max_tokens）の、数だけの値は数で、秘密ではないので残す。"""
-    if re.fullmatch(r"\d+", m.group(2)) and _TOKEN_COUNT.search(m.group(1)):
+    name = re.sub(r"[\s\"':=]+$", "", m.group(1))
+    if re.fullmatch(r"\d+", m.group(2)) and _TOKEN_COUNT.search(name) and not re.search(r"(?i)secret|pass|pwd|key", name):
         return m.group(0)
     return m.group(1) + "[REDACTED]"
 
@@ -332,7 +333,7 @@ RANDOM_WORDY = 0.6
 
 
 # 置き換えに関数を使う規則（網・XML・token の数）の中身を変えたら上げる。正規表現の文字列だけでは指紋に表れないため
-_RULES_VERSION = "16"
+_RULES_VERSION = "17"
 
 
 def _redact_signature():
@@ -536,11 +537,22 @@ def _str(value):
     return value if isinstance(value, str) else None
 
 
+# Codex が依頼の行に差し込む文のタグ（Codex のソースと、手元の記録で見つけたもの）。< で始まる持ち主の依頼
+# （<Project Sdk=...> を貼ったものなど）は、差し込みと見なさない
+_INJECTED = re.compile(
+    r"\s*(?:# AGENTS\.md|<(?:environment_context|user_instructions|user_shell_command|skill|skills_instructions|"
+    r"subagent_notification|recommended_plugins|user_action|in-app-browser-context|turn_aborted|image|"
+    r"send_user_message_question_reply|managed_developer_instructions|persistent_mode|image_resize_notice|"
+    r"multi_agent_mode|multi_agent_role|context_window|startup_context|model_switch|user_verification_notice|"
+    r"token_budget|rollout_budget|plugins_instructions|collaboration_mode|goal_context|workspace_roots|"
+    r"external_codex_apps_\w+|realtime_\w+)\b)")
+
+
 def _owner_text(content):
     """response_item の user の行が、持ち主の書いた文らしいか（差し込まれる AGENTS.md や環境の情報は除く）。"""
     for part in content if isinstance(content, list) else []:
         text = part.get("text") if isinstance(part, dict) else None
-        if isinstance(text, str) and text.strip() and not text.lstrip().startswith(("<", "# AGENTS.md")):
+        if isinstance(text, str) and text.strip() and not _INJECTED.match(text):
             return True
     return False
 
@@ -569,7 +581,7 @@ def parse_rollout(path, data):
     """1 本の rollout から (meta, messages, counters) を取り出す。"""
     counters = {"lines": 0, "bad_json": 0, "shape_errors": 0, "skipped_elements": 0, "incomplete_tail": 0,
                 "response_messages": 0}
-    response_users = 0
+    response_users = response_answers = 0
     meta = {"thread_id": None, "cwd": None, "branch": None, "originator": None, "agent": None,
             "history_mode": None, "cli_version": None}
     m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", os.path.basename(path))
@@ -643,6 +655,8 @@ def parse_rollout(path, data):
                 counters["response_messages"] += 1
                 if payload.get("role") == "user" and _owner_text(payload.get("content")):
                     response_users += 1
+                elif payload.get("role") == "assistant":
+                    response_answers += 1
         elif typ == "turn_context":
             turn_id = _str(payload.get("turn_id")) or turn_id
             cwd = _str(payload.get("cwd")) or cwd
@@ -712,10 +726,11 @@ def parse_rollout(path, data):
                 lines.insert(at, line_no)
         finals_by_turn.add(tid)
     users = sum(1 for m in messages if m["kind"] == "user")
-    if response_users > users and not meta["agent"]:
-        # 持ち主の依頼らしい行のほうが、読み方の分かる形で取れた依頼より多い（子のエージェントへの指示は除く。
-        # 手元の記録 1,066 本では、取れた依頼のほうが少ない記録は 0 本）
-        counters["shape_errors"] += response_users - users
+    answers = sum(1 for m in messages if m["kind"] in ("commentary", "final"))
+    if not meta["agent"]:
+        # 持ち主の依頼らしい行・回答の行のほうが、読み方の分かる形で取れた数より多い（子のエージェントは除く。
+        # 手元の記録 1,066 本では、どちらも取れた数のほうが少ない記録は 0 本）
+        counters["shape_errors"] += max(0, response_users - users) + max(0, response_answers - answers)
     return meta, messages, counters
 
 
@@ -995,11 +1010,19 @@ class Index:
             except sqlite3.OperationalError:
                 pass
         if not self._has_table("msg_fts"):
+            created = False
             try:
                 db.execute("CREATE VIRTUAL TABLE msg_fts USING fts5(norm, tokenize='trigram')")
-                db.execute("INSERT INTO msg_fts (rowid, norm) SELECT id, norm FROM messages")
+                created = True
             except sqlite3.OperationalError:
                 pass  # FTS5 か trigram が無い SQLite。instr() だけで検索する。
+            if created:
+                try:  # 前からある発言も入れる。失敗（ディスクがいっぱいなど）は飲み込まず、空の表も残さない
+                    db.execute("INSERT INTO msg_fts (rowid, norm) SELECT id, norm FROM messages")
+                except sqlite3.DatabaseError:
+                    if not db.in_transaction:  # 開くときは CREATE が確定しているので、作った表を消してから上げる
+                        db.execute("DROP TABLE IF EXISTS msg_fts")
+                    raise
         if commit:
             db.commit()
         self.fts = self._has_table("msg_fts")
@@ -1347,9 +1370,10 @@ class Index:
                     failed += 1
                     continue
                 still = "SELECT 1 FROM messages WHERE id = ? AND text = ?"
-                self.db.execute("INSERT INTO words_fts (rowid, words) SELECT ?, ? WHERE EXISTS (%s)" % still,
-                                (r["id"], words, r["id"], r["text"]))
-                self.db.execute("INSERT INTO word_done SELECT ? WHERE EXISTS (%s)" % still, (r["id"], r["id"], r["text"]))
+                fresh = " AND NOT EXISTS (SELECT 1 FROM word_done WHERE message_id = ?)"  # 別の検索が先に入れたら入れない
+                self.db.execute("INSERT INTO words_fts (rowid, words) SELECT ?, ? WHERE EXISTS (%s)%s" % (still, fresh),
+                                (r["id"], words, r["id"], r["text"], r["id"]))
+                self.db.execute("INSERT OR IGNORE INTO word_done SELECT ? WHERE EXISTS (%s)" % still, (r["id"], r["id"], r["text"]))
         self.word_failures = failed
         return len(rows)
 

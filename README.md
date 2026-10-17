@@ -373,6 +373,15 @@ min_rate_limit_remaining_percent = 40
 
 索引のファイルが壊れて開けないときは、「索引のファイルが壊れている」と出て止まる。`session_search.py rebuild --discard-broken` で、壊れた索引を脇に置いて新しく作れる（`forget` の一覧は引き継げないので、外したい会話はもう一度 `forget` する）。
 
+### まだ直していないもの
+
+レビューを 16 回回し、止まる・forget した会話が出る・別の CODEX_HOME の会話が混ざる・発言が黙って消える、の欠陥は、見つかったものを全部直した。16 回目で見つかった軽いものは、直すたびに隣の形を壊す回が続いたので、会社 PC で実際に困ったものから直す。
+
+- 伏せ字の漏れ: cmd から PowerShell に引用符を重ねて渡す形（`powershell -Command "... -Password ""X"""`、`$env:ADO_PAT = ""X""`、`-Password (ConvertTo-SecureString ""X"" ...)`）。`\"X\"` で入れ子にした、決まった名前以外の引数（`-AdminPassword`・`-SecurePassword`・`-AccessToken`・`--windowsLogonPassword`）。資格情報のオブジェクトの 1 つ目の引数が `$env:USERNAME`・`os.environ["USER"]`・`cfg["user"]` などのとき。隣り合う文字列の後ろの方に、もう一方の引用符の文字が入っているとき。
+- 伏せすぎ: `--max-tokens 4096`・`docker build --secret id=...` の値。
+- `show` の `--offset` と `--length` に、負の数や 0 を渡せる。
+- テストの抜け: `os.environ[...] = r"..."` の頭の r を外す変異、持ち主のいない `word_done`・`words_fts` の行を消す処理を外す変異、入れ直しで残った `words_fts` の行を先に消す処理を外す変異で、テストが落ちない。
+
 ## skill の詳細
 
 各 skill の手順そのものは `skills/<名前>/SKILL.md` にある。ここでは何をして何を返すかだけを書く。

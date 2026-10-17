@@ -3112,6 +3112,150 @@ class TwentyFourthReviewTest(_Base):
         self.assertEqual(before, ae.run_condition(args, "search", q, "p"))
 
 
+class TwentyFifthReviewTest(_Base):
+    """16 回目のレビュー（Codex 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_answers_only_in_response_items_are_reported(self):
+        ts = "2026-09-01T01:00:00Z"
+        self.write(T1, "\n".join([line(ts, "session_meta", {"id": T1}),
+                                  line(ts, "event_msg", {"type": "user_message", "message": "依頼 くろはら"}),
+                                  line(ts, "response_item", {"type": "message", "role": "assistant", "phase": "final_answer",
+                                                             "content": [{"type": "output_text", "text": "取り出せない答え"}]})]) + "\n")
+        out = self.search("くろはら")
+        self.assertTrue(any("形の分からない発言" in c for c in out["coverage"]), out["coverage"])
+
+    def test_owner_text_starting_with_a_tag_is_counted(self):
+        self.assertTrue(ss._owner_text([{"type": "input_text", "text": '<Project Sdk="Microsoft.NET.Sdk">\n設定を調べて'}]))
+        for injected in ("<environment_context>x", "<user_instructions>x", "<external_codex_apps_open_page>x", "# AGENTS.md instructions"):
+            self.assertFalse(ss._owner_text([{"type": "input_text", "text": injected}]), injected)
+
+    def test_two_searches_filling_words_at_once(self):
+        self.write(T1, paginated(T1, [("同時に区切る やましぎ", "答え", None)]))
+        a = self.idx()
+        a.ingest(self.home)
+        b = self.idx()
+
+        def tokenize(text):
+            if not getattr(tokenize, "ran", False):
+                tokenize.ran = True
+                b.fill_words(lambda s: s.split(), self.home)  # 区切っている間に、別の検索が先に済ませた
+            return text.split()
+        a.fill_words(tokenize, self.home)
+        n = a.db.execute("SELECT COUNT(*) FROM word_done").fetchone()[0]
+        rows = a.db.execute("SELECT COUNT(*) FROM words_fts").fetchone()[0]
+        a.close()
+        b.close()
+        self.assertEqual((n, rows), (2, 2))
+
+    def test_numeric_secrets_with_token_in_the_name(self):
+        for text in ("tokenSecret=12345678", "TOKEN_COUNT_PASSWORD=12345678"):
+            self.assertNotIn("12345678", ss.redact(text), text)
+        self.assertEqual(ss.redact("input_tokens: 84922"), "input_tokens: 84922")
+
+    def test_run_eval_trigram_only_skips_models(self):
+        spec2 = importlib.util.spec_from_file_location("run_eval", os.path.join(ROOT, "evals", "session-search", "run_eval.py"))
+        rv = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(rv)
+        self.assertFalse(rv.needs_semantic(["product-trigram"]))
+        self.assertTrue(rv.needs_semantic(["product-trigram", "product"]))
+        self.assertTrue(rv.needs_semantic([]))
+
+    def test_parse_rollout_does_not_hold_all_lines(self):
+        import tracemalloc
+        rows = [line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})]
+        rows += [line("2026-09-01T01:00:00Z", "event_msg", {"type": "token_count", "info": {"pad": "x" * 900}})] * 6000
+        data = ("\n".join(rows) + "\n").encode()
+        tracemalloc.start()
+        before = tracemalloc.get_traced_memory()[0]
+        ss.parse_rollout("x", data)
+        peak = tracemalloc.get_traced_memory()[1] - before
+        tracemalloc.stop()
+        self.assertLess(peak, len(data) // 4)  # 全部の行を先に分けて持つと、記録と同じくらい使う
+
+    def test_signature_follows_replacement_strings(self):
+        before = ss._redact_signature()
+        saved = list(ss._SECRET_PATTERNS)
+        i = next(n for n, (p, r) in enumerate(ss._SECRET_PATTERNS) if isinstance(r, str))
+        ss._SECRET_PATTERNS[i] = (ss._SECRET_PATTERNS[i][0], ss._SECRET_PATTERNS[i][1] + "x")
+        try:
+            self.assertNotEqual(before, ss._redact_signature())
+        finally:
+            ss._SECRET_PATTERNS[:] = saved
+
+
+
+class TwentySixthReviewTest(_Base):
+    """16 回目のレビュー（Claude 側）で見つかった重い欠陥の再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def _fill(self, n=400):
+        self.write(T1, paginated(T1, [("ディスクがいっぱい %d %s" % (k, "z" * 200), "答え %d" % k, None) for k in range(n)]))
+        self.search("ディスクがいっぱい")
+
+    def _full_disk_on_fts_insert(self, idx):
+        """全文検索の表へ前からある発言を入れる SQL だけを、ディスクがいっぱいの例外にする。"""
+        state = {"deny": True}
+
+        class Proxy:
+            def __init__(self, con):
+                self.con = con
+
+            def execute(self, sql, *a):
+                if state["deny"] and sql.startswith("INSERT INTO msg_fts (rowid, norm) SELECT"):
+                    raise sqlite3.OperationalError("database or disk is full")
+                return self.con.execute(sql, *a)
+
+            def __enter__(self):
+                return self.con.__enter__()
+
+            def __exit__(self, *a):
+                return self.con.__exit__(*a)
+
+            def __getattr__(self, name):
+                return getattr(self.con, name)
+        idx.db = Proxy(idx.db)
+        return state
+
+    def test_full_disk_during_rebuild_is_not_silent(self):
+        self._fill()
+        idx = self.idx()
+        if not idx.fts:
+            idx.close()
+            self.skipTest("trigram の無い SQLite")
+        state = self._full_disk_on_fts_insert(idx)
+        with self.assertRaises(sqlite3.OperationalError):
+            idx.rebuild()  # 「作り直した」と出さずに止まる
+        state["deny"] = False
+        n = idx.db.execute("SELECT COUNT(*) FROM msg_fts").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 800)  # 作り直しは丸ごと戻り、前の表がそのまま残る
+
+    def test_full_disk_when_filling_a_new_table_leaves_no_empty_table(self):
+        self._fill()
+        idx = self.idx()
+        if not idx.fts:
+            idx.close()
+            self.skipTest("trigram の無い SQLite")
+        with idx.db:
+            idx.db.execute("DROP TABLE msg_fts")
+        state = self._full_disk_on_fts_insert(idx)
+        with self.assertRaises(sqlite3.OperationalError):
+            idx._create_fts()
+        state["deny"] = False
+        left = idx._has_table("msg_fts")
+        idx.close()
+        self.assertFalse(left)  # 空の表を残すと、前からある発言が黙って検索から消える
+        idx = self.idx()  # 次に開いたときに作り直して、前からある発言も入る
+        n = idx.db.execute("SELECT COUNT(*) FROM msg_fts").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 800)
+
+
 class SemanticLayerTest(unittest.TestCase):
     """SudachiPy が入っている環境でだけ、単語の BM25 の経路を確かめる。"""
 
