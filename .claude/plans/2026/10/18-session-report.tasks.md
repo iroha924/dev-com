@@ -90,6 +90,17 @@ base: main
   - 結果: red を直す前のコードで実測 → 4 件 FAIL と 1 件 ERROR（UnreadableRecords が無い）、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 34 件 OK
   - 結果: `session_report.py extract <id> --out <一時フォルダ>` → この Mac の実際の記録で 1.4 秒、終了コード 0（全部の記録の頭の session_meta を読むのは 1,379 本で 1.4 秒）
 
+- [x] T16: extract の伏せ字の抜け・revert の前半・壊れた記録・古い形式のターンを直す
+  - 種別: 修正
+  - 計画: S2
+  - 依存: T14（直す対象の extract が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Extract` → 4 件失敗（ID・モデル・項目の種類に伏せ字が無い、続きだけの revert で前半が無い、関係ない記録の ValueError で止まる、新しい形式の後の古い形式のターンが前のターンに付き最終の回答が落ちる）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): report の全部の文字列に伏せ字をかけ、revert の前半をつなぎ、古い形式のターンに ID を入れる`
+  - 結果: red を直す前のコードで実測 → 3 件 FAIL と 1 件 ERROR、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 40 件 OK
+  - 結果: `session_report.py extract <id> --out <一時フォルダ>` → この Mac の実際の記録 2 本で終了コード 0（件数だけを見て消した）
+
 - [ ] T03: extract の操作と成果物
   - 種別: 追加
   - 計画: S3
@@ -175,6 +186,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T16 / T14 の見直し（9352b33、high）の 4 件（F1 伏せ字の抜け P1、F2 続きだけの revert で前半が無い P1、F3 ZstdError で止まる P2、F4 新旧の形式が混ざるターン P2）を再現で確かめて受理。F2 は Codex のソースの HistoryPosition（前半のファイルの rollout ID と end_byte_offset）で読み方を決め、F4 は session-search を変えずに、読む前に turn_id を入れる形にした / T16 を足して直した
 
 - 2026-10-18 / T15 / T13 の見直し（799a2e3、high）の 2 件（F1 例外のメッセージに値が出る P2、F2 位置ごとのテストが無い分岐と数の値を見ない P2）を再現で確かめて受理 / T15 を足して直した。1 本の記録で思わぬ例外が出たら、種類の名前だけを数えて先へ進むようにした
 - 2026-10-18 / T13・T14 / 依頼文を作る道具の書き間違い（全角の括弧が変数の名前に続いた）で、最初の見直しの依頼の頭が欠けた。Codex は設定の切り替えの案内だけを返し、レビューしていない / 道具を直し、依頼文の頭が無ければ送らない確かめを足して出し直した

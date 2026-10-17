@@ -12,7 +12,6 @@ probe: 記録の形（行の種類、項目の種類とキー名、件数、有�
 """
 
 import argparse
-import bisect
 import collections
 import datetime
 import hashlib
@@ -368,7 +367,7 @@ def find_rollout(home, thread_id=None, last_cwd=None, exclude=None):
     for p in paths:
         try:
             data = ss.read_rollout_bytes(p)
-        except OSError:
+        except Exception:  # compression.zstd の ZstdError は OSError ではない
             data = None
         metas.append((p, None if data is None else (_first_meta(data) or {})))
 
@@ -438,15 +437,59 @@ def _attachments(content):
     return out
 
 
+def fill_turn_ids(data):
+    """turn_id の無い turn_context（古い形式）に turn-1, turn-2, ... を入れた記録を返す。
+
+    session-search の parse_rollout は、turn_id の無い turn_context の後も前のターンの ID を使い続けるので、
+    読む前に ID を入れておく（行の数は変えない）。
+    """
+    out, order = [], 0
+    for _, raw in ss._byte_lines(data, {"incomplete_tail": 0}):
+        try:
+            item = json.loads(raw.decode("utf-8", errors="replace"))
+        except ValueError:
+            item = None
+        if (isinstance(item, dict) and item.get("type") == "turn_context" and isinstance(item.get("payload"), dict)
+                and ss._str(item["payload"].get("turn_id")) is None):
+            order += 1
+            item["payload"]["turn_id"] = "turn-%d" % order
+            raw = json.dumps(item, ensure_ascii=False).encode("utf-8")
+        out.append(raw)
+    return b"\n".join(out) + b"\n" if out else b""
+
+
+def effective_record(path, data, home, depth=0):
+    """続きだけを書く revert の記録（session_meta.history_base）なら、前半のファイルのその位置までをつないだ記録と、
+    読んだファイルの一覧を返す。前半のファイルが無ければ、続きだけで返し、prefix_missing を True にする。"""
+    meta = _first_meta(data) or {}
+    base = meta.get("history_base") if isinstance(meta.get("history_base"), dict) else None
+    sources = [{"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}]
+    if not base or depth >= 10:
+        return data, sources, False
+    rid, end = ss._str(base.get("thread_id")), base.get("end_byte_offset")
+    if not rid or not isinstance(end, int) or isinstance(end, bool) or end < 0:
+        return data, sources, True
+    prefix_path = next((p for p in sorted(ss.rollout_files(home)) if ss._thread_id_in_name(p) == rid and p != path), None)
+    try:
+        prefix = ss.read_rollout_bytes(prefix_path) if prefix_path else None
+    except Exception:
+        prefix = None
+    if prefix is None:
+        return data, sources, True
+    prefix_data, prefix_sources, missing = effective_record(prefix_path, prefix[:end], home, depth + 1)
+    prefix_sources[-1].update(size=len(prefix), sha256=hashlib.sha256(prefix).hexdigest())
+    if not prefix_data.endswith(b"\n"):
+        prefix_data += b"\n"
+    return prefix_data + data, prefix_sources + sources, missing
+
+
 def scan_rollout(data):
     """発言以外の、ターン・添付・項目の種類を 1 回読んで集める。"""
     turns = collections.OrderedDict()
     attachments = {}
-    legacy_turns = []  # turn_id の無い turn_context の (行番号, 作った ID)
     item_types = collections.Counter()
     ids = collections.Counter()
     first_ts = last_ts = None
-    order = 0
 
     def turn(tid):
         if tid not in turns:
@@ -468,11 +511,7 @@ def scan_rollout(data):
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         typ = item.get("type")
         if typ == "turn_context":
-            tid = ss._str(payload.get("turn_id"))
-            if tid is None:
-                order += 1
-                tid = "turn-%d" % order
-                legacy_turns.append((line_no, tid))
+            tid = ss._str(payload.get("turn_id")) or "turn-?"
             current = tid
             t = turn(tid)
             t["model"] = ss._str(payload.get("model")) or t["model"]
@@ -500,7 +539,7 @@ def scan_rollout(data):
                         attachments.setdefault(it["id"], {"items": found, "line": line_no, "ts": ts, "turn_id": tid})
                 if tid and tid not in turns:
                     turn(tid)["started"] = ts
-    return {"turns": list(turns.values()), "attachments": attachments, "item_types": item_types, "legacy_turns": legacy_turns,
+    return {"turns": list(turns.values()), "attachments": attachments, "item_types": item_types,
             "duplicated_ids": sum(1 for n in ids.values() if n > 1), "first_ts": first_ts, "last_ts": last_ts}
 
 
@@ -512,23 +551,30 @@ def _source_name(meta_source):
     return None
 
 
+def redact_tree(obj):
+    """report の全部の文字列（dict のキーも）に伏せ字をかける。同じ文字列は同じ結果になるので、ID の対応は崩れない。"""
+    if isinstance(obj, str):
+        return ss.redact(obj)
+    if isinstance(obj, list):
+        return [redact_tree(v) for v in obj]
+    if isinstance(obj, dict):
+        return {redact_tree(k) if isinstance(k, str) else k: redact_tree(v) for k, v in obj.items()}
+    return obj
+
+
 def build_report(path, data, home, other_files=0):
+    data, sources, prefix_missing = effective_record(path, data, home)
+    data = fill_turn_ids(data)
     meta, messages, counters = ss.parse_rollout(path, data)
     raw_meta = _first_meta(data) or {}
     scan = scan_rollout(data)
     tid = meta["thread_id"]
-    legacy_lines = [n for n, _ in scan["legacy_turns"]]
-
-    def legacy_turn(line_no):
-        at = bisect.bisect_right(legacy_lines, line_no) - 1
-        return scan["legacy_turns"][at][1] if at >= 0 else None
-
     rows, seen = [], set()
     for m in sorted(messages, key=lambda m: (m["line"], m["seq"])):  # parse_rollout は足した最終の回答を末尾に置く
         if m["msg_id"] in seen:
             continue
         seen.add(m["msg_id"])
-        msg = {"id": m["msg_id"], "kind": m["kind"], "ts": m["ts"], "turn_id": m["turn_id"] or legacy_turn(m["line"]),
+        msg = {"id": m["msg_id"], "kind": m["kind"], "ts": m["ts"], "turn_id": m["turn_id"],
                "text": ss.redact(m["text"])}
         if m["kind"] == "user":
             msg["attachments"] = scan["attachments"].get(m["msg_id"], {}).get("items", [])
@@ -536,7 +582,7 @@ def build_report(path, data, home, other_files=0):
     for mid, att in scan["attachments"].items():
         if mid not in seen:  # 本文の無い、添付だけの発言（parse_rollout は空の発言を返さない）
             rows.append((att["line"], {"id": mid, "kind": "user", "ts": att["ts"],
-                                       "turn_id": att["turn_id"] or legacy_turn(att["line"]), "text": "",
+                                       "turn_id": att["turn_id"], "text": "",
                                        "attachments": att["items"]}))
     out_msgs = [msg for _, msg in sorted(rows, key=lambda r: r[0])]
     unknown = {k: n for k, n in sorted(scan["item_types"].items())
@@ -549,17 +595,18 @@ def build_report(path, data, home, other_files=0):
                     "cwd": _red(meta["cwd"]), "branch": _red(meta["branch"]), "originator": _red(meta["originator"]),
                     "source": _red(_source_name(raw_meta.get("source"))), "cli_version": _red(meta["cli_version"]),
                     "forked_from_id": _red(ss._str(raw_meta.get("forked_from_id"))), "agent": _red(meta["agent"])},
-        "sources": [{"path": _red(path), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}],
+        "sources": sources,
         "coverage": {"lines": counters["lines"], "bad_json": counters["bad_json"], "shape_errors": counters["shape_errors"],
                      "incomplete_tail": counters["incomplete_tail"], "duplicated_ids": scan["duplicated_ids"],
                      "other_files": other_files, "unknown_items": unknown, "events": events,
+                     "prefix_missing": prefix_missing,
                      "subagents_included": False},
         "turns": scan["turns"],
         "messages": out_msgs,
         "operations": [],
         "artifacts": [],
     }
-    return report
+    return redact_tree(report)
 
 
 # T03 で操作として読む項目（T02 では unknown に数えない）

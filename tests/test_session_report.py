@@ -431,6 +431,62 @@ class ExtractTest(_Base):
         finally:
             sr.ss.read_rollout_bytes = real
 
+    def test_ids_models_and_types_are_redacted(self):
+        tok = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
+        r = Rollout(T1).turn("t-" + tok, model=tok, effort=tok)
+        r.user("u-" + tok, "a").item({"type": tok, "id": "x"}).agent("a1", "b").end("b")
+        self.write(T1, r.text())
+        rep = self.extract(T1)
+        self.assertNotIn(tok, json.dumps(rep, ensure_ascii=False))
+        # 伏せ字をかけても、発言のターンとの対応は崩れない
+        self.assertEqual(rep["messages"][0]["turn_id"], rep["turns"][0]["id"])
+
+    def test_paginated_revert_reads_the_prefix_file(self):
+        first = Rollout(T1).turn("t1").user("u1", "最初の依頼").agent("a1", "最初の答え").end("最初の答え")
+        cut = len(first.text().encode("utf-8"))
+        first.turn("t2").user("u2", "取り消した依頼").agent("a2", "取り消した答え").end("取り消した答え")
+        prefix = self.write(T1, first.text())
+        cont = Rollout(T1)
+        cont.lines[0] = line(cont.ts(), "session_meta", {"id": T1, "cwd": "C:\\w", "history_mode": "paginated",
+                                                         "history_base": {"thread_id": T1, "end_ordinal_exclusive": 6,
+                                                                          "end_byte_offset": cut}})
+        cont.turn("t3").user("u3", "やり直した依頼").agent("a3", "やり直した答え").end("やり直した答え")
+        newer = self.write(T2, cont.text())
+        os.utime(prefix, (1000, 1000))
+        os.utime(newer, (2000, 2000))
+        rep = self.extract(T1)
+        self.assertEqual([m["text"] for m in rep["messages"]], ["最初の依頼", "最初の答え", "やり直した依頼", "やり直した答え"])
+        self.assertEqual([s["path"] for s in rep["sources"]], [prefix, newer])
+        self.assertEqual(rep["sources"][0]["bytes"], cut)
+
+    def test_a_broken_unrelated_record_does_not_stop_the_choice(self):
+        good = self.write(T1, sample(T1).text())
+        broken = self.write(T2, "x")
+        os.utime(broken, (1000, 1000))
+        os.utime(good, (2000, 2000))
+        real = sr.ss.read_rollout_bytes
+
+        def read(p):
+            if p == broken:
+                raise ValueError("壊れた圧縮")  # compression.zstd の ZstdError は OSError ではない
+            return real(p)
+        sr.ss.read_rollout_bytes = read
+        try:
+            self.assertEqual(sr.find_rollout(self.home, thread_id=T1), (good, 0))
+        finally:
+            sr.ss.read_rollout_bytes = real
+
+    def test_legacy_turn_after_a_modern_turn(self):
+        r = Rollout(T1).turn("t1").user("u1", "新しい形の依頼").agent("a1", "新しい形の答え").end("新しい形の答え")
+        r.add("turn_context", {"cwd": "C:\\w", "model": "gpt-6.1-sol"})
+        r.add("event_msg", {"type": "user_message", "message": "古い形の依頼"})
+        r.add("event_msg", {"type": "task_complete", "last_agent_message": "古い形の答え"})
+        self.write(T1, r.text())
+        rep = self.extract(T1)
+        self.assertEqual([(m["text"], m["kind"], m["turn_id"]) for m in rep["messages"]],
+                         [("新しい形の依頼", "user", "t1"), ("新しい形の答え", "final", "t1"),
+                          ("古い形の依頼", "user", "turn-1"), ("古い形の答え", "final", "turn-1")])
+
     def test_missing_thread(self):
         code, _, err = self.run_cli("extract", T1, "--out", self.tmp.name)
         self.assertEqual(code, 1)
