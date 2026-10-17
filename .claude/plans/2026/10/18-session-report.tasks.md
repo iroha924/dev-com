@@ -269,13 +269,14 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
 
 Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を比べる道具がそろう。
 
-- [ ] T10: SKILL.md と README
+- [x] T10: SKILL.md と README
   - 種別: 追加
   - 計画: S9
   - 依存: T09（手順に書く全部のコマンドが要る）
   - 変更: `skills/session-report/SKILL.md`, `skills/session-report/agents/openai.yaml`, `README.md`, `tests/test_layout.py`
   - 完了条件: `python3 -m unittest tests.test_layout` → OK（README の skill 一覧に session-report、推奨の設定の行がある）
   - コミット: `docs(session-report): SKILL.md の手順と README の一覧を書く`
+  - 結果: `python3 -m unittest tests.test_layout` → 15 件 OK（足した test_readme_lists_every_skill を含む。説明文の合計 5,297 文字で上限 6,000 の内）。`python3 -m unittest discover -s tests` → 385 件 OK（skip 24）
 
 - [ ] T11: 追記を正解と比べる道具
   - 種別: 追加
@@ -286,6 +287,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T10 / README の一覧に skill の書き忘れが出ないように、test_layout に「skills/ の全部の skill が README の一覧の表にある」テストを足した（次に同じ書き忘れを止める機械の検査）
 
 - 2026-10-18 / T09 / 変更の欄に template.html と fixtures.py を足した（前: session_report.py とテスト、後: それに加えて、共有用の操作のタブの表示と、fixtures で共有用も書いて比べるため）。目印のテストで、共有用の題名が持ち主の最初の発言から作られて会話の本文が出ることが分かった。共有用の題名は、Codex が書いた最初の依頼の要点（無ければ要約）から作る。スレッドの名前も会話から付くので共有用では使わない
 

@@ -135,6 +135,13 @@ class SkillLayoutTest(unittest.TestCase):
                     self.assertIn(model, {"gpt-6-luna", "gpt-6.1-sol"})
                     self.assertIn(effort, {"low", "medium", "high"})
 
+    def test_readme_lists_every_skill(self):
+        # README の「一覧」の表に、skills/ の全部の skill の行がある（足した skill の書き忘れを止める）
+        table = read(os.path.join(ROOT, "README.md")).split("## 一覧", 1)[1].split("\n## ", 1)[0]
+        for name in skill_dirs():
+            with self.subTest(skill=name):
+                self.assertRegex(table, r"\| \[`%s`\]\(#[^)]+\) \| skill \|" % re.escape(name))
+
     def test_referenced_scripts_exist(self):
         pattern = re.compile(r"\$HOME\\\.agents\\skills\\([\w-]+)\\scripts\\([\w.]+)")
         for path in markdown_files():

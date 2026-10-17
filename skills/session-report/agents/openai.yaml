@@ -1,6 +1,6 @@
 interface:
   display_name: "Session Report"
-  short_description: "Codex の会話を振り返る HTML を作る"
-  default_prompt: "Use $session-report to count the shape of my Codex session records with probe."
+  short_description: "Codex の会話を振り返る HTML を作る（手元用と共有用）"
+  default_prompt: "Use $session-report to turn this Codex session into a report HTML I can look back on."
 policy:
   allow_implicit_invocation: true
