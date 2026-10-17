@@ -270,13 +270,13 @@ flowchart LR
 - モック: 持ち主の仕事に近い会話 150 本と問い 120 件（同じ言葉・言い換え・2 文字の言葉・英語混じり・識別子・似た会話の見分け）。リポジトリに入っている。
 - 実際の会話: 手元の Mac の会話 1,318 本（依頼と最終の回答 3,932 件）から作った問い 60 件。リポジトリには入れていない。
 
-正解の会話が何位に来るかで数える。R@1・R@10 は 1 位・10 位以内に入った割合、MRR は 1 / 順位の平均。どれも組み込んだ `session_search.py` の検索そのものを、`run_eval.py` の方法（表の右の列）で測った値（この Mac、Python 3.14、固定したバージョンのライブラリ）。trigram の方式は新しい会話ほど上げる補正を掛けるので、`run_eval.py` は基準の時刻を `--now`（既定 2026-10-17）で固定している。同じ条件で 2 回流して同じ値になることを確かめた。
+正解の会話が何位に来るかで数える。R@1・R@10 は 1 位・10 位以内に入った割合、MRR は 1 / 順位の平均。どれも組み込んだ `session_search.py` の検索そのものを、`run_eval.py` の方法（表の右の列）で測った値（この Mac、Python 3.14、固定したバージョンのライブラリ）。trigram の方式は新しい会話ほど上げる補正を掛けるので、`run_eval.py` は基準の時刻を `--now`（既定 2026-10-17）で固定している。モックは索引を最初から作って測り、同じ条件で 2 回流して同じ値になることと、使うスレッドの数を変えても同じ値になることを確かめた。
 
 | 方法 | `run_eval.py` の方法 | モック R@1 | モック R@10 | モック MRR | 実際 R@1 | 実際 R@10 | 実際 MRR |
 |---|---|---|---|---|---|---|---|
 | trigram の BM25（専用の環境が無いときの方式） | `product-trigram` | 0.658 | 0.925 | 0.772 | 0.750 | 0.917 | 0.812 |
 | 単語の BM25 + 埋め込み（RRF、k=60） | `product-norerank` | 0.850 | 1.000 | 0.908 | 0.850 | 0.983 | 0.912 |
-| **上の上位 10 件を ruri-v3-reranker-310m で並べ直す。既定の方式** | `product` | **0.842** | **1.000** | **0.910** | **0.933** | **0.983** | **0.956** |
+| **上の上位 10 件を ruri-v3-reranker-310m で並べ直す。既定の方式** | `product` | **0.842** | **1.000** | **0.912** | **0.933** | **0.983** | **0.956** |
 
 部品を決めたときの比べ方（部品を決めた時点の索引で測った値。`run_eval.py` の各方式を単独で組んだ方法と、並べ直しは `rerank_eval.py` と同じやり方で測った。長い発言の埋め込み方は、全文を埋め込んでいた前のバージョンで測った）:
 
@@ -308,7 +308,7 @@ flowchart LR
 作りを変えたら、評価を流し直す（専用の環境の Python で）。
 
 ```powershell
-python evals\session-search\run_eval.py --corpus evals\session-search\corpus.json --queries evals\session-search\queries.json --work $env:TEMP\ss-eval --methods product,index-or/kw
+python evals\session-search\run_eval.py --corpus evals\session-search\corpus.json --queries evals\session-search\queries.json --work $env:TEMP\ss-eval --methods product,product-norerank,product-trigram
 ```
 
 ### 入れ方
@@ -361,7 +361,9 @@ min_rate_limit_remaining_percent = 40
 - 「9 月に ECONNRESET の原因を調べたやつ、何だった？」（期間で絞る）
 - 「このリポジトリで前に `--no-verify` の話をした会話を出して」（作業フォルダで絞る）
 
-会話を検索に出したくないときは、`session_search.py forget <thread_id>`。Codex の記録そのものは消えない。逆に `codex delete` で Codex の記録を消しても索引には残るので、検索から外すのは `forget` で行う。`forget` は検索に出なくするところまでで、索引のファイルから痕跡を消すなら `rebuild` で作り直す（全文検索の表も作り直す）。
+会話を検索に出したくないときは、`session_search.py forget <thread_id>`。Codex の記録そのものは消えない。逆に `codex delete` で Codex の記録を消しても索引には残るので、検索から外すのは `forget` で行う。`forget` は検索に出なくするところまでで、索引のファイルから痕跡を消すなら `rebuild` で作り直す（全文検索の表も作り直す）。コピー型の fork（親の会話を写して分かれた会話）に写された親の発言も、親を `forget` すると一緒に外れる。
+
+索引のファイルが壊れて開けないときは、「索引のファイルが壊れている」と出て止まる。`session_search.py rebuild --discard-broken` で、壊れた索引を脇に置いて新しく作れる（`forget` の一覧は引き継げないので、外したい会話はもう一度 `forget` する）。
 
 ## skill の詳細
 

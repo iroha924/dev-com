@@ -128,6 +128,15 @@ MODELS = {
 }
 
 
+def cache_key(name, messages):
+    """埋め込みのキャッシュの名前。発言の ID と本文から作る（件数だけだと、中身が変わっても古いものを使う）。"""
+    import hashlib
+    h = hashlib.sha256()
+    for m in messages:
+        h.update(("%s\x1f%s\x1e" % (m["id"], m["text"])).encode("utf-8"))
+    return "%s-%s" % (name, h.hexdigest()[:16])
+
+
 class Embedder:
     def __init__(self, name, cache_dir):
         from sentence_transformers import SentenceTransformer
@@ -138,7 +147,7 @@ class Embedder:
 
     def docs(self, messages):
         import numpy as np
-        path = os.path.join(self.cache_dir, "emb-%s-%d.npy" % (self.name, len(messages)))
+        path = os.path.join(self.cache_dir, "emb-%s.npy" % cache_key(self.name, messages))
         if os.path.exists(path):
             return np.load(path)
         t0 = time.time()

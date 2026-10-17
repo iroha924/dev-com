@@ -82,6 +82,9 @@ SEMANTIC_REQUIREMENTS = [
 # --- 伏せ字 -----------------------------------------------------------------------------------------
 
 _SECRET_KEYS = r"(?:password|passwd|pwd|secret|token|api[_-]?key|pat|accountkey|sharedaccesskey)"
+# 代入の名前の続き（password2・passwordValue・DB_PASSWORD_HASH）。大文字・数字・_ で始まるものだけを許し、
+# path・patch・tokenizer・secretary のような、ふつうの語に続く小文字は許さない
+_KEY_SUFFIX = r"(?-i:[0-9_A-Z][0-9A-Za-z_]*)?(?![a-z])"
 _DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"'     # "..."（\" と `" は閉じる引用符ではない。改行も含める）
 _SQ = r"'(?:[^']|''){1,100000}'(?!')"         # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
 
@@ -110,16 +113,39 @@ _SECRET_PATTERNS = [
                 r"personalaccesstoken|securepassword)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(-(?:personalaccesstoken|securepassword)\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     # 短いオプションでパスワードを渡すコマンド: docker login -p X / sqlcmd -P X / nuget ... -p X / mysql -p X
+    (re.compile(r"(?i)(\b(?:docker\s+login|sqlcmd|nuget|dotnet\s+nuget|mysql|psql)\b[^\n|;]*?\s-[pP]\s+)(" + _DQ + "|" + _SQ + ")"),
+     _keep_quote),
     (re.compile(r"(?i)(\b(?:docker\s+login|sqlcmd|nuget|dotnet\s+nuget|mysql|psql)\b[^\n|;]*?\s-[pP]\s+)([^\s'\"|;]+)"),
      r"\1[REDACTED]"),
-    # Windows: cmdkey /pass:X、net use \\host\share X /user:Y
+    # az login --service-principal -p X / az acr login -p X / psexec -p X / sshpass -p X / schtasks /rp X
+    (re.compile(r"(?i)(\b(?:az\s+(?:login|acr\s+login)|psexec|sshpass)\b[^\n|;]*?\s-p\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\b(?:az\s+(?:login|acr\s+login)|psexec|sshpass)\b[^\n|;]*?\s-p\s+)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bschtasks\b[^\n|;]*?\s/rp\s+)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    # mysql -pPASSWORD（-p に続けて書く）
+    (re.compile(r"(?i)(\bmysql(?:dump)?\b[^\n|;]*?\s-p)([^\s'\"|;-][^\s'\"|;]*)"), r"\1[REDACTED]"),
+    # curl -u user:pw / --user user:pw
+    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)\s+[^\s:'\"]*:)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    # -StorageAccountKey X / --account-key X / --sas-token X
+    (re.compile(r"(?i)((?:^|\s)--?(?:storageaccountkey|account-key|sas-token|client-secret)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"),
+     r"\1[REDACTED]"),
+    # API のキーのヘッダー: Ocp-Apim-Subscription-Key / x-functions-key / x-api-key
+    (re.compile(r"(?i)((?:ocp-apim-subscription-key|x-functions-key|x-api-key)[\"']?\s*[:=]\s*[\"']?)([^\s\"',;]+)"),
+     r"\1[REDACTED]"),
+    # Azure Functions の ?code=X
+    (re.compile(r"(?i)([?&]code=)([A-Za-z0-9_\-]{20,}={0,2})"), r"\1[REDACTED]"),
+    # GitHub などのトークンの形（ghp_・gho_・github_pat_）と JWT
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b"), "[REDACTED-TOKEN]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "[REDACTED-TOKEN]"),
+    # Windows: cmdkey /pass:X、net use [Z:] \\host\share X /user:Y
+    (re.compile(r"(?i)(/pass:)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(/pass:)([^\s'\"]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(\bnet\s+use\s+\S+\s+)(?!/)(\S+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bnet\s+use\s+(?:[a-z]:\s+)?\\\\\S+\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\bnet\s+use\s+(?:[a-z]:\s+)?\\\\\S+\s+)(?![/\"'])(\S+)"), r"\1[REDACTED]"),
     # nuget.config などの XML: <add key="ClearTextPassword" value="X" /> / <password>X</password>
     (re.compile(r"(?i)(key=\"(?:ClearTextPassword|Password|Token|ApiKey)\"\s+value=\")([^\"]*)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(<(password|clearTextPassword|token|apiKey)>)([^<]*)(</\2>)"), r"\1[REDACTED]\4"),
     # PowerShell の here-string: $password = @"...\n"@
-    (re.compile(r"(?i)(" + _SECRET_KEYS + r"\w*\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
+    (re.compile(r"(?i)(" + _SECRET_KEYS + _KEY_SUFFIX + r"\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
      lambda m: m.group(1) + m.group(2)[:2] + "[REDACTED]" + m.group(2)[-2:]),
     # YAML のブロック: secret: | の次の行から、字下げが続くところまで
     (re.compile(r"(?im)^([ \t]*[\w.-]*(?:password|passwd|secret|token|api[_-]?key|pat)[\w.-]*[ \t]*:[ \t]*[|>][-+]?[ \t]*\n)"
@@ -136,11 +162,11 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _SECRET_KEYS + r"[\"']?\s*[:=]\s*)(\"\"\"[\s\S]{1,4000}?\"\"\"|'''[\s\S]{1,4000}?''')"),
      lambda m: m.group(1) + m.group(2)[:3] + "[REDACTED]" + m.group(2)[:3]),
     # password= / "password": "..." / $password = '...'。引用符があれば閉じるまで伏せ、引用符の種類を保つ
-    (re.compile(r"(?i)(" + _SECRET_KEYS + r"\w*[\"']?\s*[:=]\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(" + _SECRET_KEYS + r"\w*\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,]{1,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(" + _SECRET_KEYS + _KEY_SUFFIX + r"[\"']?\s*[:=]\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _SECRET_KEYS + _KEY_SUFFIX + r"\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
     # 日本語の書き方: パスワードは X / トークン: X。値が英数字と記号で 6 文字以上のときだけ伏せる
     # （「シークレットは使わず」「パスは C:\...」のような、ふつうの言葉やパスを消さない）
-    (re.compile(r"((?:パスワード|トークン|アクセストークン|シークレット)\s*(?:は|を|[:：=])\s*)"
+    (re.compile(r"((?:パスワード|トークン|アクセストークン|シークレット)\s*(?:は|を|[:：=])\s*[「『]?)"
                 r"(?=[!-~]*[A-Za-z0-9])([!-~]{6,})(?![!-~])"), r"\1[REDACTED]"),
     # URL に埋め込まれた資格情報（https のほか postgresql:// mongodb+srv:// redis:// なども。user:password@ も PAT@ も）
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#]*@"), r"\1[REDACTED]@"),
@@ -699,10 +725,12 @@ class Index:
         """)
         if "forked_from" not in [r[1] for r in db.execute("PRAGMA table_info(threads)")]:
             db.execute("ALTER TABLE threads ADD COLUMN forked_from TEXT")
-            db.execute("DELETE FROM meta WHERE key = 'keyed'")  # forget した会話の写しの鍵を、原本から作り直す
+            db.execute("DELETE FROM meta WHERE key LIKE 'keyed%'")  # forget した会話の写しの鍵を、原本から作り直す
+            # 取り込み済みの記録を読み直して、fork の元を入れる（入れないと、前に forget した親の写しを外せない）
+            db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'no_messages')")
         if self._has_table("forgotten_keys"):
             db.execute("DROP TABLE forgotten_keys")  # 時刻を含む前の形の鍵（fork の写しは時刻が書き換わるので効かない）
-            db.execute("DELETE FROM meta WHERE key = 'keyed'")
+            db.execute("DELETE FROM meta WHERE key LIKE 'keyed%'")
         db.commit()
         if self._has_table("threads_v1"):
             # 旧い表は CODEX_HOME を区別していないので、その会話の本文を持つ CODEX_HOME ごとに行を作る
@@ -724,7 +752,11 @@ class Index:
         if versions.get("schema") != SCHEMA_VERSION or versions.get("extract") != EXTRACT_VERSION:
             self.reset_extracted()
         elif versions.get("redact") != _redact_signature():
+            # 原本のある記録は新しい規則で読み直す（規則を狭めたときに、前に伏せすぎた本文も元に戻る。
+            # 本文の変わらない発言は埋め込みを引き継ぐ）。原本の無い記録は、保存してある本文に掛け直す
             self.reredact_stored()
+            # forget した原本も読み直す（写しを外す鍵は伏せた本文から作るので、新しい規則の鍵を足す）
+            db.execute("UPDATE files SET size = -1 WHERE status IN ('ok', 'partial', 'no_messages', 'forgotten')")
         db.execute("INSERT OR REPLACE INTO meta VALUES ('redact', ?)", (_redact_signature(),))
         db.commit()
         if versions.get("schema") != SCHEMA_VERSION or versions.get("extract") != EXTRACT_VERSION:
@@ -779,6 +811,12 @@ class Index:
             if vals != [r["name"], r["cwd"], r["branch"]]:
                 self.db.execute("UPDATE threads SET name = ?, cwd = ?, branch = ? WHERE rowid = ?", vals + [r["rowid"]])
         self.db.commit()
+        # 消した行の言葉は全文検索の内部の区画に残るので、区画をまとめ直して消し、空いたページも詰める
+        for table, on in (("msg_fts", self.fts), ("words_fts", self.words)):
+            if on:
+                self.db.execute("INSERT INTO %s (%s) VALUES ('optimize')" % (table, table))
+        self.db.commit()
+        self.db.execute("VACUUM")
 
     # 取り込み
 
@@ -788,11 +826,11 @@ class Index:
     def ingest(self, home):
         report = {"files": 0, "updated": 0, "zst_unreadable": 0, "partial": 0, "missing": 0, "errors": []}
         forgotten = self.forgotten(home)
-        if forgotten and self.db.execute("SELECT value FROM meta WHERE key = 'keyed'").fetchone() is None:
+        if forgotten and self.db.execute("SELECT value FROM meta WHERE key = ?", ("keyed:" + home,)).fetchone() is None:
             # 写しを外すハッシュを持たないバージョンで forget した会話は、原本を一度読み直してハッシュを作る
             with self.db:
                 self.db.execute("UPDATE files SET size = -1 WHERE codex_home = ? AND status = 'forgotten'", (home,))
-                self.db.execute("INSERT OR REPLACE INTO meta VALUES ('keyed', '1')")
+                self.db.execute("INSERT OR REPLACE INTO meta VALUES (?, '1')", ("keyed:" + home,))
         seen = set()
         failed_dirs = []
         rollouts = rollout_files(home, failed_dirs)
@@ -895,13 +933,17 @@ class Index:
                             "SELECT path FROM files WHERE codex_home = ? AND path != ? AND status IN ('ok', 'partial')",
                             (home, row["path"])).fetchall() if r["path"] in seen)
             with self.db:
-                if moved or row["status"] in ("forgotten", "zst_unreadable") or (row["thread_id"] or "").startswith("memory:"):
+                empty_zst = row["status"] in ("zst_unreadable", "no_messages") and not self.db.execute(
+                    "SELECT 1 FROM messages WHERE path = ? LIMIT 1", (row["path"],)).fetchone()
+                if moved or empty_zst or row["status"] == "forgotten" or (row["thread_id"] or "").startswith("memory:"):
                     self._delete_path(row["path"])
                     self.db.execute("DELETE FROM files WHERE path = ?", (row["path"],))
                 elif row["status"] != "missing":
                     self.db.execute("UPDATE files SET status = 'missing' WHERE path = ?", (row["path"],))
         report["missing"] = self.db.execute(
             "SELECT COUNT(*) FROM files WHERE codex_home = ? AND status = 'missing'", (home,)).fetchone()[0]
+        if report["updated"]:
+            self._sweep_forgotten_copies(home)
         error = self._update_thread_names(home)
         if error:
             report["errors"].append(error)
@@ -945,6 +987,10 @@ class Index:
             cur = parent
         return keys
 
+    def _sweep_forgotten_copies(self, home):
+        for (tid,) in self.db.execute("SELECT DISTINCT thread_id FROM forgotten_copies WHERE codex_home = ?", (home,)).fetchall():
+            self._hide_copies(home, tid, set())
+
     def _hide_copies(self, home, thread_id, keys):
         """forget した会話の発言の鍵（種類と本文のハッシュ）を残し、その会話の fork の子孫にある写しを消す。
 
@@ -987,6 +1033,8 @@ class Index:
     def _replace(self, path, home, meta, messages, counters, st, status):
         counts = {k: 0 for k in KINDS}
         with self.db:  # 1 ファイル 1 トランザクション。失敗したら前の内容が残る。
+            # 本文の変わらない発言は、単語の索引と埋め込みを引き継ぐ（会話が伸びるたびに全部を作り直さない）
+            carried = self._carry_out(path)
             self._delete_path(path)
             tid = meta["thread_id"]
             # 同じ会話のファイルがほかにもあるとき（thread/revert は前半を元のファイルに残す）は両方を持ち、
@@ -1010,8 +1058,32 @@ class Index:
                      redact(msg["cwd"]), text, normalize(text)))
                 if self.fts:
                     self.db.execute("INSERT INTO msg_fts (rowid, norm) VALUES (?, ?)", (cur.lastrowid, normalize(text)))
+                self._carry_in(carried.get((msg["msg_id"], msg["kind"], normalize(text))), cur.lastrowid)
                 counts[msg["kind"]] += 1
+        self._vec_cache = None
         self._record_file(path, home, meta, st, status, counters, counts)
+
+    def _carry_out(self, path):
+        """入れ直す前の発言の、単語の索引と埋め込み。鍵は (発言 ID, 種類, 正規化した本文)。"""
+        out = {}
+        for r in self.db.execute("SELECT id, msg_id, kind, norm FROM messages WHERE path = ?", (path,)).fetchall():
+            words = None
+            if self.words and self.db.execute("SELECT 1 FROM word_done WHERE message_id = ?", (r["id"],)).fetchone():
+                row = self.db.execute("SELECT words FROM words_fts WHERE rowid = ?", (r["id"],)).fetchone()
+                words = row[0] if row else None
+            vecs = self.db.execute("SELECT chunk, model, vec FROM vectors WHERE message_id = ?", (r["id"],)).fetchall()
+            out[(r["msg_id"], r["kind"], r["norm"])] = (words, [tuple(v) for v in vecs])
+        return out
+
+    def _carry_in(self, carried, new_id):
+        if not carried:
+            return
+        words, vecs = carried
+        if words is not None:
+            self.db.execute("INSERT INTO words_fts (rowid, words) VALUES (?, ?)", (new_id, words))
+            self.db.execute("INSERT INTO word_done VALUES (?)", (new_id,))
+        for chunk, model, vec in vecs:
+            self.db.execute("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?)", (new_id, chunk, model, vec))
 
     def _update_thread_names(self, home):
         index_path = os.path.join(home, "session_index.jsonl")
@@ -1107,7 +1179,9 @@ class Index:
                                        (thread_id, home)).fetchall():
                 self._delete_path(row["path"])
                 self.db.execute("UPDATE files SET status = 'forgotten' WHERE path = ?", (row["path"],))
-            self.db.execute("DELETE FROM threads WHERE thread_id = ? AND codex_home = ?", (thread_id, home))
+            # threads の行は残す（孫から forget した親・祖父へ fork の元をたどるため）。名前は消す
+            self.db.execute("UPDATE threads SET name = NULL, cwd = NULL, branch = NULL WHERE thread_id = ? AND codex_home = ?",
+                            (thread_id, home))
 
     def rebuild(self):
         """取り込んだ内容を作り直す。forget の一覧と、原本が消えた会話の分は残す。
@@ -1836,7 +1910,14 @@ def main(argv=None):
         code = maybe_reexec(codex_home(), argv)
         if code is not None:
             return code
-    return args.func(args)
+    try:
+        return args.func(args)
+    except sqlite3.DatabaseError as e:
+        if isinstance(e, sqlite3.OperationalError) and "malformed" not in str(e):
+            raise
+        print("索引のファイルが壊れている（%s）: %s\nrebuild --discard-broken で、壊れた索引を脇に置いて作り直せる"
+              "（forget の一覧は引き継げない）" % (e, args.db or default_db_path()), file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

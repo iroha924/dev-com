@@ -1579,6 +1579,294 @@ class SeventhReviewTest(_Base):
             ss._SECRET_PATTERNS[:] = saved
 
 
+class EighthReviewTest(_Base):
+    """7 回目のレビューで見つかった欠陥の再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def _chain(self, ts_b="2026-09-02T01:00:00Z", ts_c="2026-09-03T01:00:00Z"):
+        a = paginated(T1, [("祖父の依頼 うそ", "答え", None)])
+        b_own = line(ts_b, "session_meta", {"id": T2, "forked_from_id": T1})
+        b = b_own + "\n" + a + paginated(T2, [("親の依頼 うそ", "答え", None)], ts=ts_b).split("\n", 1)[1]
+        c_own = line(ts_c, "session_meta", {"id": T3, "forked_from_id": T2})
+        c = c_own + "\n" + b + paginated(T3, [("孫の依頼 うそ", "答え", None)], ts=ts_c).split("\n", 1)[1]
+        return a, b, c
+
+    def test_quoted_short_option_passwords(self):
+        for text, secret in [('docker login -u me -p "dockerPw4242" registry', "dockerPw4242"),
+                             ('sqlcmd -S db -P "sqlPw4242"', "sqlPw4242"),
+                             ('cmdkey /add:h /user:me /pass:"cmdPw4242"', "cmdPw4242"),
+                             ('net use \\\\host\\share "network secret42" /user:me', "secret42")]:
+            self.assertNotIn(secret, ss.redact(text), text)
+
+    def test_forgetting_parent_then_child_keeps_grandchild_clean(self):
+        a, b, c = self._chain()
+        self.write(T1, a)
+        self.write(T2, b)
+        path_c = self.write(T3, c)
+        self.search("うそ")
+        self.run_cli("forget", T1)
+        self.search("うそ")
+        self.run_cli("forget", T2)
+        with open(path_c, "a", encoding="utf-8") as f:
+            f.write(paginated(T3, [("孫の追記", "答え", None)]).split("\n", 1)[1])
+        out = json.dumps(self.search("--all-kinds", "うそ"), ensure_ascii=False)
+        self.assertNotIn("祖父の依頼", out)
+        self.assertNotIn("親の依頼", out)
+        self.assertIn("孫の依頼", out)
+
+    def test_grandchild_ingested_before_child_is_cleaned(self):
+        a, b, c = self._chain()
+        self.write(T1, a)
+        self.search("うそ")
+        self.run_cli("forget", T1)
+        # 孫が先に読まれるよう、孫を archived_sessions、子を sessions に置く（パスの並びで archived_sessions が先）
+        self.write(T3, c, sub=("archived_sessions",))
+        self.write(T2, b)
+        out = json.dumps(self.search("--all-kinds", "うそ"), ensure_ascii=False)
+        self.assertNotIn("祖父の依頼", out)
+
+    def test_old_forget_is_rekeyed_in_every_home(self):
+        other = os.path.join(self.tmp.name, "codex2")
+        os.makedirs(os.path.join(other, "sessions"))
+        a, b, _ = self._chain()
+        envs = [self.env, dict(self.env, CODEX_HOME=other)]
+        homes = [self.home, other]
+        for home, env in zip(homes, envs):
+            with open(os.path.join(home, "sessions", "rollout-2026-09-01T01-00-00-%s.jsonl" % T1), "w", encoding="utf-8") as f:
+                f.write(a)
+            subprocess.run([sys.executable, SCRIPT, "search", "--budget", "0", "うそ"], capture_output=True, env=env)
+            subprocess.run([sys.executable, SCRIPT, "forget", T1], capture_output=True, env=env)
+        idx = self.idx()
+        with idx.db:  # 鍵を持たない前のバージョンの forget の状態にする
+            idx.db.execute("DELETE FROM forgotten_copies")
+            idx.db.execute("DELETE FROM meta WHERE key LIKE 'keyed%'")
+        idx.close()
+        for env in envs:
+            subprocess.run([sys.executable, SCRIPT, "search", "--budget", "0", "うそ"], capture_output=True, env=env)
+        with open(os.path.join(other, "sessions", "rollout-2026-09-02T01-00-00-%s.jsonl" % T2), "w", encoding="utf-8") as f:
+            f.write(b)
+        r = subprocess.run([sys.executable, SCRIPT, "search", "--json", "--budget", "0", "--all-kinds", "うそ"],
+                           capture_output=True, encoding="utf-8", env=envs[1])
+        self.assertNotIn("祖父の依頼", r.stdout)
+
+    def test_previously_read_zst_that_becomes_unreadable_then_vanishes_is_kept(self):
+        path = self.write(T1, "x", suffix=".jsonl.zst")
+        idx = self.idx()
+        saved = ss.zstd
+
+        class Fake:
+            @staticmethod
+            def decompress(_):
+                return paginated(T1, [("圧縮の中 つぐみ", "答え", None)]).encode()
+        try:
+            ss.zstd = Fake
+            idx.ingest(self.home)
+            ss.zstd = None
+            with open(path, "a") as f:
+                f.write("y")  # 変わったので読み直すが、読めない
+            idx.ingest(self.home)
+            os.remove(path)
+            idx.ingest(self.home)
+        finally:
+            ss.zstd = saved
+        n = idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (T1,)).fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 2)
+
+    def test_eval_embedding_cache_follows_the_text(self):
+        spec2 = importlib.util.spec_from_file_location("run_eval", os.path.join(ROOT, "evals", "session-search", "run_eval.py"))
+        re_mod = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(re_mod)
+        a = re_mod.cache_key("m", [{"id": 1, "text": "一"}, {"id": 2, "text": "二"}])
+        b = re_mod.cache_key("m", [{"id": 1, "text": "一"}, {"id": 2, "text": "別"}])
+        self.assertNotEqual(a, b)
+
+
+class NinthReviewTest(_Base):
+    """7 回目のレビュー（Claude 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_ordinary_words_after_pat_and_token_are_kept(self):
+        for text in ("path: $(Pipeline.Workspace)/.pip にして、patch: 振る舞いを変える",
+                     "tokenizer: SudachiPy の言い回し", "secretary: 山田", "paths: [src]"):
+            self.assertEqual(ss.redact(text), text)
+        for text, secret in (("password2: Hunter2zz", "Hunter2zz"), ("passwordValue = 'Hunter3zz'", "Hunter3zz"),
+                             ("DB_PASSWORD_HASH: Hunter4zz", "Hunter4zz")):
+            self.assertNotIn(secret, ss.redact(text), text)
+
+    def test_more_secret_shapes_8(self):
+        cases = [
+            ("az login --service-principal -u app -p azSecret4242 --tenant t", "azSecret4242"),
+            ("az acr login -n reg -u me -p acrSecret4242", "acrSecret4242"),
+            ("curl -u admin:curlSecret4242 https://x", "curlSecret4242"),
+            ("curl --user admin:curlSecret5252 https://x", "curlSecret5252"),
+            ("mysql -u root -pMysqlSecret42 db", "MysqlSecret42"),
+            ("net use Z: \\\\srv\\share netSecret4242 /user:x", "netSecret4242"),
+            ("Set-AzStorage -StorageAccountKey storKey4242", "storKey4242"),
+            ("az storage blob list --account-key acctKey4242", "acctKey4242"),
+            ("Ocp-Apim-Subscription-Key: apimKey4242", "apimKey4242"),
+            ("x-functions-key: funcKey4242", "funcKey4242"),
+            ("https://app.azurewebsites.net/api/x?code=AbCdEfGhIjKlMnOpQrStUv12==", "AbCdEfGhIjKlMnOpQrStUv12"),
+            ("schtasks /create /ru me /rp schSecret4242 /tn x", "schSecret4242"),
+            ("psexec \\\\host -u me -p psSecret4242 cmd", "psSecret4242"),
+            ("sshpass -p sshSecret4242 ssh host", "sshSecret4242"),
+            ("token ghp_" + "a1B2" * 9, "a1B2a1B2"),
+            ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "dozjgNryP4J3jVmNHl0w5N"),
+            ("パスワードは「Kanji5Secret42」です", "Kanji5Secret42"),
+        ]
+        for text, secret in cases:
+            self.assertNotIn(secret, ss.redact(text), text)
+        self.assertIn("\\\\srv\\share", ss.redact("net use Z: \\\\srv\\share netSecret4242 /user:x"))  # 共有のパスは残す
+
+    def _fork_pair(self):
+        parent = paginated(T1, [("親の依頼 くろじ", "親の答え", None)], ts="2026-09-01T01:00:00Z")
+        copied = paginated(T1, [("親の依頼 くろじ", "親の答え", None)], ts="2026-09-02T05:00:00Z").split("\n", 1)[1]
+        own = line("2026-09-02T05:00:00Z", "session_meta", {"id": T2, "forked_from_id": T1})
+        child = (own + "\n" + line("2026-09-02T05:00:00Z", "session_meta", {"id": T1}) + "\n" + copied
+                 + paginated(T2, [("子の依頼 くろじ", "答え", None)], ts="2026-09-02T05:10:00Z").split("\n", 1)[1])
+        return parent, child
+
+    def test_migration_fills_forked_from_and_hides_old_copies(self):
+        parent, child = self._fork_pair()
+        self.write(T1, parent)
+        self.write(T2, child)
+        self.search("くろじ")
+        idx = self.idx()
+        with idx.db:  # forked_from の列も鍵も無い前のバージョンの索引で、親を forget した状態にする
+            idx.db.execute("INSERT OR REPLACE INTO forgotten VALUES (?, ?, 'x')", (self.home, T1))
+            for (path,) in idx.db.execute("SELECT path FROM files WHERE thread_id = ?", (T1,)).fetchall():
+                idx._delete_path(path)
+                idx.db.execute("UPDATE files SET status = 'forgotten' WHERE path = ?", (path,))
+            idx.db.execute("DELETE FROM forgotten_copies")
+            idx.db.execute("DELETE FROM meta WHERE key LIKE 'keyed%'")
+            idx.db.execute("CREATE TABLE threads_old (thread_id TEXT, codex_home TEXT, name TEXT, cwd TEXT, branch TEXT, "
+                           "originator TEXT, agent TEXT, started TEXT, PRIMARY KEY (codex_home, thread_id))")
+            idx.db.execute("INSERT INTO threads_old SELECT thread_id, codex_home, name, cwd, branch, originator, agent, started FROM threads")
+            idx.db.execute("DROP TABLE threads")
+            idx.db.execute("ALTER TABLE threads_old RENAME TO threads")
+        idx.close()
+        out = json.dumps(self.search("--all-kinds", "くろじ"), ensure_ascii=False)
+        self.assertNotIn("親の依頼", out)
+        self.assertIn("子の依頼", out)
+
+    def test_changed_rules_rekey_forgotten_threads(self):
+        parent = paginated(T1, [("親の依頼 password=ruleSecret42 しまあじ", "親の答え", None)])
+        own = line("2026-09-02T01:00:00Z", "session_meta", {"id": T2, "forked_from_id": T1})
+        child = own + "\n" + parent + paginated(T2, [("子の依頼 しまあじ", "答え", None)]).split("\n", 1)[1]
+        self.write(T1, parent)
+        self.write(T2, child)
+        self.search("しまあじ")
+        self.run_cli("forget", T1)
+        idx = self.idx()
+        with idx.db:  # 前の規則で作った鍵（伏せ字の結果が今と違う）だけを持つ状態にする
+            idx.db.execute("UPDATE forgotten_copies SET key = 'old-' || key")
+            idx.db.execute("UPDATE meta SET value = 'old' WHERE key = 'redact'")
+            # 前のバージョンの forget の読み直し（keyed の印が無いとき）を通らないようにする
+            idx.db.execute("INSERT OR REPLACE INTO meta VALUES (?, '1')", ("keyed:" + self.home,))
+        idx.close()
+        self.search("しまあじ")
+        self.run_cli("rebuild")
+        out = json.dumps(self.search("--all-kinds", "しまあじ"), ensure_ascii=False)
+        self.assertNotIn("親の依頼", out)
+
+    def test_corruption_in_the_middle_is_reported(self):
+        for n in range(40):
+            tid = "7777%04d-7777-4777-8777-777777777777" % n
+            self.write(tid, paginated(tid, [("ページ %d " % n + "ほうぼう " * 200, "答え", None)]))
+        self.search("ほうぼう")
+        size = os.path.getsize(self.db)
+        with open(self.db, "r+b") as f:
+            for off in range(4096 * 3, size - 4096, 4096 * 2):
+                f.seek(off + 100)
+                f.write(b"\xff" * 64)
+        r = subprocess.run([sys.executable, SCRIPT, "search", "--budget", "0", "ほうぼう"], capture_output=True, encoding="utf-8", env=self.env)
+        if r.returncode == 0:
+            self.skipTest("壊した場所が読まれなかった")
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("壊れている", r.stderr)
+
+    def test_reredact_leaves_no_trace_of_the_old_value(self):
+        leaked = "postgresql://admin:zqxTraceSecret42@db/app みさご"
+        self.write(T1, paginated(T1, [(leaked, "答え", None)]))
+        self.search("みさご")
+        idx = self.idx()
+        with idx.db:  # 前の規則で取り込んで、値がそのまま全文検索の索引に入っている状態にする
+            row = idx.db.execute("SELECT id FROM messages WHERE kind = 'user'").fetchone()[0]
+            idx.db.execute("UPDATE messages SET text = ?, norm = ? WHERE id = ?", (leaked, ss.normalize(leaked), row))
+            idx.db.execute("DELETE FROM msg_fts WHERE rowid = ?", (row,))
+            idx.db.execute("INSERT INTO msg_fts (rowid, norm) VALUES (?, ?)", (row, ss.normalize(leaked)))
+            idx.db.execute("UPDATE meta SET value = 'old' WHERE key = 'redact'")
+        idx.close()
+        self.search("みさご")
+        idx = self.idx()
+        blob = b"".join(r[0] or b"" for r in idx.db.execute("SELECT block FROM msg_fts_data"))
+        text = " ".join(r[0] for r in idx.db.execute("SELECT text FROM messages"))
+        idx.close()
+        self.assertNotIn("zqxTraceSecret42", text)
+        self.assertNotIn(b"zqx", blob)  # 3 文字ずつの断片も、全文検索の内部の区画に残らない
+
+    def test_vanished_no_messages_file_is_not_counted(self):
+        text = line("2026-09-01T01:00:00Z", "session_meta", {"id": T1}) + "\n" + line(
+            "2026-09-01T01:00:00Z", "response_item", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "x"}]}) + "\n"
+        path = self.write(T1, text)
+        self.search("なにか")
+        os.remove(path)
+        out = self.search("なにか")
+        self.assertFalse(any("原本が見つからない" in c or "発言を取り出せなかった" in c for c in out["coverage"]), out["coverage"])
+
+    def test_growing_conversation_keeps_earlier_embeddings(self):
+        path = self.write(T1, paginated(T1, [("一つ目 やまがら", "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+        calls = []
+
+        def encode(texts):
+            calls.append(len(texts))
+            import array
+            return [type("V", (), {"tobytes": lambda self: array.array("f", [1.0, 0.0]).tobytes()})() for _ in texts]
+        idx.fill_vectors(encode, self.home)
+        idx.fill_words(lambda text: ss.normalize(text).split(), self.home)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(paginated(T1, [("二つ目 やまがら", "答え", None)]).split("\n", 1)[1].replace("u1", "u2").replace("f1", "f2"))
+        idx.ingest(self.home)
+        calls.clear()
+        left = idx.fill_vectors(encode, self.home)
+        words_left = idx.db.execute("SELECT COUNT(*) FROM messages WHERE id NOT IN (SELECT message_id FROM word_done)").fetchone()[0]
+        idx.close()
+        self.assertEqual((left, sum(calls), words_left), (0, 2, 2))  # 増えた 2 件だけを作る
+
+    def test_narrowed_rules_restore_over_redacted_text(self):
+        self.write(T1, paginated(T1, [("path: $(Pipeline.Workspace)/.pip に変える おおよしきり", "答え", None)]))
+        self.search("おおよしきり")
+        idx = self.idx()
+        over = "path: [REDACTED] に変える おおよしきり"
+        with idx.db:  # 前の（広すぎた）規則で伏せた状態にする
+            idx.db.execute("UPDATE messages SET text = ?, norm = ? WHERE kind = 'user'", (over, ss.normalize(over)))
+            idx.db.execute("UPDATE meta SET value = 'old' WHERE key = 'redact'")
+        idx.close()
+        out = json.dumps(self.search("Pipeline.Workspace"), ensure_ascii=False)
+        self.assertIn("Pipeline.Workspace", out)
+
+    def test_forget_alone_removes_existing_copies(self):
+        parent, child = self._fork_pair()
+        self.write(T1, parent)
+        self.write(T2, child)
+        self.search("くろじ")
+        idx = self.idx()
+        with idx.db:
+            idx.db.execute("INSERT OR REPLACE INTO meta VALUES (?, '1')", ("keyed:" + self.home,))
+        idx.close()
+        self.run_cli("forget", T1)  # 検索を挟まずに確かめる（読み直しに頼らない）
+        idx = self.idx()
+        n = idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ? AND text LIKE '親の%'", (T2,)).fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 0)
+
+
 class SemanticLayerTest(unittest.TestCase):
     """SudachiPy が入っている環境でだけ、単語の BM25 の経路を確かめる。"""
 
