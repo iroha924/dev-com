@@ -691,6 +691,323 @@ class ReviewFindingsTest(_Base):
             idx.close()
 
 
+class FourthReviewTest(_Base):
+    """4 回目のレビュー（全体）で見つかった欠陥の再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    # 伏せ字
+
+    def test_more_secret_shapes_are_redacted(self):
+        cases = [
+            ('$password = "' + "word " * 42 + 'tailsecret42"', "tailsecret42"),
+            ('$password = "first\nsecondline42"', "secondline42"),
+            ('"syntheticPassword42" | ConvertTo-SecureString -AsPlainText -Force', "syntheticPassword42"),
+            ("ConvertTo-SecureString -String syntheticPassword42 -AsPlainText -Force", "syntheticPassword42"),
+            ("ConvertTo-SecureString plainPositional42 -AsPlainText", "plainPositional42"),
+            ("git clone https://syntheticPat42@dev.azure.com/organization", "syntheticPat42"),
+            ("https://user:p@ss@host/x", "ss@host"),
+            ("Server=db;User Id=sa;Password=my secret pass;Encrypt=true", "secret pass"),
+            ("password=abc", "abc"),
+            ("Connect-Thing -Password 'paramSecret42'", "paramSecret42"),
+            ("パスワードは Kanji2Secret42 です", "Kanji2Secret42"),
+            ("DefaultEndpointsProtocol=https;AccountName=a;AccountKey=abc+def/ghi==;EndpointSuffix=x", "abc+def"),
+            ("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAtruncated", "MIIEowIBAAKCAQEA"),
+            ("-----BEGIN PRIVATE KEY-----\nMIIEvQ\n-----END PRIVATE KEY-----", "MIIEvQ"),
+            ("Bearer abcdefghijklmnopqrstuvwx", "abcdefghijklmnop"),
+            ("PAT " + "A" * 40 + "AZDO" + "b" * 40, "AZDO"),
+        ]
+        for text, secret in cases:
+            self.assertNotIn(secret, ss.redact(text), text)
+
+    # 取り込み
+
+    def test_long_japanese_message_does_not_break_word_index(self):
+        try:
+            import sudachipy  # noqa: F401
+        except ImportError:
+            self.skipTest("SudachiPy が無い")
+        idx = self.idx()
+        long = "パイプラインのログ。" * 2700 + " 末尾にある TF401019 の話"
+        self.write(T1, paginated(T1, [(long, "答え", None)]))
+        idx.ingest(self.home)
+        sem = ss.Semantic()
+        idx.fill_words(sem.tokenizer(), self.home)
+        results, _, mode = idx.search(self.home, ["TF401019"], ss.DEFAULT_KINDS, sem=sem)
+        idx.close()
+        self.assertIn("SudachiPy", mode)
+        self.assertTrue(results)
+
+    def test_embedding_uses_the_head_and_words_use_the_whole_text(self):
+        self.assertEqual(ss.embed_chunks("あ" * (ss.EMBED_CHARS * 2 + 10)), ["あ" * ss.EMBED_CHARS])
+        self.assertEqual(len(ss._byte_chunks("あ" * 50000, ss.SUDACHI_MAX_BYTES)), 4)  # 単語の区切りは全文
+
+    def test_copied_fork_uses_its_own_session_meta(self):
+        own = line("2026-09-01T01:00:00Z", "session_meta", {"id": T2, "agent_role": "worker", "forked_from_id": T1})
+        parent = line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})
+        rest = paginated(T2, [("フォークの依頼 くいな", "答え", None)]).split("\n", 1)[1]
+        meta, _, _ = ss.parse_rollout("rollout-x-%s.jsonl" % T2, (own + "\n" + parent + "\n" + rest).encode())
+        self.assertEqual((meta["thread_id"], meta["agent"]), (T2, "worker"))
+
+    def test_complete_last_line_without_newline_is_read(self):
+        text = paginated(T1, [("最後の行 いかる", "答え", None)]).rstrip("\n")
+        _, msgs, counters = ss.parse_rollout("x", text.encode())
+        self.assertEqual(len(msgs), 2)
+        self.assertEqual(counters["incomplete_tail"], 0)
+
+    def test_append_during_read_still_indexes_what_was_read(self):
+        path = self.write(T1, paginated(T1, [("読んでいる間 ひたき", "答え", None)]))
+        idx = self.idx()
+        real_stat, calls = os.stat, []
+
+        def fake_stat(p, *a, **k):
+            st = real_stat(p, *a, **k)
+            if p == path:
+                calls.append(1)
+                if len(calls) == 2:  # 読んだ後の確認で、書き足されたように見せる
+                    return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid,
+                                           st.st_size + 10, st.st_atime, st.st_mtime, st.st_ctime))
+            return st
+        ss.os.stat = fake_stat
+        try:
+            idx.ingest(self.home)
+        finally:
+            ss.os.stat = real_stat
+        n = idx.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 2)
+
+    def test_file_vanishing_mid_ingest_does_not_crash(self):
+        path = self.write(T1, paginated(T1, [("消える つぐみ", "答え", None)]))
+        idx = self.idx()
+        real_stat, calls = os.stat, []
+
+        def fake_stat(p, *a, **k):
+            if p == path:
+                calls.append(1)
+                if len(calls) == 2:
+                    raise FileNotFoundError(p)
+            return real_stat(p, *a, **k)
+        ss.os.stat = fake_stat
+        try:
+            idx.ingest(self.home)
+        finally:
+            ss.os.stat = real_stat
+            idx.close()
+
+    def test_unreadable_memory_is_kept_and_reported(self):
+        os.makedirs(os.path.join(self.home, "memories"))
+        mem = os.path.join(self.home, "memories", "m.md")
+        with open(mem, "w", encoding="utf-8") as f:
+            f.write("# 要点\n\nあかげら\n")
+        self.search("あかげら")
+        idx = self.idx()
+        real_stat = os.stat
+
+        def fake_stat(p, *a, **k):
+            if p == mem:
+                raise PermissionError(p)
+            return real_stat(p, *a, **k)
+        ss.os.stat = fake_stat
+        try:
+            report = idx.ingest(self.home)
+        finally:
+            ss.os.stat = real_stat
+        n = idx.db.execute("SELECT COUNT(*) FROM messages WHERE kind = 'memory'").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 1)
+        self.assertTrue(report["errors"])
+
+    def test_missing_count_clears_after_compressed_copy_is_read(self):
+        path = self.write(T1, paginated(T1, [("圧縮して移す るり", "答え", None)]))
+        self.search("るり")
+        idx = self.idx()
+        saved = ss.zstd
+        inplace = path + ".zst"  # その場で圧縮（読めない Python で取り込む）してから、archive へ移す
+        with open(inplace, "wb") as f:
+            f.write(b"z")
+        os.remove(path)
+        dest = os.path.join(self.home, "archived_sessions", os.path.basename(inplace))
+        try:
+            ss.zstd = None
+            idx.ingest(self.home)
+            os.makedirs(os.path.dirname(dest))
+            shutil.move(inplace, dest)
+            idx.ingest(self.home)
+
+            class Fake:
+                @staticmethod
+                def decompress(_):
+                    return paginated(T1, [("圧縮して移す るり", "答え", None)]).encode()
+            ss.zstd = Fake
+            idx.ingest(self.home)
+        finally:
+            ss.zstd = saved
+        cov = idx.coverage(self.home)
+        idx.close()
+        self.assertEqual(cov["missing"], 0)
+
+    def test_extract_version_covers_the_latest_changes(self):
+        self.assertGreaterEqual(int(ss.EXTRACT_VERSION), 3)
+
+    # 検索と表示
+
+    def test_display_name_is_per_home(self):
+        other = os.path.join(self.tmp.name, "codex2")
+        os.makedirs(os.path.join(other, "sessions"))
+        p2 = os.path.join(other, "sessions", "rollout-2026-08-01T01-00-00-%s.jsonl" % T1)
+        with open(p2, "w", encoding="utf-8") as f:
+            f.write(paginated(T1, [("Bだけの依頼 けり", "答え", None)], ts="2026-08-01T01:00:00Z"))
+        env = dict(self.env, CODEX_HOME=other)
+        subprocess.run([sys.executable, SCRIPT, "search", "--budget", "0", "けり"], capture_output=True, env=env)
+        self.write(T1, paginated(T1, [("Aの依頼 けり", "答え", None)]))
+        out = json.dumps(self.search("けり"), ensure_ascii=False)
+        self.assertNotIn("Bだけの依頼", out)
+
+    def test_search_never_mixes_homes(self):
+        other = os.path.join(self.tmp.name, "codex2")
+        os.makedirs(os.path.join(other, "sessions"))
+        with open(os.path.join(other, "sessions", "rollout-2026-08-01T01-00-00-%s.jsonl" % T2), "w", encoding="utf-8") as f:
+            f.write(paginated(T2, [("ほかのホーム やませみ", "答え", None)]))
+        env = dict(self.env, CODEX_HOME=other)
+        subprocess.run([sys.executable, SCRIPT, "search", "--budget", "0", "やませみ"], capture_output=True, env=env)
+        self.write(T1, paginated(T1, [("関係ない", "答え", None)]))
+        self.assertFalse(self.search("やませみ")["results"])
+
+    def test_forget_then_append_or_move_stays_hidden(self):
+        path = self.write(T1, paginated(T1, [("わすれる しまえなが", "答え", None)]))
+        self.search("しまえなが")
+        self.run_cli("forget", T1)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(paginated(T1, [("追記 しまえなが", "答え", None)]).split("\n", 1)[1])
+        self.assertFalse(self.search("しまえなが")["results"])
+        dest = os.path.join(self.home, "archived_sessions", os.path.basename(path))
+        os.makedirs(os.path.dirname(dest))
+        shutil.move(path, dest)
+        self.assertFalse(self.search("しまえなが")["results"])
+        code, out = self.run_cli("show", "%s/u1" % T1)
+        self.assertNotEqual(code, 0)
+
+    def test_forgotten_list_is_per_home(self):
+        idx = self.idx()
+        idx.forget("/other/home", T1)
+        self.assertNotIn(T1, idx.forgotten(self.home))
+        idx.close()
+
+    def test_quoted_phrase_from_the_shell_is_a_phrase(self):
+        self.write(T1, paginated(T1, [("idle timeout の件", "答え", None)]))
+        self.write(T2, paginated(T2, [("idle になって unrelated で timeout", "答え", None)]))
+        refs = [r["ref"].split("/")[0] for r in self.search("idle timeout")["results"]]
+        self.assertEqual(refs[0], T1)  # 語句をそのまま含むものが上。並べた言葉だけのものも、絞り落とさない
+        self.assertIn(T2, refs)
+
+    def test_more_terms_rank_higher(self):
+        self.write(T1, paginated(T1, [("再実行 だけ", "答え", None)]))
+        self.write(T2, paginated(T2, [("再実行 と ロードバランサー の両方", "答え", None)]))
+        self.write(T3, paginated(T3, [("ロードバランサー だけ", "答え", None)]))
+        first = self.search("再実行", "ロードバランサー")["results"][0]["ref"].split("/")[0]
+        self.assertEqual(first, T2)
+
+    def test_show_prints_the_notices(self):
+        self.write(T1, paginated(T1, [("注意の行 かわせみ", "答え", None)]))
+        self.write(T2, "not zstd", suffix=".jsonl.zst")
+        code, out = self.run_cli("show", "%s/u1" % T1)
+        if ss.zstd is None:
+            self.assertIn("圧縮された記録", out)
+        else:
+            self.assertIn("読めなかったファイル", out)
+
+    def test_bad_date_is_a_usage_error(self):
+        code, out = self.run_cli("search", "--since", "2026/09/01", "x")
+        self.assertEqual(code, 2)
+        self.assertNotIn("Traceback", out)
+
+    def test_stats_shows_the_method(self):
+        code, out = self.run_cli("stats")
+        self.assertIn("方式:", out)
+
+    def test_japanese_phrasing_keeps_ordinary_words(self):
+        for text in ("シークレットは使わず、公開鍵だけ", "個人環境固有のパスは書かない", "トークンは期限切れ"):
+            self.assertEqual(ss.redact(text), text)
+        self.assertNotIn("Kanji2Secret42", ss.redact("パスワードは Kanji2Secret42 です"))
+        self.assertNotIn("abc123def", ss.redact("トークン：abc123def"))
+
+    def test_triple_quoted_secret_is_redacted(self):
+        self.assertNotIn("triple42", ss.redact('password = """triple42"""'))
+        self.assertNotIn("triple42", ss.redact("token = \'\'\'triple42\'\'\'"))
+
+    @unittest.skipIf(os.name == "nt", "偽の python を sh で作る")
+    def test_venv_rebuild_reason(self):
+        def fake(name, version, zstd):
+            path = os.path.join(self.tmp.name, name)
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\ncase \"$2\" in\n  *compression.zstd*) exit %d;;\n  *version_info*) echo \"%s\";;\nesac\n"
+                        % (0 if zstd else 1, version))
+            os.chmod(path, 0o755)
+            return path
+        base = [fake("base", "(3, 14)", True)]
+        self.assertEqual(ss.venv_rebuild_reason(base, os.path.join(self.tmp.name, "none")), "まだ無い")
+        self.assertIsNone(ss.venv_rebuild_reason(base, fake("same", "(3, 14)", True)))
+        self.assertIn("違う", ss.venv_rebuild_reason(base, fake("old", "(3, 11)", False)))
+        self.assertIn("圧縮", ss.venv_rebuild_reason(base, fake("nozstd", "(3, 14)", False)))
+        broken = os.path.join(self.tmp.name, "broken")
+        with open(broken, "w") as f:
+            f.write("#!/bin/sh\nexit 103\n")
+        os.chmod(broken, 0o755)
+        self.assertIn("起動できない", ss.venv_rebuild_reason(base, broken))
+
+    def test_archive_move_keeps_one_copy_after_one_ingest(self):
+        path = self.write(T1, paginated(T1, [("いっかい ひばり", "答え", None)]))
+        self.search("ひばり")
+        dest = os.path.join(self.home, "archived_sessions", os.path.basename(path))
+        os.makedirs(os.path.dirname(dest))
+        shutil.move(path, dest)
+        idx = self.idx()
+        idx.ingest(self.home)
+        paths = [r[0] for r in idx.db.execute("SELECT DISTINCT path FROM messages")]
+        files = [r[0] for r in idx.db.execute("SELECT path FROM files")]
+        idx.close()
+        self.assertEqual((paths, files), ([dest], [dest]))
+
+    def test_rerank_reorders_the_head_and_can_be_turned_off(self):
+        for tid, text in ((T1, "あおさぎ 一つ目"), (T2, "あおさぎ 二つ目"), (T3, "あおさぎ 三つ目")):
+            self.write(tid, paginated(tid, [(text, "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+
+        class FakeSem:
+            def tokenizer(self):
+                return None
+
+            def embedder(self):
+                return None
+
+            def reranker(self):
+                return lambda pairs: [1.0 if "三つ目" in b else 0.0 for _, b in pairs]
+        res, _, mode = idx.search(self.home, ["あおさぎ"], ss.DEFAULT_KINDS, question="三つ目は？", sem=FakeSem())
+        self.assertEqual(res[0][1]["thread_id"], T3)
+        self.assertIn("並べ直し", mode)
+        res, _, mode = idx.search(self.home, ["あおさぎ"], ss.DEFAULT_KINDS, sem=FakeSem(), rerank=False)
+        self.assertNotIn("並べ直し", mode)
+        idx.close()
+        self.assertEqual(self.search("--no-rerank", "あおさぎ")["results"][0]["kind"], "user")
+
+    def test_rerank_window_finds_the_terms(self):
+        text = "あ" * 3000 + "目的の言葉" + "い" * 3000
+        self.assertIn("目的の言葉", ss.rerank_window(text, ["目的の言葉"]))
+        self.assertLessEqual(len(ss.rerank_window(text, ["目的の言葉"])), ss.RERANK_WINDOW)
+
+    def test_legacy_refs_differ_between_rollout_files(self):
+        def legacy(ts):
+            return "\n".join([line(ts, "session_meta", {"id": T1}),
+                              line(ts, "event_msg", {"type": "user_message", "message": "同じ依頼 ちどり"})]) + "\n"
+        self.write(T1, legacy("2026-09-01T01:00:00Z"))
+        self.write("66666666-6666-4666-8666-666666666666", legacy("2026-09-05T01:00:00Z"))
+        refs = [r["ref"] for r in self.search("ちどり")["results"]]
+        self.assertEqual(len(set(refs)), 2, refs)
+
+
 class SemanticLayerTest(unittest.TestCase):
     """SudachiPy が入っている環境でだけ、単語の BM25 の経路を確かめる。"""
 

@@ -32,9 +32,9 @@ import subprocess
 import sys
 import unicodedata
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 # 取り出し方・正規化・伏せ字を変えたら上げる。上がると全部を取り込み直す。
-EXTRACT_VERSION = "2"
+EXTRACT_VERSION = "3"
 
 try:
     from compression import zstd  # Python 3.14+（optional module）
@@ -59,6 +59,13 @@ EMBED_REVISION = "e3114c6ee10dbab8b4b235fbc6dcf9dd4d5ac1a6"  # 評価に使っ�
 EMBED_MODEL_DIR = "ruri-v3-130m"
 QUERY_PREFIX = "検索クエリ: "
 DOC_PREFIX = "検索文書: "
+# 上位を並べ直すモデル。評価で上位 10 件を並べ直すのがいちばん良かった（evals/session-search、README）
+RERANK_MODEL = "cl-nagoya/ruri-v3-reranker-310m"
+RERANK_REVISION = "bb46934ee9ed09f850b9fcff17501b3ef7ddb2b3"
+RERANK_MODEL_DIR = "ruri-v3-reranker-310m"
+RERANK_K = 10
+RERANK_WINDOW = 1000  # 発言から、問いの言葉を最も多く含む 1,000 文字を渡す（512 トークンに収まる）
+RERANK_FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json")
 # ruri-v3-130m のフォルダに要るファイル（取得の途中で止まったフォルダを使わない）
 MODEL_FILES = ("config.json", "modules.json", "model.safetensors", "sentence_bert_config.json",
                "config_sentence_transformers.json", "tokenizer.json", "tokenizer_config.json",
@@ -71,22 +78,45 @@ SEMANTIC_REQUIREMENTS = [
 
 # --- 伏せ字 -----------------------------------------------------------------------------------------
 
+_SECRET_KEYS = r"(?:password|passwd|pwd|secret|token|api[_-]?key|pat|accountkey|sharedaccesskey)"
+_DQ = r'"(?:[^"\\`]|[\\`].){1,4000}"'       # "..."（\" と `" は閉じる引用符ではない。改行も含める）
+_SQ = r"'(?:[^']|''){1,4000}'(?!')"           # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
+
+
+def _keep_quote(m):
+    q = m.group(2)[0]
+    return m.group(1) + q + "[REDACTED]" + q
+
+
 _SECRET_PATTERNS = [
-    # 秘密鍵のブロック
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[REDACTED-PRIVATE-KEY]"),
+    # 秘密鍵のブロック（END が無く途中で切れたものも、鍵の本文らしい部分まで伏せる）
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|[A-Za-z0-9+/=\s]*)", re.S),
+     "[REDACTED-PRIVATE-KEY]"),
     # Authorization ヘッダーと Bearer トークン
-    (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)(basic|bearer|ntlm|negotiate|token)?\s*[A-Za-z0-9._~+/=-]{8,}"), r"\1\2 [REDACTED]"),
+    (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)(basic|bearer|ntlm|negotiate|token)?\s*[A-Za-z0-9._~+/=-]{8,}"),
+     r"\1\2 [REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
-    # password= / "password": "..." / $password = '...' / 接続文字列の Password=。引用符があれば閉じるまで伏せる
-    # （"..." の中の \" と `"、'...' の中の ''（PowerShell）は、閉じる引用符と見なさない。'...' の中の \ はエスケープではない）
-    (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)[\"']?\s*[:=]\s*)"
-                r"(?:\"((?:[^\"\\`\n]|[\\`].){1,200})\"|'((?:[^'\n]|''){1,200})')"),
-     lambda m: m.group(1) + ('"[REDACTED]"' if m.group(2) is not None else "'[REDACTED]'")),
-    # PowerShell の ConvertTo-SecureString '...' -AsPlainText
-    (re.compile(r"(?i)(ConvertTo-SecureString\b[^'\"\n|;]*)(\"(?:[^\"`\n]|`.)*\"|'(?:[^'\n]|'')*')"), r"\1'[REDACTED]'"),
-    (re.compile(r"(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|pat)\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,]{4,})"), r"\1[REDACTED]"),
-    # URL に埋め込まれた資格情報
-    (re.compile(r"(?i)(https?://)[^\s/@:]+:[^\s/@]+@"), r"\1[REDACTED]@"),
+    # PowerShell: パイプで渡す '...' | ConvertTo-SecureString、引数の '...'・"..."・引用符なし、-Password などの引数
+    (re.compile(r"(?i)(" + _DQ + "|" + _SQ + r")(\s*\|\s*ConvertTo-SecureString)"), r"'[REDACTED]'\2"),
+    (re.compile(r"(?i)(ConvertTo-SecureString\b[^'\"\n|;]*?)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(ConvertTo-SecureString\s+(?:-String\s+)?)(?=[^\s'\"|;-])([^\s|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?-String\s+)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(-" + _SECRET_KEYS + r"\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    # 接続文字列の Password=...;（空白を含んでよい。; か行末まで）
+    (re.compile(r"(?im)\b((?:password|pwd|accountkey|sharedaccesskey)[ \t]*=[ \t]*)(?![\s\"'])([^;\n]{1,200}?)(?=[ \t]*(?:;|$))"),
+     r"\1[REDACTED]"),
+    # password = """...""" / '''...'''（Python の三重の引用符）
+    (re.compile(r"(?i)(" + _SECRET_KEYS + r"[\"']?\s*[:=]\s*)(\"\"\"[\s\S]{1,4000}?\"\"\"|'''[\s\S]{1,4000}?''')"),
+     lambda m: m.group(1) + m.group(2)[:3] + "[REDACTED]" + m.group(2)[:3]),
+    # password= / "password": "..." / $password = '...'。引用符があれば閉じるまで伏せ、引用符の種類を保つ
+    (re.compile(r"(?i)(" + _SECRET_KEYS + r"[\"']?\s*[:=]\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _SECRET_KEYS + r"\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,]{1,})"), r"\1[REDACTED]"),
+    # 日本語の書き方: パスワードは X / トークン: X。値が英数字と記号で 6 文字以上のときだけ伏せる
+    # （「シークレットは使わず」「パスは C:\...」のような、ふつうの言葉やパスを消さない）
+    (re.compile(r"((?:パスワード|トークン|アクセストークン|シークレット)\s*(?:は|[:：=])\s*)"
+                r"(?=[!-~]*[A-Za-z0-9])([!-~]{6,})(?![!-~])"), r"\1[REDACTED]"),
+    # URL に埋め込まれた資格情報（user:password@ も、PAT だけの PAT@ も。パスワードに @ が入っていてもよい）
+    (re.compile(r"(?i)(https?://)[^\s/?#]*@"), r"\1[REDACTED]@"),
     # Azure DevOps の PAT らしい長い英数字（旧形式は 52 文字の小文字と数字、新形式は 84 文字前後）
     (re.compile(r"(?<![A-Za-z0-9])[a-z2-7]{52}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
     # 16 進だけの並び（SHA-384 などのハッシュ）は伏せない
@@ -132,14 +162,14 @@ def venv_python():
     return os.path.join(base, "Scripts", "python.exe") if os.name == "nt" else os.path.join(base, "bin", "python")
 
 
-def model_dir():
-    return os.path.join(data_dir(), "models", EMBED_MODEL_DIR)
+def model_dir(kind="embed"):
+    return os.path.join(data_dir(), "models", EMBED_MODEL_DIR if kind == "embed" else RERANK_MODEL_DIR)
 
 
-def model_ready():
+def model_ready(kind="embed"):
     """モデルのフォルダに、読み込みに要るファイルが揃っているか（取得の途中で止まったフォルダを使わない）。"""
-    d = model_dir()
-    return all(os.path.exists(os.path.join(d, f)) for f in MODEL_FILES)
+    d = model_dir(kind)
+    return all(os.path.exists(os.path.join(d, f)) for f in (MODEL_FILES if kind == "embed" else RERANK_FILES))
 
 
 def python_command(value):
@@ -266,9 +296,13 @@ def parse_rollout(path, data):
     text = data.decode("utf-8", errors="replace")
     lines = text.split("\n")
     if lines and lines[-1] != "":
-        # 書き込みの途中で終わった行。次の取り込みで読む。
-        counters["incomplete_tail"] = 1
-    lines = lines[:-1]
+        try:  # 改行が無くても、JSON として閉じている行は読む
+            json.loads(lines[-1])
+        except ValueError:
+            counters["incomplete_tail"] = 1  # 書き込みの途中で終わった行。次の取り込みで読む。
+            lines = lines[:-1]
+    else:
+        lines = lines[:-1]
 
     messages = []
     turn_id = None
@@ -276,6 +310,7 @@ def parse_rollout(path, data):
     turn_seq = {}
     finals_by_turn = set()
     pending_task_complete = []
+    meta_seen = False
 
     def add(kind, body, line_no, ts, msg_id):
         if not body or not body.strip():
@@ -303,6 +338,11 @@ def parse_rollout(path, data):
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         ts = item.get("timestamp") if isinstance(item.get("timestamp"), str) else None
         if typ == "session_meta":
+            # コピー型の fork は、自分の session_meta を先頭に置き、その後ろに引き継いだ親の session_meta を持つ。
+            # 引き継いだ分の metadata は見ない（Codex の core/src/session/session.rs と同じ扱い）。
+            if meta_seen:
+                continue
+            meta_seen = True
             meta["thread_id"] = payload.get("id") or meta["thread_id"]
             meta["cwd"] = payload.get("cwd") or meta["cwd"]
             cwd = cwd or meta["cwd"]
@@ -385,8 +425,8 @@ def parse_rollout(path, data):
 def parse_memory(path, home):
     with open(path, "rb") as f:
         text = f.read().decode("utf-8", errors="replace")
+        mtime = datetime.datetime.fromtimestamp(os.fstat(f.fileno()).st_mtime, datetime.timezone.utc).isoformat()
     rel = os.path.relpath(path, os.path.join(home, "memories")).replace("\\", "/")
-    mtime = datetime.datetime.fromtimestamp(os.path.getmtime(path), datetime.timezone.utc).isoformat()
     chunks = re.split(r"\n(?=#{1,6} )", text)
     messages = []
     for n, chunk in enumerate(chunks, 1):
@@ -407,8 +447,8 @@ class Semantic:
     STOP_POS = {"助詞", "助動詞", "補助記号", "記号", "空白", "接頭辞", "接尾辞"}
 
     def __init__(self):
-        self._tok = self._emb = None
-        self._tok_error = self._emb_error = None
+        self._tok = self._emb = self._rerank = None
+        self._tok_error = self._emb_error = self._rerank_error = None
 
     def tokenizer(self):
         if self._tok is None and self._tok_error is None:
@@ -418,13 +458,15 @@ class Semantic:
                 stop = self.STOP_POS
 
                 def run(text):
+                    # SudachiPy は 1 回に 49,149 バイトまでしか受け付けないので、全文を区切って渡す
                     out = []
-                    for m in tok.tokenize(normalize(text)[:20000]):
-                        if m.part_of_speech()[0] in stop:
-                            continue
-                        w = (m.normalized_form() or m.surface()).strip()
-                        if w:
-                            out.append(w)
+                    for piece in _byte_chunks(normalize(text), SUDACHI_MAX_BYTES):
+                        for m in tok.tokenize(piece):
+                            if m.part_of_speech()[0] in stop:
+                                continue
+                            w = (m.normalized_form() or m.surface()).strip()
+                            if w:
+                                out.append(w)
                     return out
                 self._tok = run
             except Exception as e:  # ImportError のほか、辞書が無いなど
@@ -438,7 +480,7 @@ class Semantic:
                 self._emb_error = "モデルが無い（%s）。setup で取ってくる" % path
                 return None
             try:
-                os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                _quiet_model_loading()
                 import numpy
                 from sentence_transformers import SentenceTransformer
                 model = SentenceTransformer(path, device="cpu")
@@ -450,6 +492,71 @@ class Semantic:
             except Exception as e:
                 self._emb_error = "%s: %s" % (type(e).__name__, e)
         return self._emb
+
+    def reranker(self):
+        """(問い, 本文の断片) の組に点を付ける関数。モデルかライブラリが無ければ None。"""
+        if self._rerank is None and self._rerank_error is None:
+            if not model_ready("rerank"):
+                self._rerank_error = "モデルが無い（%s）。setup で取ってくる" % model_dir("rerank")
+                return None
+            try:
+                _quiet_model_loading()
+                from sentence_transformers import CrossEncoder
+                model = CrossEncoder(model_dir("rerank"), max_length=512, device="cpu")
+
+                def score(pairs):
+                    return [float(s) for s in model.predict(pairs, batch_size=16, show_progress_bar=False)]
+                self._rerank = score
+            except Exception as e:
+                self._rerank_error = "%s: %s" % (type(e).__name__, e)
+        return self._rerank
+
+
+def _quiet_model_loading():
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    # 読み込みの進み具合の表示を出さない（Codex が毎回読むことになる）
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+    os.environ.setdefault("TQDM_DISABLE", "1")
+
+
+def rerank_window(text, terms, width=RERANK_WINDOW):
+    """問いの言葉を最も多く含む width 文字の窓（半分ずつずらして探す）。"""
+    norm = normalize(text)
+    best, best_score = 0, -1
+    for start in range(0, max(1, len(norm) - width // 2), width // 2):
+        score = sum(norm.count(t, start, start + width) for t in terms)
+        if score > best_score:
+            best, best_score = start, score
+    return text[best:best + width]
+
+
+SUDACHI_MAX_BYTES = 40000
+
+
+def _byte_chunks(text, limit):
+    """UTF-8 で limit バイトを超えないように、なるべく改行か空白で区切る。"""
+    out, start = [], 0
+    while start < len(text):
+        end = min(len(text), start + limit // 4)
+        while end < len(text) and len(text[start:end + 1000].encode("utf-8")) <= limit:
+            end = min(len(text), end + 1000)
+        if end < len(text):
+            cut = max(text.rfind("\n", start, end), text.rfind(" ", start, end))
+            if cut > start + (end - start) // 2:
+                end = cut + 1
+        out.append(text[start:end])
+        start = end
+    return out
+
+
+def embed_chunks(text):
+    """埋め込みに渡す断片。先頭の EMBED_CHARS 文字だけ。
+
+    全文を 4,000 文字ずつ埋め込む形も評価したが、並べ直しを入れた検索では同じ値（実際の会話で MRR 0.957）で、
+    最初の索引づくりが約 1.7 倍かかった。後ろの部分は単語の BM25 が全文を見る。
+    """
+    return [(text or "")[:EMBED_CHARS]]
 
 
 def _rrf(*lists):
@@ -491,6 +598,9 @@ class Index:
         db = self.db
         db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
         old_schema = dict(db.execute("SELECT key, value FROM meta").fetchall()).get("schema")
+        if old_schema in ("1", "2") and self._has_table("vectors"):
+            db.execute("DROP TABLE vectors")  # 2 → 3: 長い発言を分けて埋め込む形に変えたので、作り直す
+            db.commit()
         if old_schema == "1" and self._has_table("threads") and not self._has_table("threads_v1"):
             # 1 → 2: threads を CODEX_HOME ごとに分ける。原本の消えた会話の名前や子の印を失わないよう、行を移す。
             db.execute("ALTER TABLE threads RENAME TO threads_v1")
@@ -512,7 +622,8 @@ class Index:
             CREATE TABLE IF NOT EXISTS forgotten (codex_home TEXT, thread_id TEXT, at TEXT,
                 PRIMARY KEY (codex_home, thread_id));
             CREATE TABLE IF NOT EXISTS word_done (message_id INTEGER PRIMARY KEY);
-            CREATE TABLE IF NOT EXISTS vectors (message_id INTEGER PRIMARY KEY, model TEXT, vec BLOB);
+            CREATE TABLE IF NOT EXISTS vectors (message_id INTEGER, chunk INTEGER, model TEXT, vec BLOB,
+                PRIMARY KEY (message_id, chunk));
         """)
         if self._has_table("threads_v1"):
             # 旧い表は CODEX_HOME を区別していないので、その会話の本文を持つ CODEX_HOME ごとに行を作る
@@ -577,11 +688,15 @@ class Index:
         seen = set()
         for path in rollout_files(home):
             report["files"] += 1
-            seen.add(path)
             try:
                 st = os.stat(path)
-            except OSError:
+            except FileNotFoundError:
+                continue  # 一覧を作った後に消された（移された）。原本の消失として扱う
+            except OSError as e:
+                seen.add(path)  # 読めないだけ。前の中身を残す
+                report["errors"].append("%s: %s" % (os.path.basename(path), e))
                 continue
+            seen.add(path)
             row = self.db.execute("SELECT size, mtime_ns, status FROM files WHERE path = ?", (path,)).fetchone()
             # 読めなかった .zst が読めるようになった、または「原本なし」にしたファイルが戻ってきたら、読み直す
             retry = row and ((row["status"] == "zst_unreadable" and zstd is not None) or row["status"] == "missing")
@@ -598,12 +713,19 @@ class Index:
                 continue
             if data is None:
                 report["zst_unreadable"] += 1
-                self._record_file(path, home, None, st, "zst_unreadable", {}, {})
+                m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", os.path.basename(path))
+                self._record_file(path, home, {"thread_id": m.group(1) if m else None}, st, "zst_unreadable", {}, {})
                 continue
-            st_after = os.stat(path)
-            if (st_after.st_size, st_after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
-                continue  # 読んでいる間に書き足された。次の検索で読む。
             meta, messages, counters = parse_rollout(path, data)
+            try:
+                st_after = os.stat(path)
+            except OSError:
+                st_after = None
+            if st_after is None or (st_after.st_size, st_after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
+                # 読んでいる間に書き足された（または移された）。読めた分は取り込み、大きさを読む前のものにしておくので、
+                # 次の検索で読み直す。
+                st = os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid,
+                                     -1, st.st_atime, st.st_mtime, st.st_ctime))
             if meta["thread_id"] in forgotten:
                 self._record_file(path, home, meta, st, "forgotten", counters, {})
                 continue
@@ -616,13 +738,24 @@ class Index:
             report["files"] += 1
             try:
                 st = os.stat(path)
-            except OSError:
+            except FileNotFoundError:
                 continue  # 一覧を作った後に消された
+            except OSError as e:
+                seen.add(path)  # 読めないだけ（権限など）。前の中身を残す
+                report["errors"].append("%s: %s" % (os.path.basename(path), e))
+                continue
             seen.add(path)
             row = self.db.execute("SELECT size, mtime_ns FROM files WHERE path = ?", (path,)).fetchone()
             if row and row["size"] == st.st_size and row["mtime_ns"] == st.st_mtime_ns:
                 continue
-            meta, messages = parse_memory(path, home)
+            try:
+                meta, messages = parse_memory(path, home)
+            except FileNotFoundError:
+                seen.discard(path)
+                continue
+            except OSError as e:
+                report["errors"].append("%s: %s" % (os.path.basename(path), e))
+                continue
             if meta["thread_id"] in forgotten:
                 self._record_file(path, home, meta, st, "forgotten", {}, {})
                 continue
@@ -636,8 +769,8 @@ class Index:
             # 同じ名前のファイル（archive への移動や圧縮）が別の場所にあり、その中身を取り込めているときだけ移動とみなす。
             # 読めない .zst に変わっただけなら、前の中身を残す。
             moved = any(_file_stem(r["path"]) == _file_stem(row["path"]) for r in self.db.execute(
-                "SELECT path FROM files WHERE thread_id = ? AND codex_home = ? AND path != ? AND status IN ('ok', 'partial')",
-                (row["thread_id"], home, row["path"])).fetchall() if r["path"] in seen)
+                "SELECT path FROM files WHERE codex_home = ? AND path != ? AND status IN ('ok', 'partial')",
+                (home, row["path"])).fetchall() if r["path"] in seen)
             with self.db:
                 if moved or row["status"] == "forgotten" or (row["thread_id"] or "").startswith("memory:"):
                     self._delete_path(row["path"])
@@ -675,14 +808,8 @@ class Index:
         with self.db:  # 1 ファイル 1 トランザクション。失敗したら前の内容が残る。
             self._delete_path(path)
             tid = meta["thread_id"]
-            # archive への移動（同じファイル名で場所だけ変わった）なら、前の場所の分を消す。
-            # 同じ会話のファイルがほかにも残っているとき（thread/revert は前半を元のファイルに残す）は両方を持ち、
-            # 同じ発言は検索と show でまとめる。
-            for old in self.db.execute("SELECT path FROM files WHERE thread_id = ? AND codex_home = ? AND path != ?",
-                                       (tid, home, path)).fetchall():
-                if _file_stem(old["path"]) == _file_stem(path) and not os.path.exists(old["path"]):
-                    self._delete_path(old["path"])
-                    self.db.execute("DELETE FROM files WHERE path = ?", (old["path"],))
+            # 同じ会話のファイルがほかにもあるとき（thread/revert は前半を元のファイルに残す）は両方を持ち、
+            # 同じ発言は検索と show でまとめる。archive への移動で消えた前の場所の分は、ingest の最後に消す。
             self.db.execute(
                 "INSERT INTO threads (thread_id, codex_home, cwd, branch, originator, agent, started) "
                 "VALUES (?,?,?,?,?,?,?) ON CONFLICT(codex_home, thread_id) DO UPDATE SET cwd=excluded.cwd, "
@@ -726,10 +853,16 @@ class Index:
         rows = self.db.execute(
             "SELECT id, text FROM messages WHERE codex_home = ? AND kind IN (%s) AND id NOT IN (SELECT message_id FROM word_done)"
             % ",".join("?" * len(EMBED_KINDS)), (home,) + EMBED_KINDS).fetchall()
+        failed = 0
         with self.db:
             for r in rows:
-                self.db.execute("INSERT INTO words_fts (rowid, words) VALUES (?, ?)", (r["id"], " ".join(tokenize(r["text"]))))
+                try:
+                    words = " ".join(tokenize(r["text"]))
+                except Exception:  # 区切れない発言は、単語の索引には入れない（trigram では探せる）
+                    words, failed = "", failed + 1
+                self.db.execute("INSERT INTO words_fts (rowid, words) VALUES (?, ?)", (r["id"], words))
                 self.db.execute("INSERT INTO word_done VALUES (?)", (r["id"],))
+        self.word_failures = failed
         return len(rows)
 
     def fill_vectors(self, encode, home, budget=None, progress=None):
@@ -742,14 +875,15 @@ class Index:
         import time
         start = time.time()
         done = 0
-        for i in range(0, len(rows), 32):
+        for i in range(0, len(rows), 16):
             if budget is not None and time.time() - start > budget:
                 break
-            batch = rows[i:i + 32]
-            vecs = encode([DOC_PREFIX + r["text"][:EMBED_CHARS] for r in batch])
-            with self.db:
-                self.db.executemany("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?)",
-                                    [(r["id"], EMBED_MODEL, v.tobytes()) for r, v in zip(batch, vecs)])
+            batch = rows[i:i + 16]
+            pieces = [(r["id"], n, c) for r in batch for n, c in enumerate(embed_chunks(r["text"]))]
+            vecs = encode([DOC_PREFIX + c for _, _, c in pieces])
+            with self.db:  # 1 つの発言の断片は同じトランザクションで入れる（途中までの発言を残さない）
+                self.db.executemany("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?)",
+                                    [(mid, n, EMBED_MODEL, v.tobytes()) for (mid, n, _), v in zip(pieces, vecs)])
             done += len(batch)
             if progress:
                 progress(done, len(rows))
@@ -793,7 +927,7 @@ class Index:
     # 検索
 
     def search(self, home, terms, kinds, question=None, since=None, until=None, cwd=None, include_agents=False,
-               limit=10, sem=None):
+               limit=10, sem=None, rerank=True):
         """(結果, 当たりの件数, 方式の説明) を返す。結果は (点, 行) の並び。"""
         forgotten = self.forgotten(home)
         where = ["m.codex_home = ?", "m.kind IN (%s)" % ",".join("?" * len(kinds))]
@@ -825,6 +959,9 @@ class Index:
                 rows = self.db.execute("SELECT rowid, bm25(words_fts) FROM words_fts WHERE words_fts MATCH ?", (match,)).fetchall()
                 lists.append([rid for rid, _ in sorted(((r[0], r[1]) for r in rows if r[0] in allowed), key=lambda x: x[1])])
                 modes.append("単語の BM25（SudachiPy）")
+                phrases = [term for term in terms if len(term.split()) > 1]
+                if phrases:  # 語句をその並びのまま含む発言を、もう 1 つの並びとして混ぜる（上げるだけで、絞らない）
+                    lists.append(self._trigram_or(phrases, allowed))
         if not modes:
             lists.append(self._trigram_or(terms, allowed))
             modes.append("trigram の BM25" if self.fts else "部分一致")
@@ -835,7 +972,15 @@ class Index:
                 q = encode([QUERY_PREFIX + ((question or "") + " " + " ".join(terms)).strip()])[0]
                 sims = mat @ q
                 order = sorted(range(len(ids)), key=lambda i: -sims[i])
-                lists.append([ids[i] for i in order if ids[i] in allowed][:RRF_DEPTH])
+                ranked_ids, seen_ids = [], set()  # 長い発言は断片のうち一番近いもので並べる
+                for i in order:
+                    mid = ids[i]
+                    if mid in allowed and mid not in seen_ids:
+                        seen_ids.add(mid)
+                        ranked_ids.append(mid)
+                        if len(ranked_ids) >= RRF_DEPTH:
+                            break
+                lists.append(ranked_ids)
                 modes.append("埋め込み（ruri-v3-130m）")
         if len(lists) == 1:
             scores = {mid: 1.0 / (RRF_K + rank + 1) for rank, mid in enumerate(lists[0])}
@@ -859,14 +1004,22 @@ class Index:
                 continue
             per_thread[r["thread_id"]] = n + 1
             out.append((score, r))
-            if len(out) >= limit:
+            if len(out) >= max(limit, RERANK_K if rerank else 0):
                 break
-        return out, len(scores), " + ".join(modes)
+        score_pairs = sem.reranker() if (sem and rerank) else None
+        if score_pairs is not None and len(out) > 1:
+            head, tail = out[:RERANK_K], out[RERANK_K:]
+            query = question or " ".join(terms)
+            points = score_pairs([(query, rerank_window(r["text"], terms)) for _, r in head])
+            head = [head[i] for i in sorted(range(len(head)), key=lambda i: -points[i])]
+            out = head + tail
+            modes.append("並べ直し（ruri-v3-reranker-310m、上位 %d 件）" % len(head))
+        return out[:limit], len(scores), " + ".join(modes)
 
     def _trigram_or(self, terms, allowed):
         """どれかの単語を含めば候補にし、言葉ごとの点の和に新しさの補正を掛けて並べる（標準ライブラリだけの方式）。"""
         now = datetime.datetime.now(datetime.timezone.utc)
-        scores = {}
+        scores, hits = {}, {}
         for term in terms:
             if self.fts and len(term) >= 3:
                 rows = self.db.execute(
@@ -880,13 +1033,15 @@ class Index:
                 base = -r["bm"] if r["bm"] is not None else r["norm"].count(term) / (1.0 + math.log1p(len(r["norm"]) / 500.0))
                 boost = 1.0 + RECENCY_WEIGHT * math.pow(2.0, -_age_days(r["ts"], now) / RECENCY_HALF_LIFE_DAYS)
                 scores[r["id"]] = scores.get(r["id"], 0.0) + base * boost
-        return [mid for mid, _ in sorted(scores.items(), key=lambda x: -x[1])]
+                hits.setdefault(r["id"], set()).add(term)
+        # 含む言葉の数を先に比べ、同じ数なら点で比べる（多く含むほど上に来る）
+        return [mid for mid, _ in sorted(scores.items(), key=lambda x: (-len(hits[x[0]]), -x[1]))]
 
-    def display_name(self, thread_id, name):
+    def display_name(self, home, thread_id, name):
         if name:
             return name
-        row = self.db.execute("SELECT text FROM messages WHERE thread_id = ? AND kind = 'user' ORDER BY ts, line LIMIT 1",
-                              (thread_id,)).fetchone()
+        row = self.db.execute("SELECT text FROM messages WHERE codex_home = ? AND thread_id = ? AND kind = 'user' "
+                              "ORDER BY ts, line LIMIT 1", (home, thread_id)).fetchone()
         if not row:
             return "（名前なし）"
         first = next((l.strip(" #") for l in row["text"].splitlines() if l.strip(" #")), "")
@@ -974,8 +1129,19 @@ def _local(ts):
 
 
 def parse_query(parts):
-    """空白で区切った言葉と、"..." の語句に分ける。演算子は解釈しない（どれかを含めば候補になる）。"""
-    text = " ".join(parts)
+    """空白で区切った言葉と、"..." の語句に分ける。演算子は解釈しない（どれかを含めば候補になる）。
+
+    シェルが引用符を外して 1 つの引数にした "idle timeout" も語句として扱う。語句は絞り込みには使わず、
+    その並びのまま含む発言を上げるのに使う。語句の中の言葉も、それぞれ検索ワードとして数える
+    （「パス 長い」のように、語句のつもりでなく並べた言葉を取りこぼさないため）。
+    """
+    pre = []
+    for part in parts:
+        if '"' not in part and len(part.split()) > 1:
+            pre.append('"%s"' % part)
+        else:
+            pre.append(part)
+    text = " ".join(pre)
     terms = []
     i = 0
     while i < len(text):
@@ -997,10 +1163,14 @@ def parse_query(parts):
             j += 1
         terms.append(text[i:j])
         i = j
-    terms = [normalize(t) for t in terms if t.strip()]
-    if not terms:
+    out = []
+    for term in (normalize(t) for t in terms if t.strip()):
+        for item in [term] + (term.split() if len(term.split()) > 1 else []):
+            if item not in out:
+                out.append(item)
+    if not out:
         raise ValueError("検索ワードが空")
-    return terms
+    return out
 
 
 def snippet(text, terms, width=SNIPPET):
@@ -1057,7 +1227,7 @@ def coverage_lines(idx, home, report, note):
         lines.append("注意: 形の分からない発言 %d 件・壊れた行 %d 行（%d 本のファイル）は検索に入っていない"
                      % (cov["shape_errors"], cov["bad_json"], cov["partial"]))
     if cov["missing"]:
-        lines.append("参考: 原本が見つからない会話 %d 本も索引に残して検索している" % cov["missing"])
+        lines.append("参考: 原本が見つからない記録のファイル %d 本も索引に残して検索している" % cov["missing"])
     if report and report.get("embed_remaining"):
         lines.append("注意: 埋め込みの済んでいない発言 %d 件は、全文検索だけで探した（session_search.py index で全部を作れる）"
                      % report["embed_remaining"])
@@ -1067,9 +1237,7 @@ def coverage_lines(idx, home, report, note):
         lines.append("注意: 専用の環境（%s）が起動できないので、標準ライブラリだけの方式で探した。"
                      "setup で作り直せる" % os.environ[BROKEN_VENV_ENV])
     reexec = os.environ.get(REEXEC_ENV)
-    if reexec and os.path.abspath(reexec) == os.path.abspath(venv_python()):
-        lines.append("参考: 専用の環境（%s）で動かした" % reexec)
-    elif reexec:
+    if reexec and os.path.abspath(reexec) != os.path.abspath(venv_python()):
         lines.append("参考: 圧縮された記録を読むため %s で動かした" % reexec)
     return lines
 
@@ -1087,12 +1255,13 @@ def cmd_search(args):
     kinds = KINDS if args.all_kinds else DEFAULT_KINDS
     results, total, mode = idx.search(home, terms, kinds, question=args.question, since=_date_arg(args.since),
                                       until=_date_arg(args.until, end=True), cwd=cwd,
-                                      include_agents=args.include_agents, limit=args.limit, sem=sem)
+                                      include_agents=args.include_agents, limit=args.limit, sem=sem,
+                                      rerank=not args.no_rerank)
     cov = coverage_lines(idx, home, report, note)
     if args.json:
         print(json.dumps({"terms": terms, "mode": mode, "total": total, "coverage": cov, "results": [
             {"score": round(s, 3), "ref": "%s/%s" % (r["thread_id"], r["msg_id"]), "time": _local(r["ts"]),
-             "thread_name": idx.display_name(r["thread_id"], r["name"]), "cwd": r["cwd"], "branch": r["branch"], "kind": r["kind"],
+             "thread_name": idx.display_name(home, r["thread_id"], r["name"]), "cwd": r["cwd"], "branch": r["branch"], "kind": r["kind"],
              "originator": r["originator"], "snippet": snippet(r["text"], terms),
              "resume": None if r["kind"] == "memory" else "codex resume %s" % r["thread_id"]}
             for s, r in results]}, ensure_ascii=False, indent=1))
@@ -1102,7 +1271,7 @@ def cmd_search(args):
             print(line)
         for n, (s, r) in enumerate(results, 1):
             print()
-            print("[%d] %s  %s  %s" % (n, _local(r["ts"]), KIND_LABEL.get(r["kind"], r["kind"]), idx.display_name(r["thread_id"], r["name"])))
+            print("[%d] %s  %s  %s" % (n, _local(r["ts"]), KIND_LABEL.get(r["kind"], r["kind"]), idx.display_name(home, r["thread_id"], r["name"])))
             print("    場所: %s%s" % (r["cwd"] or "-", "（%s）" % r["branch"] if r["branch"] else ""))
             print("    " + snippet(r["text"], terms))
             print("    参照: %s/%s" % (r["thread_id"], r["msg_id"]))
@@ -1128,7 +1297,7 @@ def cmd_show(args):
         return 1
     first = turns[0][1][0]
     resume = "" if thread_id.startswith("memory:") else "  開き直す: codex resume %s" % thread_id
-    print("スレッド: %s（%s）%s" % (idx.display_name(thread_id, first["name"]), first["cwd"] or "-", resume))
+    print("スレッド: %s（%s）%s" % (idx.display_name(home, thread_id, first["name"]), first["cwd"] or "-", resume))
     for _, msgs in turns:
         for m in msgs:
             text = m["text"]
@@ -1147,6 +1316,11 @@ def cmd_show(args):
             rest = len(text) - (start + len(body))
             if rest > 0:
                 print("（残り %d 文字。続きは --offset %d）" % (rest, start + len(body)))
+    lines = coverage_lines(idx, home, report, note)
+    if lines:
+        print()
+        for line in lines:
+            print(line)
     idx.close()
     return 0
 
@@ -1164,6 +1338,11 @@ def cmd_stats(args):
     for kind, n in q("SELECT kind, COUNT(*) FROM messages WHERE codex_home=? GROUP BY kind", (home,)).fetchall():
         print("発言 %s: %d" % (KIND_LABEL.get(kind, kind), n))
     print("除外した会話: %d" % len(idx.forgotten(home)))
+    sem = Semantic()
+    words = "単語の BM25（SudachiPy）" if sem.tokenizer() else "trigram の BM25（SudachiPy が無い: %s）" % sem._tok_error
+    emb = "埋め込み（ruri-v3-130m、%d 本）" % q("SELECT COUNT(*) FROM vectors").fetchone()[0] if model_ready() else "埋め込みなし（モデルが無い）"
+    rr = "並べ直し（ruri-v3-reranker-310m）" if model_ready("rerank") else "並べ直しなし（モデルが無い）"
+    print("方式: %s + %s + %s" % (words, emb, rr))
     for line in coverage_lines(idx, home, report, note):
         print(line)
     if os.path.exists(idx.path):
@@ -1209,6 +1388,36 @@ def setup_candidates(python=None):
     return first + rest
 
 
+def _probe(cmd, code):
+    try:
+        return subprocess.run(cmd + ["-c", code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _version(cmd):
+    try:
+        return subprocess.run(cmd + ["-c", "import sys; print(sys.version_info[:2])"], capture_output=True,
+                              text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def venv_rebuild_reason(base, venv):
+    """専用の環境を作り直す理由。使い続けてよければ None。"""
+    if not os.path.exists(venv):
+        return "まだ無い"
+    have = _version([venv])
+    if not have:
+        return "今の環境が起動できない"
+    if have != _version(base):
+        return "今の環境は %s で、選んだ Python と違う" % have
+    if _probe(base, "import compression.zstd") and not _probe([venv], "import compression.zstd"):
+        return "今の環境は圧縮された記録を読めない"
+    return None
+
+
 def cmd_setup(args):
     """専用の環境（SudachiPy、sentence-transformers、torch）を作り、ruri-v3-130m を取ってくる。"""
     target = os.path.dirname(os.path.dirname(venv_python()))
@@ -1227,27 +1436,12 @@ def cmd_setup(args):
               file=sys.stderr)
         return 1
     print("専用の環境: %s（元の Python: %s）" % (target, " ".join(base)))
-    zstd_probe = ["-c", "import compression.zstd"]
-    base_zstd = subprocess.run(base + zstd_probe, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-    if not base_zstd:
+    if not _probe(base, "import compression.zstd"):
         print("注意: この Python（3.14 より前）では、圧縮された記録（.jsonl.zst）を読めない。"
               "3.14 を入れて setup --python で指定し直すと読める")
-    # 今の環境が、選んだ Python と同じバージョンで、起動できるときだけ使い続ける。違えば作り直す。
-    version = ["-c", "import sys; print(sys.version_info[:2])"]
-    want = subprocess.run(base + version, capture_output=True, text=True).stdout.strip()
-    exists = False
-    if os.path.exists(venv_python()):
-        try:
-            have = subprocess.run([venv_python()] + version, capture_output=True, text=True, timeout=60).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            have = ""
-        exists = have == want
-        if exists and base_zstd and subprocess.run([venv_python()] + zstd_probe, stdout=subprocess.DEVNULL,
-                                                   stderr=subprocess.DEVNULL).returncode != 0:
-            exists = False  # 同じバージョンでも、圧縮された記録を読めない環境なら作り直す
-        if not exists:
-            print("今の専用の環境（%s）を、選んだ Python で作り直す" % (have or "起動できない"))
-    if not exists:
+    reason = venv_rebuild_reason(base, venv_python())
+    if reason:
+        print("専用の環境を作る（%s）" % reason)
         if subprocess.run(base + ["-m", "venv", "--clear", target]).returncode != 0:
             return 1
     pip = [venv_python(), "-m", "pip", "install", "--disable-pip-version-check", "--only-binary", ":all:"]
@@ -1255,15 +1449,16 @@ def cmd_setup(args):
         print("ライブラリを入れられなかった。会社のプロキシや PyPI のミラーの設定を確かめる", file=sys.stderr)
         return 1
     # 取得は毎回流す（揃っているファイルは取り直さない。途中で止まった分はここで埋まる）
-    code = ("from huggingface_hub import snapshot_download; "
-            "snapshot_download(%r, revision=%r, local_dir=%r)" % (EMBED_MODEL, EMBED_REVISION, model_dir()))
-    if subprocess.run([venv_python(), "-c", code]).returncode != 0:
-        if model_ready():
-            print("モデルを取りに行けなかったが、%s に揃っているのでそれを使う" % model_dir())
-        else:
-            print("モデルを取ってこられなかった。別の PC で取ってきたフォルダを %s に置けば使える（README）" % model_dir(),
-                  file=sys.stderr)
-            return 1
+    for kind, repo, revision in (("embed", EMBED_MODEL, EMBED_REVISION), ("rerank", RERANK_MODEL, RERANK_REVISION)):
+        code = ("from huggingface_hub import snapshot_download; "
+                "snapshot_download(%r, revision=%r, local_dir=%r)" % (repo, revision, model_dir(kind)))
+        if subprocess.run([venv_python(), "-c", code]).returncode != 0:
+            if model_ready(kind):
+                print("%s を取りに行けなかったが、%s に揃っているのでそれを使う" % (repo, model_dir(kind)))
+            else:
+                print("%s を取ってこられなかった。別の PC で取ってきたフォルダを %s に置けば使える（README）"
+                      % (repo, model_dir(kind)), file=sys.stderr)
+                return 1
     print("できた。続けて index で、全部の会話の索引を作る（最初の一度だけ時間がかかる）")
     return 0
 
@@ -1292,6 +1487,14 @@ def cmd_rebuild(args):
     return 0
 
 
+def _date_type(value):
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("日付は YYYY-MM-DD の形で書く（例: 2026-09-01）: %s" % value)
+    return value
+
+
 def _date_arg(value, end=False):
     if not value:
         return None
@@ -1308,14 +1511,15 @@ def build_parser():
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("search", help="検索する")
     s.add_argument("terms", nargs="+", help="検索ワード（どれかを含めば候補になり、多く含むほど上に来る。\"...\" で語句。- で始まる言葉は、オプションを全部書いた後に -- を置き、その後ろに書く）")
-    s.add_argument("--since", help="この日から（YYYY-MM-DD、ローカルの日付）")
-    s.add_argument("--until", help="この日まで（YYYY-MM-DD、その日を含む）")
+    s.add_argument("--since", type=_date_type, help="この日から（YYYY-MM-DD、ローカルの日付）")
+    s.add_argument("--until", type=_date_type, help="この日まで（YYYY-MM-DD、その日を含む）")
     s.add_argument("--cwd", help="作業フォルダで絞る（下の階層も含む）。here で今のフォルダ")
     s.add_argument("--all-kinds", action="store_true", help="途中の回答も検索する")
     s.add_argument("--include-agents", action="store_true", help="子のエージェントの会話も検索する")
     s.add_argument("--question", help="持ち主が言った問いの文。埋め込みの検索に検索ワードと一緒に渡す")
     s.add_argument("--limit", type=int, default=5)
     s.add_argument("--budget", type=float, default=DEFAULT_EMBED_BUDGET, help="検索の前に埋め込みを足す時間の上限（秒）")
+    s.add_argument("--no-rerank", action="store_true", help="上位を並べ直さない（速いが、似た会話の見分けが落ちる）")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_search)
     sh = sub.add_parser("show", help="参照の発言と前後を表示する")
