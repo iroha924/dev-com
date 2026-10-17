@@ -2,7 +2,7 @@
 kind: tasks
 plan: 18-session-report.plan.md
 branch: feat/session-report
-base: main
+base: b324e62
 ---
 
 # Codex の 1 つの会話を JSON にまとめ、決まったテンプレートの単体 HTML で振り返れる skill「session-report」を足す のタスク
@@ -309,6 +309,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - 結果: `python3 evals/session-report/compare.py --dir <フォルダ>` → 流していない。Codex に追記を書かせて比べる実行は利用枠を使うので、持ち主に規模を聞いてから
 
 ## 記録
+
+- 2026-10-18 / 全体 / hirata-codex は PR を作らず main へ直接 push するので、途中で push するたびに main が進み、done の検査（base..HEAD を見る）が先に push したタスクのコミットを見られなくなった / base を main から、作業を始めたコミット b324e62 に変えた（前: main、後: b324e62）。frontmatter は「進め方」で書き換えてよい欄に入っていないが、検査の起点を作業の始まりに戻すためだけの変更
 
 - 2026-10-18 / T11 / 依頼は依頼した持ち主の発言（at）で対応を付け、条件と決定は文の 2 文字ずつの重なり（0.3 以上）で対応を付ける。意味の同じさではないので、数は目安として、取りこぼしと出たものは中身を読んで確かめると compare.py に書いた
 
