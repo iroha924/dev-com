@@ -1241,11 +1241,11 @@ def split_parts(entries, limit=INPUT_LIMIT):
     """発言・操作の切れ目で、1 つが limit 文字を超えないように分ける（1 件で超えるものはそのまま 1 つ）。"""
     parts, cur, size = [], [], 0
     for text, owner in entries:
-        if cur and size + len(text) > limit:
+        if cur and size + 1 + len(text) > limit:  # 1 は、つなぐときの改行
             parts.append(cur)
             cur, size = [], 0
+        size += len(text) + (1 if cur else 0)
         cur.append(text)
-        size += len(text)
     if cur:
         parts.append(cur)
     return parts or [[]]
@@ -1263,7 +1263,7 @@ def pending_items(annotations):
             rows.append("- %s（%s）: %s" % (q.get("id"), q.get("status"), q.get("text")))
     out, size = [], 0
     for n, row in enumerate(rows):
-        row = ss.redact(row[:300])  # 追記は手でも直せるので、Codex に渡す前に伏せ字をかける
+        row = _head(ss.redact(row), 300)  # 追記は手でも直せるので、Codex に渡す前に伏せ字をかける（切るのは後）
         if size + len(row) > PENDING_LIMIT:
             out.append("- ほか %d 件（annotations.json を読む）" % (len(rows) - n))
             break

@@ -764,6 +764,11 @@ class InputTest(_ReportBase):
         self.assertEqual([[e.split("\n")[0] for e in p] for p in parts],
                          [["### [u1] 持ち主", "- op"], ["### [a1] Codex"], ["### [u2] 持ち主"], ["### [a2] Codex"]])
 
+    def test_parts_count_the_joining_newlines(self):
+        entries = [("- op\n", False)] * 100
+        for p in sr.split_parts(entries, limit=60):
+            self.assertLessEqual(len("\n".join(p)), 60)
+
     def test_parts_keep_the_limit_without_owner_messages(self):
         entries = [("### [u1] 持ち主\n" + "a" * 10, True)] + [("- op %d\n" % n + "x" * 30, False) for n in range(10)]
         parts = sr.split_parts(entries, limit=100)
@@ -792,6 +797,9 @@ class InputTest(_ReportBase):
         tok = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
         self.assertNotIn(tok, "\n".join(sr.pending_items({"requests": [
             {"id": "R1", "text": "使う " + tok, "lifecycle": "有効", "criteria": []}]})))
+        # 長い行の切れ目をまたぐトークンも伏せる
+        self.assertNotIn(tok[:12], "\n".join(sr.pending_items({"requests": [
+            {"id": "R1", "text": "x" * 270 + " " + tok, "lifecycle": "有効", "criteria": []}]})))
         r = Rollout(T1).turn("t1")
         r.user("u1", "a" * 50000).agent("a1", "b" * 50000).user("u2", "c" * 50000).end("x")
         self.write(T1, r.text())
