@@ -55,23 +55,28 @@ def _match(gold_items, cand_items, key=lambda x: x["text"]):
 def compare(gold, cand):
     result = {"requests": 0, "requests_missed": [], "criteria": 0, "criteria_missed": [], "decisions": 0, "decisions_missed": [],
               "done_misjudged": []}
-    cand_by_at = {}
+    cand_by_at, gold_by_at = {}, {}
     for r in cand.get("requests") or []:
         cand_by_at.setdefault(r.get("at"), []).append(r)
-    for g in gold.get("requests") or []:
-        if g.get("lifecycle") == "取り下げ":
-            continue
+    live = [g for g in gold.get("requests") or [] if g.get("lifecycle") != "取り下げ"]
+    for g in live:
+        gold_by_at.setdefault(g["at"], []).append(g)
+    pairs = {}
+    for at, golds in gold_by_at.items():  # 同じ発言の依頼どうしは 1 対 1 で対応を付ける（追記の 1 つを 2 度使わない）
+        candidates = cand_by_at.get(at, [])
+        m = _match(golds, candidates)
+        if len(golds) == 1 and not m and len(candidates) == 1:
+            m = {0: 0}  # 同じ発言の依頼が 1 つずつなら、文が離れていても同じ依頼とみなす
+        for gi, ci in m.items():
+            pairs[id(golds[gi])] = candidates[ci]
+    for g in live:
         result["requests"] += 1
         result["criteria"] += len(g["criteria"])
-        candidates = cand_by_at.get(g["at"], [])
-        pick = _match([g], candidates)
-        if not pick and candidates:
-            pick = {0: 0}  # 同じ発言の依頼が 1 つなら、文が離れていても同じ依頼とみなす
-        if not pick:
+        c = pairs.get(id(g))
+        if c is None:
             result["requests_missed"].append(g["id"])
-            result["criteria_missed"] += ["%s: %s" % (g["id"], c["text"]) for c in g["criteria"]]
+            result["criteria_missed"] += ["%s: %s" % (g["id"], x["text"]) for x in g["criteria"]]
             continue
-        c = candidates[pick[0]]
         if sr.request_status(c) == "できた" and sr.request_status(g) != "できた":
             result["done_misjudged"].append("%s（正解: %s）" % (g["id"], sr.request_status(g)))
         crit = _match(g["criteria"], c.get("criteria") or [])

@@ -1125,6 +1125,42 @@ class StaleOverrideShareTest(_ReportBase):
         self.assertEqual(sr.read_json(os.path.join(out, "overrides.json")), {})
 
 
+class FinalReviewTest(_ReportBase):
+    TOK = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
+
+    def test_annotation_and_override_text_is_redacted(self):
+        out = self.make()
+        report = sr.read_json(os.path.join(out, "report.json"))
+        ann = good_annotations(report)
+        ann["summary"]["text"] = "使ったのは " + self.TOK
+        ov = {"R2": {"status": "未確認", "reason": "token " + self.TOK, "by": "持ち主", "original": "できた", "target": "PR を作る"}}
+        for build in (sr.build_view, sr.build_share_view):
+            with self.subTest(build=build.__name__):
+                self.assertNotIn(self.TOK, sr.render_html(build(report, ann, ov)))
+
+    def test_command_arguments_are_redacted_as_a_whole(self):
+        o = sr.operation(dict(cmd("x", 0), command=["python", "login.py", "--password", "alpha reviewphrase omega"]),
+                         "2026-10-14T01:20:00.000Z", "t1")
+        self.assertNotIn("reviewphrase", json.dumps(o, ensure_ascii=False))
+        self.assertIn("login.py", o["target"])
+
+    def test_started_but_not_completed_operation_is_kept(self):
+        r = Rollout(T1).turn("t1").user("u1", "流して")
+        r.add("event_msg", {"type": "item_started", "turn_id": "t1", "item": {"type": "CommandExecution", "id": "c1",
+              "command": ["/bin/zsh", "-lc", "python long.py"], "status": "inProgress"}})
+        r.end(aborted=True)
+        self.write(T1, r.text())
+        ops = self.extract(T1)["operations"]
+        self.assertEqual([(o["id"], o["status"], o["target"]) for o in ops], [("c1", "incomplete", "python long.py")])
+        # 終わりの記録が来たら、そちらを使う
+        r = Rollout(T2).turn("t1").user("u1", "流して")
+        r.add("event_msg", {"type": "item_started", "turn_id": "t1", "item": {"type": "CommandExecution", "id": "c1",
+              "command": ["/bin/zsh", "-lc", "python long.py"], "status": "inProgress"}})
+        r.item(cmd("python long.py", 0, oid="c1")).end("x")
+        self.write(T2, r.text())
+        self.assertEqual([o["status"] for o in self.extract(T2)["operations"]], ["ok"])
+
+
 class ShareTest(_Base):
     def test_share_html_leaves_out_details(self):
         r = Rollout(T1, cwd="C:\\work\\CANARYCWD\\ci-pipelines").turn("t1")
@@ -1243,6 +1279,14 @@ class CompareTest(unittest.TestCase):
         r = compare.compare(gold, cand)
         self.assertEqual((r["requests_missed"], len(r["criteria_missed"])), (["R1"], 2))
         self.assertIn("依頼 1 のうち取りこぼし 1・条件 2 のうち 2", compare.summary_line("x", r))
+
+    def test_one_candidate_is_matched_to_one_request(self):
+        crit = [{"text": "テストが通る", "origin": "持ち主", "status": "できた", "basis": "", "evidence": []}]
+        req = lambda rid, text: {"id": rid, "text": text, "at": "u1", "lifecycle": "有効", "criteria": crit, "evidence": []}
+        gold = {"requests": [req("R1", "Windows 対応"), req("R2", "Linux 対応")], "decisions": []}
+        cand = {"requests": [req("R1", "Windows 対応")], "decisions": []}
+        r = compare.compare(gold, cand)
+        self.assertEqual((r["requests_missed"], r["criteria_missed"]), (["R2"], ["R2: テストが通る"]))
 
     def test_withdrawn_requests_are_not_counted(self):
         gold = self.gold("condition_change")

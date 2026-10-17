@@ -566,6 +566,17 @@ def _source_name(meta_source):
 ID_KEYS = {"id", "turn_id", "forked_from_id", "sha256", "operations"}
 
 
+def _redact_except(obj, keys, key=None):
+    """keys の欄の文字列を除いて伏せ字をかける。dict のキー（発言の ID など）はそのまま。"""
+    if isinstance(obj, str):
+        return obj if key in keys else ss.redact(obj)
+    if isinstance(obj, list):
+        return [_redact_except(v, keys, key) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _redact_except(v, keys, k) for k, v in obj.items()}
+    return obj
+
+
 def redact_tree(obj, key=None):
     """report の文字列（dict のキーも）に伏せ字をかける。ID_KEYS の欄の文字列（と、その list の中の文字列）は除く。"""
     if isinstance(obj, str):
@@ -722,6 +733,20 @@ def command_script(command):
             if not command[i].startswith("-") and not command[i].startswith("/"):
                 break
     return " ".join(command), "posix"
+
+
+def _redacted_words(words):
+    """引数の並びに、並びのまま（JSON の配列の形で）伏せ字をかけてから、見せる 1 行にする。
+
+    先に空白でつなぐと、空白を含む値（--password "a b c"）の後ろの語が伏せ字から漏れる。
+    """
+    try:
+        red = json.loads(ss.redact(json.dumps(words, ensure_ascii=False)))
+        if not isinstance(red, list):
+            raise ValueError
+    except ValueError:
+        return "[REDACTED]"  # 伏せ字で JSON の形が崩れたら、並びごと出さない
+    return " ".join('"%s"' % w if isinstance(w, str) and (" " in w or not w) else str(w) for w in red)
 
 
 def _search_no_match(script, shell):
@@ -981,7 +1006,11 @@ def operation(it, ts, turn_id):
     if typ == "CommandExecution":
         script, shell = command_script(it.get("command"))
         code = it.get("exit_code") if isinstance(it.get("exit_code"), int) and not isinstance(it.get("exit_code"), bool) else None
-        op.update(route="command", target=_short(script), exit_code=code,
+        cmd_value = it.get("command")
+        shown = script
+        if isinstance(cmd_value, list) and script == " ".join(cmd_value):
+            shown = _redacted_words(cmd_value)  # シェルで包んでいない引数の並びは、つなぐ前に並びのまま伏せ字をかける
+        op.update(route="command", target=_short(shown), exit_code=code,
                   duration_ms=_duration_ms(it.get("duration")))
         if st == "declined":
             op["status"] = "declined"
@@ -1072,7 +1101,7 @@ def collect_operations(data):
         if et in ("exec_command_end", "patch_apply_end", "mcp_tool_call_end", "web_search_end"):
             legacy[et] += 1  # 古い形式の操作。今は取り出さず、coverage に数える
             continue
-        if et != "item_completed" or not isinstance(payload.get("item"), dict):
+        if et not in ("item_completed", "item_started") or not isinstance(payload.get("item"), dict):
             continue
         it = dict(payload["item"])
         it["_started_at_ms"] = payload.get("started_at_ms")
@@ -1081,6 +1110,8 @@ def collect_operations(data):
         if op is None:
             continue
         key = op["id"] or "L%d" % line_no
+        if et == "item_started" and key in ops:
+            continue  # 始まりの記録は、終わりの記録が無いときだけ使う（状態は incomplete）
         op["id"] = key
         op["seq"] = ops[key]["seq"] if key in ops else line_no  # 同じ ID の記録がもう一度来ても、最初の位置に置く
         if key not in ops:
@@ -1692,8 +1723,16 @@ def _coverage_notes(report):
     return notes
 
 
+# 追記と訂正のうち、ID を持つ欄（伏せ字をかけない。ID に秘密は入らず、かけると対応が崩れる）
+ANN_ID_KEYS = ID_KEYS | {"at", "ref", "answer", "supersedes", "failed", "resolved_by", "from", "to", "source_digest",
+                         "format_version", "original", "status", "lifecycle", "origin", "kind", "by"}
+
+
 def build_view(report, ann, overrides, stale=False):
     """テンプレートに渡すデータ。表示に要る値（時刻・状態・件数・位置）は全部ここで決める。"""
+    # Codex が書いた追記と、持ち主の訂正の文にも伏せ字をかける（手で直すこともできるので、入口で信じない）
+    ann = _redact_except(ann, ANN_ID_KEYS)
+    overrides = _redact_except(overrides, ANN_ID_KEYS)
     off = report.get("tz_offset_minutes", 0)
     hm = lambda ts: (_local_dt(ts, off) or datetime.datetime(1, 1, 1)).strftime("%H:%M") if ts else "--:--"
     s = report["session"]

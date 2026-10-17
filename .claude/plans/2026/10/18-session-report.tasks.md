@@ -318,7 +318,29 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - 結果: `python3 -m unittest tests.test_session_report -k Compare` → 3 件 OK（正解どうしは 0 件、決定の取りこぼし・「できた」の誤判定・条件の取りこぼし・依頼の取りこぼしを手で作った追記で数える、取り下げは数えない）。`python3 -m unittest discover -s tests` → 390 件 OK（skip 24）
   - 結果: `python3 evals/session-report/compare.py --dir <フォルダ>` → 流していない。Codex に追記を書かせて比べる実行は利用枠を使うので、持ち主に規模を聞いてから
 
+- [x] T29: 追記と訂正の文、引数の並び、終わりの記録の無い操作を直す（全体のレビューの指摘）
+  - 種別: 修正
+  - 計画: S3, S7
+  - 依存: T28（直す対象の全部の実装が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k FinalReview` → 4 か所 FAIL（追記の要約と訂正の理由のトークンが手元用・共有用に出る、空白を含むパスワードの後半が漏れる、始まりだけの操作が消える）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 追記と訂正の文に伏せ字をかけ、引数を並びのまま伏せ、終わりの記録の無い操作を残す (T29, T30)`
+  - 結果: red を直す前のコードで実測 → 4 か所 FAIL。直した後 `python3 -m unittest discover -s tests` → 395 件 OK（skip 24）、`python3 evals/session-report/fixtures.py render --twice` → 12 本とも同じバイト列
+
+- [x] T30: 比べる道具で、同じ発言の依頼を 1 対 1 で対応させる（全体のレビューの指摘）
+  - 種別: 修正
+  - 計画: S10
+  - 依存: T11（直す対象の比べる道具が要る）
+  - 変更: `evals/session-report/compare.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Compare` → FAIL（同じ発言の依頼 2 つに追記の 1 つを両方対応させ、取りこぼしが 0 件）
+  - 完了条件: `python3 -m unittest tests.test_session_report -k Compare` → OK
+  - コミット: `fix(session-report): 追記と訂正の文に伏せ字をかけ、引数を並びのまま伏せ、終わりの記録の無い操作を残す (T29, T30)`
+  - 結果: red を直す前のコードで実測 → FAIL。直した後 `python3 -m unittest tests.test_session_report -k Compare` → OK
+
 ## 記録
+
+- 2026-10-18 / T29・T30 / 全体のレビュー（A7、b324e62..cd9e0a5、high）の 4 件（F1 追記と訂正の文に伏せ字が無い P1、F2 引数をつないでから伏せ字 P1、F3 終わりの記録の無い操作が消える P2、F4 比べる道具の 1 対 1 P2）を再現で確かめて受理 / T29・T30 を足して直した。重い指摘が出たので、直した後にもう一度全体のレビューを新しい会話で頼む
 
 - 2026-10-18 / T28 / T27 の見直し（bda90d9、high）の 4 件（F1〜F3 見つけ方の広さが足りない P2、F4 効いていない古い訂正で止まる P2（T27 の直しで入った））を再現で確かめて受理。誤って拾っても書き直しが増えるだけなので、前が英数字でない「/」は全部拾うまで広げた（「依頼/質問」も拾い、Codex が「依頼・質問」と書き直す）/ T28 を足して直した。共有用の見直しの往復はここで閉じ、最後の全体のレビュー（A7）で見てもらう
 
