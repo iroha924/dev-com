@@ -1006,6 +1006,84 @@ class OverrideTest(_ReportBase):
         self.assertFalse(os.path.exists(os.path.join(out, "overrides.json")))
 
 
+class RenderTest(_ReportBase):
+    def render(self, mutate=None, overrides=None, *args):
+        out = self.make()
+        ann = good_annotations(sr.read_json(os.path.join(out, "report.json")))
+        if mutate:
+            mutate(ann)
+        self.write_ann(out, ann)
+        if overrides is not None:
+            with open(os.path.join(out, "overrides.json"), "w", encoding="utf-8") as f:
+                json.dump(overrides, f, ensure_ascii=False)
+        code, stdout, err = self.run_cli("render", "--dir", out, *args)
+        path = os.path.join(out, "report.html")
+        html = open(path, encoding="utf-8").read() if os.path.exists(path) else None
+        return code, stdout + err, html
+
+    def test_html_is_self_contained(self):
+        code, text, html = self.render()
+        self.assertEqual(code, 0, text)
+        self.assertIn("Content-Security-Policy", html)
+        self.assertIn("default-src 'none'", html)
+        self.assertNotRegex(html, r"(?i)(src|href)\s*=\s*[\"']?(https?:|//)")
+        self.assertNotRegex(html, r"(?i)url\(\s*[\"']?(https?:|//)")
+        self.assertNotRegex(html, r"(?i)@import|<link\b|<iframe\b|<img\b")
+        self.assertNotIn("__SESSION_REPORT_DATA__", html)
+        self.assertNotIn("innerHTML", html)  # 記録の文字列は文字のノードとして入れる
+
+    def test_record_text_is_escaped(self):
+        nasty = '</script><img src=x onerror="alert(1)">& \u2028'
+
+        def mutate(a):
+            a["summary"]["text"] = nasty
+        code, text, html = self.render(mutate)
+        self.assertEqual(code, 0, text)
+        data = html.split('<script type="application/json" id="data">', 1)[1].split("</script>", 1)[0]
+        self.assertNotIn("<", data)
+        self.assertNotIn(">", data)
+        self.assertNotIn("&", data)
+        self.assertNotIn("\u2028", data)
+        self.assertIn(nasty, json.loads(data)["summary"])
+        self.assertEqual(html.count("</script>"), 2)
+
+    def test_check_failure_writes_nothing(self):
+        def mutate(a):
+            a["lessons"][0]["evidence"][0]["ref"] = "c99"
+        code, text, html = self.render(mutate)
+        self.assertEqual(code, 1)
+        self.assertIn("check が通らないので HTML を書かない", text)
+        self.assertIsNone(html)
+
+    def test_stale_ok_and_overrides(self):
+        def stale(a):
+            a["source_digest"] = "0" * 64
+        code, text, html = self.render(stale)
+        self.assertEqual((code, html), (1, None))
+        code, text, html = self.render(stale, None, "--stale-ok")
+        self.assertEqual(code, 0, text)
+        view = json.loads(html.split('id="data">', 1)[1].split("</script>", 1)[0])
+        self.assertIn("render --stale-ok", view["notices"][0])
+        ov = {"R2": {"status": "未確認", "reason": "PR を見ていない", "by": "持ち主", "original": "できた", "target": "PR を作る"},
+              "R1.1": {"status": "できていない", "reason": "x", "by": "持ち主", "original": "できた", "target": "別の条件"}}
+        code, text, html = self.render(None, ov)
+        view = json.loads(html.split('id="data">', 1)[1].split("</script>", 1)[0])
+        r2 = next(r for r in view["requests"] if r["id"] == "R2")
+        self.assertEqual(r2["status"], {"status": "未確認", "original": "できた", "reason": "PR を見ていない", "overridden": True})
+        self.assertTrue(any("R1.1" in n for n in view["notices"]))
+
+    def test_view_contents(self):
+        code, text, html = self.render()
+        view = json.loads(html.split('id="data">', 1)[1].split("</script>", 1)[0])
+        self.assertEqual([t[0] for t in view["tabs"]], ["overview", "chat", "requests", "decisions", "ops", "issues"])
+        self.assertEqual(view["meta"]["span"], "2026-10-14 10:12 → 10:20")
+        self.assertEqual([c["kind"] for c in view["chat"]], ["me", "tool", "ai", "me", "ai"])
+        self.assertEqual(view["chat"][0]["attachments"], ["tab.png"])
+        self.assertEqual(view["ops"]["command_totals"], [["失敗", 1], ["該当なし", 1]])
+        self.assertEqual(view["requests"][0]["status"]["status"], "一部")
+        self.assertEqual([m[0] for m in view["flow"]["marks"]], ["依頼", "決定", "失敗"])
+
+
 class FixturesTest(unittest.TestCase):
     def test_gold_annotations_pass_check(self):
         # 作り物の会話 6 本の正解の追記が、会話とずれていない（evals/session-report/fixtures.py）
@@ -1013,6 +1091,12 @@ class FixturesTest(unittest.TestCase):
                            capture_output=True, encoding="utf-8", env=dict(os.environ, TZ="Asia/Tokyo"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(r.stdout.count("違反 0 件"), 6)
+
+    def test_same_record_gives_same_html(self):
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "evals", "session-report", "fixtures.py"), "render", "--twice"],
+                           capture_output=True, encoding="utf-8", env=dict(os.environ, TZ="Asia/Tokyo"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.count("同じバイト列: はい"), 6)
 
 
 class SearchModuleTest(unittest.TestCase):

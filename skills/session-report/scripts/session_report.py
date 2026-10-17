@@ -5,6 +5,7 @@
     python session_report.py input [<thread_id> | --dir DIR] [--part N]
     python session_report.py show-op <操作の ID> [<thread_id> | --dir DIR]
     python session_report.py check [<thread_id> | --dir DIR]
+    python session_report.py render [<thread_id> | --dir DIR] [--stale-ok]
     python session_report.py override <項目 ID> [<thread_id> | --dir DIR] (--status <状態> --reason <理由> | --clear)
 
 probe: 記録の形（行の種類、項目の種類とキー名、件数、有無）だけを数えて出す。本文・コマンド・出力・パス・引数・検索語・
@@ -1563,6 +1564,315 @@ def cmd_override(args):
     return 0
 
 
+# --- render: 決めたテンプレートの単体の HTML にする ---------------------------------------------------
+
+TEMPLATE_PATH = os.path.join(HERE, "template.html")
+DATA_MARK = "__SESSION_REPORT_DATA__"
+RENDERER_VERSION = "1"
+STATUS_TEXT = {"ok": "成功", "failed": "失敗", "no_match": "該当なし", "declined": "拒否", "incomplete": "不明", "unknown": "不明"}
+FILE_KIND = {"add": "追加", "update": "変更", "delete": "削除", "unknown": "変更"}
+COMMAND_ORDER = ("成功", "失敗→解消", "失敗", "該当なし", "拒否", "不明")
+
+
+def _local_dt(ts, offset):
+    if not isinstance(ts, str):
+        return None
+    try:
+        return datetime.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S") + datetime.timedelta(minutes=offset)
+    except ValueError:
+        return None
+
+
+def _span_text(start, end):
+    if not start or not end:
+        return None, None
+    tail = end.strftime("%H:%M") if start.date() == end.date() else end.strftime("%Y-%m-%d %H:%M")
+    mins = max(0, int((end - start).total_seconds() // 60))
+    length = ("%d 時間 %d 分" % (mins // 60, mins % 60)) if mins >= 60 else "%d 分" % mins
+    return "%s → %s" % (start.strftime("%Y-%m-%d %H:%M"), tail), length
+
+
+def _clip(text, n=40):
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def _flow(report, ann, view_requests, offset, resolved):
+    t0 = _local_dt(report["session"].get("started"), offset)
+    t1 = _local_dt(report["session"].get("ended"), offset)
+    if not t0 or not t1:
+        return None
+    total = max(1.0, (t1 - t0).total_seconds() / 60)
+    per_min = 12.0 if total <= 180 else max(2.0, 2160.0 / total)
+    pad = 28  # 0 分の目盛りが、左に残す行の名前に隠れないように
+    x = lambda dt: pad + int(round((dt - t0).total_seconds() / 60 * per_min)) if dt else pad
+    step = 15 if total <= 180 else 30 if total <= 360 else 60 if total <= 720 else 120
+    first = t0.replace(second=0, microsecond=0) + datetime.timedelta(minutes=(-t0.minute) % step)
+    if first < t0:
+        first += datetime.timedelta(minutes=step)
+    ticks, t = [], first
+    while t <= t1:
+        ticks.append({"x": x(t), "label": t.strftime("%H:%M")})
+        t += datetime.timedelta(minutes=step)
+    msg_ts = {m["id"]: m["ts"] for m in report["messages"]}
+    op_ts = {o["id"]: o["ts"] for o in report["operations"]}
+    bands = []
+    if ann["chapters"]:
+        starts = [(_local_dt(msg_ts.get(c["from"]), offset), c["title"]) for c in ann["chapters"]]
+        starts = [(s, title) for s, title in starts if s]
+        rows = []
+        for n, (s, title) in enumerate(starts):
+            e = starts[n + 1][0] if n + 1 < len(starts) else t1
+            rows.append({"x": x(s), "w": max(x(e) - x(s), 8), "label": _clip(title, 24), "tone": "ink"})
+        bands.append(["章", rows])
+    groups = []
+    for turn in report["turns"]:
+        key = "・".join(v for v in (turn.get("model"), turn.get("effort")) if v)
+        start = _local_dt(turn.get("started"), offset)
+        if not key or not start:
+            continue
+        if groups and groups[-1][0] == key:
+            continue
+        groups.append((key, start))
+    if groups:
+        tones, names, rows = ("ok", "warn", "accent", "neutral"), [], []
+        for n, (key, s) in enumerate(groups):
+            if key not in names:
+                names.append(key)
+            e = groups[n + 1][1] if n + 1 < len(groups) else t1
+            rows.append({"x": x(s), "w": max(x(e) - x(s), 8), "label": key, "tone": tones[names.index(key) % len(tones)]})
+        bands.append(["モデル", rows])
+    for _, rows in bands:  # 帯の名前は、次の帯が始まるところまで（最後は 400px まで）使ってよい
+        for n, b in enumerate(rows):
+            b["lw"] = max(b["w"] - 4, (rows[n + 1]["x"] - b["x"] - 12) if n + 1 < len(rows) else 400)
+
+    def lane(items):
+        last, out = [-10 ** 9, -10 ** 9], []
+        for dt, label, tone, until in sorted((i for i in items if i[0]), key=lambda i: i[0]):
+            px_ = x(dt)
+            row = 0 if px_ - last[0] >= 226 else (1 if px_ - last[1] >= 226 else 0)
+            last[row] = px_
+            w = max(x(until) - px_, 0) if until else 0
+            out.append({"x": px_, "row": row, "w": w, "time": dt.strftime("%H:%M"), "until": until.strftime("%H:%M") if until else None,
+                        "label": _clip(label), "tone": tone})
+        return out
+    marks = [
+        ["依頼", lane([(_local_dt(msg_ts.get(r["at"]), offset), r["text"], "ink", None) for r in ann["requests"]])],
+        ["決定", lane([(_local_dt(msg_ts.get(d["at"]), offset), "%s %s" % (d["id"], d["text"]), "accent", None) for d in ann["decisions"]])],
+        ["成果物", lane([(_local_dt(a.get("seen_at"), offset), "%s #%s" % (a["kind"], a["id"]), "ok", None) for a in report["artifacts"]])],
+        ["失敗", lane([(_local_dt(o["ts"], offset), _clip(o.get("target") or o["route"]), "bad",
+                       _local_dt(op_ts.get(resolved.get(o["id"])), offset)) for o in report["operations"] if o["status"] in ("failed", "declined")])],
+    ]
+    marks = [m for m in marks if m[1]]
+    return {"from": t0.strftime("%H:%M"), "to": t1.strftime("%H:%M"), "width": x(t1) + 240, "ticks": ticks, "bands": bands, "marks": marks}
+
+
+def _coverage_notes(report):
+    c = report["coverage"]
+    notes = []
+    if c.get("bad_json"):
+        notes.append("JSON として読めない行が %d 行あった（読み飛ばした）" % c["bad_json"])
+    if c.get("shape_errors"):
+        notes.append("形の分からない発言・要素が %d 件あった（載っていない発言があるかもしれない）" % c["shape_errors"])
+    if c.get("incomplete_tail"):
+        notes.append("記録の最後の行が書きかけだった（作った時点で会話が続いていた）")
+    if c.get("prefix_missing"):
+        notes.append("revert の前半の記録を読み切れなかった（会話の前半が欠けている）")
+    if c.get("unknown_items"):
+        notes.append("知らない種類の項目: " + "・".join("%s %d 件" % kv for kv in sorted(c["unknown_items"].items())))
+    if c.get("legacy_operations"):
+        notes.append("古い形式の操作は載せていない: " + "・".join("%s %d 件" % kv for kv in sorted(c["legacy_operations"].items())))
+    events = c.get("events") or {}
+    if events.get("SubAgentActivity") or events.get("CollabAgentToolCall"):
+        notes.append("子のエージェントによる調査があった（子の会話は載せていない）")
+    if events.get("ContextCompaction"):
+        notes.append("文脈の圧縮があった（%d 回）" % events["ContextCompaction"])
+    if c.get("other_files"):
+        notes.append("同じ会話の別の記録が %d 本ある（最後に書かれたものを使った）" % c["other_files"])
+    return notes
+
+
+def build_view(report, ann, overrides, stale=False):
+    """テンプレートに渡すデータ。表示に要る値（時刻・状態・件数・位置）は全部ここで決める。"""
+    off = report.get("tz_offset_minutes", 0)
+    hm = lambda ts: (_local_dt(ts, off) or datetime.datetime(1, 1, 1)).strftime("%H:%M") if ts else "--:--"
+    s = report["session"]
+    msgs = {m["id"]: m for m in report["messages"]}
+    ops = {o["id"]: o for o in report["operations"]}
+    eff = effective_statuses(ann, overrides)
+    resolved = {n["failed"]: n["resolved_by"] for n in ann["command_notes"] if n["resolved_by"]}
+    first_owner = next((m["text"] for m in report["messages"] if m["kind"] == "user" and m["text"].strip()), "")
+    span, length = _span_text(_local_dt(s.get("started"), off), _local_dt(s.get("ended"), off))
+    requests = []
+    for r in ann["requests"]:
+        crits = [{"text": c["text"], "origin": "持ち主の条件" if c["origin"] == "持ち主" else "Codex が補った条件", "basis": c["basis"],
+                  "status": eff["%s.%d" % (r["id"], n)]} for n, c in enumerate(r["criteria"], 1)]
+        bases = []
+        for c in r["criteria"]:
+            if c["basis"] and c["basis"] not in bases:
+                bases.append(c["basis"])
+        requests.append({"id": r["id"], "text": r["text"], "time": hm(msgs.get(r["at"], {}).get("ts")), "lifecycle": r["lifecycle"],
+                         "status": eff[r["id"]] if r["lifecycle"] != "取り下げ" else {"status": "取り下げ", "original": None,
+                                                                                    "reason": None, "overridden": False},
+                         "basis": "・".join(bases[:2]), "criteria": crits})
+    decisions = []
+    for d in ann["decisions"]:
+        ev = d["evidence"][0] if d["evidence"] else None
+        ref_ts = (msgs.get(ev["ref"]) or ops.get(ev["ref"]) or {}).get("ts") if ev else None
+        decisions.append({"id": d["id"], "text": d["text"], "time": hm(msgs.get(d["at"], {}).get("ts")), "by": d["by"], "why": d["why"],
+                          "alternatives": d["alternatives"], "quote": ev["quote"] if ev else None, "quote_time": hm(ref_ts) if ev else None})
+    questions = [{"id": q["id"], "text": q["text"], "time": hm(msgs.get(q["at"], {}).get("ts")), "status": eff[q["id"]],
+                  "answer_time": hm(msgs[q["answer"]]["ts"]) if q["answer"] in msgs else None, "note": q["note"]}
+                 for q in ann["questions"]]
+    tags = {}
+    for mid, values in ann["owner_messages"].items():
+        if any(v.startswith("R") for v in values):
+            tags[mid] = "依頼"
+        elif any(v.startswith("Q") for v in values):
+            tags[mid] = "質問"
+        else:
+            tags[mid] = next((v for v in values if v in OWNER_LABELS), None)
+    chapters = {c["from"]: c["title"] for c in ann["chapters"]}
+    chat, pending = [], []
+
+    def flush():
+        if pending:
+            counts = collections.Counter(ROUTE_LABEL.get(o["route"], o["route"]) for o in pending)
+            chat.append({"kind": "tool", "time": hm(pending[0]["ts"]), "text": "・".join("%s %d 件" % kv for kv in counts.items())})
+            del pending[:]
+    rows = sorted([(m.get("seq", 0), 0, m) for m in report["messages"]] + [(o.get("seq", 0), 1, o) for o in report["operations"]],
+                  key=lambda r: (r[0], r[1]))
+    for _, is_op, x in rows:
+        if is_op:
+            pending.append(x)
+            continue
+        flush()
+        if x["id"] in chapters:
+            chat.append({"kind": "chapter", "text": chapters[x["id"]]})
+        if x["kind"] == "user":
+            chat.append({"kind": "me", "time": hm(x["ts"]), "text": x["text"], "tag": tags.get(x["id"]),
+                         "attachments": [a["name"] for a in x.get("attachments", [])]})
+        else:
+            chat.append({"kind": "ai", "time": hm(x["ts"]), "text": x["text"], "label": "Codex" if x["kind"] == "final" else "Codex（途中）",
+                         "attachments": []})
+    flush()
+    files, order = {}, []
+    for m in report["messages"]:
+        for a in m.get("attachments", []):
+            key = ("添付", a["name"])
+            if key not in files:
+                order.append(key)
+            files[key] = {"kind": "添付", "path": a["name"] + "（本体なし）", "plus": "", "minus": "", "diff": None, "diff_cut": False}
+    for o in report["operations"]:
+        if o["route"] == "image":
+            key = ("画像", o.get("target"))
+            if key not in files:
+                order.append(key)
+            files[key] = {"kind": "画像を開いた", "path": (o.get("target") or "") + "（本体なし）", "plus": "", "minus": "", "diff": None,
+                          "diff_cut": False}
+        for f in o.get("files", []):
+            key = ("ファイル", f["path"])
+            cur = files.get(key)
+            if cur is None:
+                order.append(key)
+                cur = files[key] = {"kind": FILE_KIND[f["kind"]], "path": f["path"], "added": 0, "removed": 0, "diff": None,
+                                    "diff_cut": False}
+            if not (cur["kind"] == "追加" and f["kind"] == "update"):  # 足してから直したファイルは「追加」のまま
+                cur["kind"] = FILE_KIND[f["kind"]]
+            cur["added"] += f["added"] or 0
+            cur["removed"] += f["removed"] or 0
+            cur["diff"], cur["diff_cut"] = f.get("diff"), f.get("diff_cut", False)
+    file_rows = []
+    for key in order:
+        f = dict(files[key])
+        if "added" in f:
+            added, removed = f.pop("added"), f.pop("removed")
+            f["plus"], f["minus"] = ("+%d" % added if added else ""), ("−%d" % removed if removed else "")
+        file_rows.append(f)
+    commands = []
+    for o in report["operations"]:
+        if o["route"] != "command":
+            continue
+        label = STATUS_TEXT.get(o["status"], "不明")
+        if o["status"] == "failed" and o["id"] in resolved:
+            label = "失敗→解消"
+        took = "%.1fs" % (o["duration_ms"] / 1000) if isinstance(o.get("duration_ms"), int) else ""
+        commands.append({"time": hm(o["ts"]), "status": label, "text": o.get("target") or "", "took": took,
+                         "output": o.get("output"), "output_cut": o.get("output_cut", False), "output_chars": o.get("output_chars", 0)})
+    totals = collections.Counter(c["status"] for c in commands)
+    external = [{"time": hm(o["ts"]), "route": o.get("tool") or ROUTE_LABEL.get(o["route"], o["route"]), "purpose": o.get("purpose") or "不明",
+                 "text": o.get("target") or ""} for o in report["operations"] if o.get("external")]
+    artifacts = [{"kind": a["kind"], "label": "#%s %s" % (a["id"], a["title"] or ""),
+                  "status": "%s（%s 時点）" % (a["status"], hm(a["seen_at"])) if a.get("status") else "%s 時点" % hm(a["seen_at"])}
+                 for a in report["artifacts"]]
+    notices = []
+    if stale:
+        notices.append("この追記は、記録が変わる前に書いたもの（render --stale-ok）。新しい発言や操作が反映されていない。")
+    for item_id in stale_overrides(ann, overrides):
+        notices.append("持ち主の訂正 %s は、追記を作り直して対象が変わったので使っていない（override で直し直すか --clear で消す）。" % item_id)
+    issues = [{"kind": i["kind"], "text": i["text"]} for i in ann["issues"]]
+    view = {
+        "renderer_version": RENDERER_VERSION, "share": False,
+        "meta": {"title": s.get("title") or _clip(first_owner, 60) or s["id"], "span": span, "length": length,
+                 "cwd": s.get("cwd"), "branch": s.get("branch")},
+        "notices": notices, "summary": ann["summary"]["text"], "requests": requests, "questions": questions,
+        "decisions": decisions, "lessons": [l["text"] for l in ann["lessons"]], "issues": issues,
+        "flow": _flow(report, ann, requests, off, resolved), "chat": chat, "coverage": _coverage_notes(report),
+        "counts": {"messages": len(report["messages"])},
+        "ops": {"artifacts": artifacts, "external": external, "files": file_rows, "commands": commands,
+                "command_total": len(commands), "command_totals": [[k, totals[k]] for k in COMMAND_ORDER if totals.get(k)]},
+    }
+    view["tabs"] = [["overview", "概要", None], ["chat", "会話", len(report["messages"])],
+                    ["requests", "依頼と成果", len(requests) + len(questions)], ["decisions", "判断と学び", len(decisions) + len(view["lessons"])],
+                    ["ops", "成果物と操作", len(artifacts) + len(external) + len(file_rows) + len(commands)],
+                    ["issues", "課題と次の一手", len(issues)]]
+    return view
+
+
+def embed_json(view):
+    """<script type="application/json"> に入れる JSON。HTML として読まれうる文字を \\u の形に逃がす。"""
+    text = json.dumps(view, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    for ch, esc in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"), (" ", "\\u2028"), (" ", "\\u2029")):
+        text = text.replace(ch, esc)
+    return text
+
+
+def render_html(view):
+    with open(TEMPLATE_PATH, encoding="utf-8") as f:
+        template = f.read()
+    if template.count(DATA_MARK) != 1:
+        raise SystemExit("template.html の %s が 1 つではない" % DATA_MARK)
+    return template.replace(DATA_MARK, embed_json(view))
+
+
+def cmd_render(args):
+    out = resolve_dir(args)
+    report = read_json(os.path.join(out, "report.json"))
+    ann_path = os.path.join(out, "annotations.json")
+    if not os.path.isfile(ann_path):
+        print("annotations.json が無い。先に追記を書いて check を通す: %s" % ann_path, file=sys.stderr)
+        return 1
+    ann = read_json(ann_path)
+    errors = check_annotations(ann, report)
+    stale = False
+    if errors and args.stale_ok and all(e.startswith("source_digest:") for e in errors):
+        stale = True
+        errors = []
+    if errors:
+        for e in errors:
+            print(e)
+        print("check が通らないので HTML を書かない（違反 %d 件）" % len(errors), file=sys.stderr)
+        return 1
+    ov_path = os.path.join(out, "overrides.json")
+    overrides = read_json(ov_path) if os.path.isfile(ov_path) else {}
+    view = build_view(report, ann, overrides, stale=stale)
+    path = os.path.join(out, "report.html")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(render_html(view))
+    print("書いた: %s" % path)
+    return 0
+
+
 # --- 入口 -----------------------------------------------------------------------------------------
 
 
@@ -1602,6 +1912,11 @@ def build_parser():
         if name == "input":
             sp.add_argument("--part", type=int, default=1, help="何番目の範囲か（1 から）")
         sp.set_defaults(func=func)
+    rd = sub.add_parser("render", help="check を通した追記と訂正を合わせて report.html を書く")
+    rd.add_argument("thread_id", nargs="?", type=_thread_id)
+    rd.add_argument("--dir", help="report.json のあるフォルダ（既定は会話の ID から決める）")
+    rd.add_argument("--stale-ok", action="store_true", help="記録が変わって digest が違っても、古い追記のまま書く（HTML にそう出す）")
+    rd.set_defaults(func=cmd_render)
     ov = sub.add_parser("override", help="依頼・条件・質問の状態を持ち主が直す（overrides.json に保存する）")
     ov.add_argument("item_id", help="R1（依頼）、R1.2（R1 の 2 つ目の条件）、Q1（質問）")
     ov.add_argument("thread_id", nargs="?", type=_thread_id)

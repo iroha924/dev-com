@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'none'">
+<!-- session-report のテンプレート。session_report.py render が、下の id="data" の中の印を会話の JSON に置き換える。
+     外への読み込み（CDN・フォント・画像）は使わない。デザインは 2026-10-18 に決めた版 3（hir4ta knowledge の色、横線の区切り、角丸なし）。 -->
+<title>Session Report</title>
+<style>
+/* 色は hir4ta knowledge のまま。横線だけで区切り、角丸・影・囲みの枠を使わない（naito-otsuka.com の線の作法）。
+   レイアウト: ヘッダーの線 → 題名 → 切り替えの帯 → 全幅の線の上にラベルを乗せたセクションの連なり。 */
+:root {
+  --bg: #ffffff;
+  --ink: #303030;
+  --sub: #616161;
+  --hair: #e3e3e3;
+  --rule: color-mix(in srgb, var(--ink) 38%, transparent);
+  --cream: #f9f5eb;
+  --display: #d6d3cb;
+  --accent: #9c4a22;
+  --ok: #5f6b4c;
+  --warn: #7f520c;
+  --bad: #a2383a;
+  --decor: #b5b5b5;
+  --chip-ink: #ffffff;
+  --font-ja: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Yu Gothic Medium', 'Yu Gothic', Meiryo, system-ui, sans-serif;
+  --font-en: 'Helvetica Neue', 'Segoe UI', Arial, 'Hiragino Kaku Gothic ProN', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --container: 70rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a1a1a; --ink: #f1f1f1; --sub: #b5b5b5; --hair: #303030; --cream: #232323; --display: #3a3a3a;
+    --accent: #cb8159; --ok: #9db07f; --warn: #e2ab55; --bad: #d1706f; --decor: #8a8a8a; --chip-ink: #1a1a1a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1a1a1a; --ink: #f1f1f1; --sub: #b5b5b5; --hair: #303030; --cream: #232323; --display: #3a3a3a;
+  --accent: #cb8159; --ok: #9db07f; --warn: #e2ab55; --bad: #d1706f; --decor: #8a8a8a; --chip-ink: #1a1a1a; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--font-ja); font-size: 14px; line-height: 1.7; letter-spacing: 0.02em; font-feature-settings: 'palt' 1;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
+button, input { font: inherit; color: inherit; letter-spacing: inherit; }
+button:not(:disabled), summary { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tnum { font-variant-numeric: tabular-nums; }
+.en { font-family: var(--font-en); letter-spacing: 0.06em; }
+.mono { font-family: var(--font-mono); letter-spacing: 0; }
+.sub { color: var(--sub); }
+.small { font-size: 12px; }
+.wrap {
+  margin: 0 auto; width: 100%; max-width: var(--container);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* ヘッダー */
+.header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; border-bottom: 1px solid var(--ink); }
+.brand { font-size: 13px; font-weight: 600; letter-spacing: 0.14em; }
+.icon-btn { display: inline-grid; place-items: center; width: 36px; height: 36px; border: 0; background: none; color: var(--sub); }
+.icon-btn:hover { color: var(--ink); }
+.icon-btn svg { width: 16px; height: 16px; }
+
+/* 題名 */
+.hero { display: grid; gap: 14px; padding-block: 40px 28px; }
+.eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-size: 12px; color: var(--sub); }
+.eyebrow > * + *::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--rule); margin: 0 12px; vertical-align: -1px; }
+h1 { margin: 0; font-size: clamp(22px, 3.4vw, 34px); line-height: 1.45; font-weight: 600; letter-spacing: 0.04em; text-wrap: balance; }
+.summary { margin: 4px 0 0; max-width: 46em; font-size: 16px; line-height: 1.95; }
+
+/* 切り替えの帯: 選んだものだけ濃い四角。上下に線 */
+.tabbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.tabbar .wrap { border-bottom: 1px solid var(--hair); }
+.chips { display: flex; gap: 2px 4px; overflow-x: auto; scrollbar-width: none; padding-block: 10px; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border: 0; background: none; font-size: 13px; color: var(--sub); white-space: nowrap; }
+.chip:hover { color: var(--ink); }
+.chip[aria-selected="true"] { background: var(--ink); color: var(--chip-ink); }
+.chip .n { font-family: var(--font-en); font-size: 11px; opacity: 0.75; }
+.subchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.subchips .chip { padding: 3px 10px; font-size: 12px; }
+
+.page { display: grid; gap: 64px; padding-block: 48px 120px; }
+.sec { display: grid; gap: 4px; min-width: 0; }
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 12px 0 16px; border-top: 1px solid var(--ink); }
+.label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.08em; }
+.label::before { content: ""; width: 6px; height: 6px; background: var(--accent); flex: none; }
+.label .en { font-size: 11px; font-weight: 400; color: var(--sub); margin-left: 6px; }
+.meta { display: inline-flex; align-items: center; gap: 10px; font-size: 11px; color: var(--sub); white-space: nowrap; }
+.meta::before { content: ""; width: 36px; border-top: 1px solid var(--sub); }
+
+.sq { width: 6px; height: 6px; flex: none; display: inline-block; background: var(--decor); }
+.ok { --c: var(--ok); } .warn { --c: var(--warn); } .bad { --c: var(--bad); } .accent { --c: var(--accent); } .neutral { --c: var(--decor); } .ink { --c: var(--ink); }
+.sq.ok, .sq.warn, .sq.bad, .sq.accent, .sq.neutral, .sq.ink { background: var(--c); }
+.state { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--c, var(--sub)); }
+.state.neutral { color: var(--sub); }
+.state.ink { color: var(--ink); }
+
+/* 行: 1px の線で区切る。上に小さく時刻と分類、下に本文 */
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows { display: grid; gap: 26px; padding-top: 6px; }
+.rows > li { display: grid; gap: 4px; }
+.rows.lined { gap: 0; padding-top: 0; }
+.rows.lined > li { padding: 10px 0; border-bottom: 1px solid var(--hair); }
+.rows.lined > li:last-child { border-bottom: 0; }
+.row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; font-size: 12px; color: var(--sub); }
+.row-meta > * + *::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--rule); margin: 0 12px; vertical-align: -1px; }
+.ttl { margin: 0; font-size: 15px; line-height: 1.65; letter-spacing: 0.03em; }
+.ttl.big { font-size: 17px; font-weight: 600; }
+.note { margin: 0; color: var(--sub); }
+
+/* 目次の形: 項目 ───── 状態 */
+.criteria { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.criteria li { display: grid; grid-template-columns: 6.5rem 1fr; align-items: baseline; gap: 2px 14px; font-size: 13px; }
+.criteria .basis { grid-column: 2; font-size: 12px; color: var(--sub); }
+
+.quote { position: relative; margin: 8px 0 0; padding-left: 30px; font-size: 14px; }
+.quote::before { content: "\201C"; position: absolute; left: 0; top: -14px; font-family: var(--font-en); font-size: 46px; line-height: 1; color: var(--display); }
+.alt { margin: 0; font-size: 13px; color: var(--sub); }
+.alt b { font-weight: 400; color: var(--ink); margin-right: 8px; }
+.did { font-family: var(--font-en); font-weight: 600; color: var(--accent); }
+
+/* 流れ: 1 分 = 12px。行の名前は左に残し、横に流す */
+.flow { overflow-x: auto; background: var(--cream); padding: 14px 0 6px; }
+.flow-in { position: relative; }
+.lane { display: flex; }
+.lane-name { position: sticky; left: 0; z-index: 2; flex: none; width: 96px; display: flex; align-items: center; padding-left: 16px; font-size: 12px; color: var(--sub); background: var(--cream); }
+.track { position: relative; flex: none; }
+.gridline { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid color-mix(in srgb, var(--ink) 7%, transparent); }
+.band { position: absolute; top: 50%; display: flex; flex-direction: column; gap: 4px; }
+.band .bar { height: 2px; background: var(--c, var(--ink)); }
+.band .t { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c, var(--ink)); transform: translateY(-26px); position: absolute; left: 0; }
+.mark { position: absolute; display: flex; gap: 6px; align-items: flex-start; max-width: 214px; }
+.mark .sq { margin-top: 6px; width: 7px; height: 7px; }
+.mark.span-on { flex-direction: column; gap: 2px; }
+.mark .span { height: 2px; background: var(--c); }
+.mark .tx { display: grid; line-height: 1.35; min-width: 0; }
+.mark .tm { font-family: var(--font-en); font-size: 10px; color: var(--sub); letter-spacing: 0.04em; }
+.mark .lb { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.axis { display: flex; }
+
+.axis .track { height: 28px; font-family: var(--font-en); font-size: 11px; color: var(--sub); }
+.axis .tick { position: absolute; top: 7px; transform: translateX(-50%); }
+
+/* 会話 */
+.line-input { width: 100%; max-width: 28rem; height: 38px; padding: 0; border: 0; border-bottom: 1px solid var(--ink); background: none; font-size: 14px; border-radius: 0; }
+.line-input::placeholder { color: var(--decor); }
+.line-input:focus { outline: none; border-bottom-color: var(--accent); }
+.talk { list-style: none; margin: 0; padding: 0; display: grid; gap: 28px; }
+.talk > li { display: grid; gap: 6px; max-width: 78%; }
+.talk > li.me { justify-self: end; text-align: right; }
+.talk > li.ai { justify-self: start; }
+.talk > li.tool { justify-self: center; max-width: none; }
+.talk .who { display: flex; align-items: center; gap: 0; font-size: 12px; color: var(--sub); }
+.talk .me .who { justify-content: flex-end; }
+.talk .who > * + *::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--rule); margin: 0 10px; vertical-align: -1px; }
+.talk .who b { font-weight: 600; color: var(--ink); }
+.talk .ai .who b::before { content: ""; display: inline-block; width: 6px; height: 6px; background: var(--accent); margin-right: 8px; vertical-align: 1px; }
+.talk .me .who b::after { content: ""; display: inline-block; width: 6px; height: 6px; background: var(--ink); margin-left: 8px; vertical-align: 1px; }
+.talk .text { margin: 0; white-space: pre-line; font-size: 15px; line-height: 1.85; text-align: left; }
+.talk .me .text, .talk .ai .text { display: inline-block; padding: 12px 16px; border: 1px solid var(--rule); }
+.talk .me .text { border-color: var(--ink); }
+.talk .tool .text { font-size: 12px; color: var(--sub); letter-spacing: 0.04em; }
+.talk .tool .text::before, .talk .tool .text::after { content: ""; display: inline-block; width: 28px; border-top: 1px solid var(--hair); vertical-align: middle; margin: 0 12px; }
+.chapter { display: flex; align-items: center; justify-content: center; gap: 8px; max-width: none !important; justify-self: stretch; padding-top: 12px; font-size: 12px; color: var(--sub); letter-spacing: 0.12em; }
+.chapter::before, .chapter::after { content: ""; flex: 1; border-top: 1px solid var(--hair); }
+
+/* 成果物と操作 */
+.cols { display: grid; grid-template-columns: 4.5rem 1fr; gap: 4px 16px; align-items: baseline; }
+.files .plus { color: var(--ok); } .files .minus { color: var(--bad); }
+.stack { display: flex; height: 6px; gap: 2px; }
+.stack span { background: var(--c); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 10px; font-size: 12px; color: var(--sub); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.cmd { display: grid; grid-template-columns: 3rem 6rem 1fr auto; gap: 12px; align-items: baseline; font-size: 13px; min-width: 600px; }
+.scroll-x { overflow-x: auto; }
+.twin { display: grid; gap: 64px; }
+
+@media (min-width: 640px) {
+  .wrap { padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); }
+  .talk > li { max-width: 68%; }
+  .cols { grid-template-columns: 6rem 1fr auto; }
+}
+@media (min-width: 1024px) {
+  .twin { grid-template-columns: 1fr 1fr; }
+  .page { padding-block: 56px 140px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<style>
+/* テンプレートで足したもの: 知らせ、出力と差分、パス */
+.notice { display: grid; gap: 4px; padding: 12px 0; border-top: 2px solid var(--warn); color: var(--warn); font-size: 13px; }
+.notice p { margin: 0; }
+pre.out { margin: 6px 0 0; padding: 10px 12px; max-height: 24rem; overflow: auto; background: var(--cream); font-family: var(--font-mono);
+  font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; }
+details > summary { list-style: none; margin-top: 4px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "+ "; font-family: var(--font-mono); }
+details[open] > summary::before { content: "− "; }
+.path { font-size: 13px; word-break: break-word; }
+.stack-wrap { padding: 8px 0 22px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"/></symbol>
+</svg>
+
+<header class="header"><div class="wrap">
+  <span class="brand en">SESSION REPORT</span>
+  <button class="icon-btn" id="theme" aria-label="テーマを切り替える"><svg><use href="#i-moon"/></svg></button>
+</div></header>
+
+<div class="wrap hero">
+  <div class="eyebrow tnum" id="eyebrow"></div>
+  <h1 id="title"></h1>
+</div>
+
+<nav class="tabbar" aria-label="レポートの表示"><div class="wrap"><div class="chips" role="tablist" id="tabs"></div></div></nav>
+
+<main class="wrap page" id="page"></main>
+
+<script type="application/json" id="data">__SESSION_REPORT_DATA__</script>
+<script>
+"use strict";
+// データは session_report.py render が下の <script type="application/json" id="data"> に入れる。
+// 記録から来る文字列は、すべて文字のノードとして入れる（HTML として解釈させない）。
+const D = JSON.parse(document.getElementById("data").textContent);
+const $ = (s) => document.querySelector(s);
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : String(v));
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+function px(el, props) { for (const [k, v] of Object.entries(props)) el.style[k] = Number(v) + "px"; return el; }
+
+const TONE = { "できた": "ok", "一部": "warn", "できていない": "bad", "未確認": "neutral", "答えた": "ok", "一部回答": "warn",
+  "未回答": "bad", "未解決": "bad", "次に": "warn", "判断待ち": "neutral", "成功": "ok", "失敗→解消": "warn", "失敗": "bad",
+  "該当なし": "neutral", "拒否": "bad", "不明": "neutral", "参照": "neutral", "作成": "ok", "更新": "warn", "削除": "bad",
+  "依頼": "ink", "質問": "accent", "訂正": "warn", "了承のみ": "neutral", "資料提供": "neutral" };
+const tone = (label) => TONE[label] || "neutral";
+const state = (label) => h("span", { class: "state " + tone(label) }, h("span", { class: "sq " + tone(label) }), label);
+const head = (ja, en, meta) => h("div", { class: "sec-head" },
+  h("h2", { class: "label" }, ja, h("span", { class: "en" }, en)), meta ? h("span", { class: "meta tnum" }, meta) : null);
+const sec = (ja, en, meta, ...body) => h("section", { class: "sec" }, head(ja, en, meta), ...body);
+const rowMeta = (...items) => h("div", { class: "row-meta" }, ...items.filter((x) => x !== null && x !== undefined && x !== "").map((x) => (x instanceof Node ? x : h("span", { class: "tnum" }, x))));
+const fixed = (s) => (s.overridden ? h("p", { class: "note small" }, "持ち主が直した（Codex の判定: " + (s.original || "なし") + "。理由: " + s.reason + "）") : null);
+const empty = (text) => h("p", { class: "note" }, text);
+
+document.title = D.meta.title + " — Session Report";
+$("#eyebrow").append(...[D.meta.span, D.meta.length, D.meta.cwd, D.meta.branch].filter(Boolean).map((t, i) => h("span", { class: i >= 2 ? "mono" : "" }, t)));
+$("#title").append(D.meta.title);
+
+const TABS = D.tabs; // [[id, 名前, 件数 | null]]
+const ui = { tab: "overview", req: "requests", op: "artifacts", q: "" };
+
+function requestRows(full) {
+  if (!D.requests.length) return empty("依頼の記録なし");
+  return h("ul", { class: "rows" }, D.requests.map((r) => h("li", {},
+    rowMeta(r.time, state(r.status.status), r.basis),
+    h("p", { class: "ttl" + (full ? " big" : "") }, r.text),
+    fixed(r.status),
+    full ? h("ul", { class: "criteria" }, r.criteria.map((c) => h("li", {}, state(c.status.status), h("span", {}, c.text),
+      h("span", { class: "basis" }, c.origin + "・" + c.basis), c.status.overridden ? h("span", { class: "basis" }, "持ち主が直した（Codex の判定: " + c.status.original + "。理由: " + c.status.reason + "）") : null))) : null)));
+}
+function decisionRows(full) {
+  if (!D.decisions.length) return empty("決めたことの記録なし");
+  return h("ul", { class: "rows" }, D.decisions.map((d) => h("li", {},
+    rowMeta(h("span", { class: "did" }, d.id), d.time, d.by),
+    h("p", { class: "ttl" + (full ? " big" : "") }, d.text),
+    full && d.why ? h("p", { class: "note" }, d.why) : null,
+    full ? h("p", { class: "alt" }, h("b", {}, "採らなかった案"), d.alternatives.length ? d.alternatives.join("、") : "記録なし") : null,
+    full && d.quote ? h("p", { class: "quote" }, d.quote, " ", h("span", { class: "sub small tnum" }, d.quote_time)) : null)));
+}
+function remainingRows() {
+  if (!D.issues.length) return empty("残ったことの記録なし");
+  return h("ul", { class: "rows" }, D.issues.map((x) => h("li", {}, rowMeta(state(x.kind)), h("p", { class: "ttl" }, x.text))));
+}
+
+function flowChart() {
+  const F = D.flow;
+  if (!F) return empty("時刻の記録なし");
+  const W = F.width;
+  const grid = () => F.ticks.map((t) => px(h("span", { class: "gridline" }), { left: t.x }));
+  const lanes = [];
+  for (const [name, bands] of F.bands) {
+    lanes.push(h("div", { class: "lane" }, h("span", { class: "lane-name" }, name),
+      px(h("div", { class: "track" }, grid(), bands.map((b) => px(h("div", { class: "band " + b.tone, title: b.label },
+        h("span", { class: "bar" }), px(h("span", { class: "t" }, b.label), { width: b.lw })), { left: b.x, width: Math.max(b.w - 4, 4) }))), { width: W, height: 44 })));
+  }
+  for (const [name, marks] of F.marks) {
+    lanes.push(h("div", { class: "lane" }, h("span", { class: "lane-name" }, name),
+      px(h("div", { class: "track" }, grid(), marks.map((m) => {
+        const el = h("div", { class: "mark " + m.tone + (m.w ? " span-on" : ""), title: m.time + " " + m.label },
+          m.w ? px(h("span", { class: "span" }), { width: m.w }) : h("span", { class: "sq " + m.tone }),
+          h("span", { class: "tx" }, h("span", { class: "tm" }, m.time + (m.until ? " → " + m.until : "")), h("span", { class: "lb" }, m.label)));
+        return px(el, m.w ? { left: m.x, top: 8 + m.row * 36, minWidth: m.w } : { left: m.x, top: 8 + m.row * 36 });
+      })), { width: W, height: 84 })));
+  }
+  lanes.push(h("div", { class: "axis" }, h("span", { class: "lane-name" }),
+    px(h("div", { class: "track" }, F.ticks.map((t) => px(h("span", { class: "tick" }, t.label), { left: t.x }))), { width: W })));
+  return h("div", { class: "flow", role: "img", "aria-label": F.from + " から " + F.to + " までの流れ" },
+    px(h("div", { class: "flow-in" }, lanes), { width: 96 + W }));
+}
+
+function coverage() {
+  if (!D.coverage.length) return null;
+  return sec("記録の範囲", "COVERAGE", D.coverage.length + " 件", h("ul", { class: "rows" }, D.coverage.map((c) => h("li", {}, h("p", { class: "note" }, c)))));
+}
+
+const VIEWS = {
+  overview: () => [
+    D.notices.length ? h("div", { class: "notice" }, D.notices.map((n) => h("p", {}, n))) : null,
+    D.summary ? h("p", { class: "summary" }, D.summary) : null,
+    sec("依頼と成果", "REQUESTS", D.requests.length + " 件", requestRows(false)),
+    h("div", { class: "twin" },
+      sec("決めたこと", "DECISIONS", D.decisions.length + " 件", decisionRows(false)),
+      sec("残ったこと", "REMAINING", D.issues.length + " 件", remainingRows())),
+    D.flow ? sec("流れ", "TIMELINE", D.flow.from + " — " + D.flow.to, flowChart()) : null,
+    coverage(),
+  ],
+  chat: () => {
+    if (!D.chat) return [empty("共有用のため、会話は載せていない")];
+    const q = ui.q.trim();
+    const input = h("input", { class: "line-input", id: "q", type: "search", placeholder: "会話の中を絞り込む", "aria-label": "会話の中を絞り込む", value: ui.q });
+    input.addEventListener("input", (e) => { ui.q = e.target.value; const pos = e.target.selectionStart; render(); const n = $("#q"); n.focus(); n.setSelectionRange(pos, pos); });
+    const items = D.chat.filter((m) => m.kind === "chapter" || (!q ? true : m.kind !== "tool" && m.text.includes(q)));
+    return [sec("会話", "CONVERSATION", D.counts.messages + " 件", input,
+      h("ul", { class: "talk" }, items.map((m) => {
+        if (m.kind === "chapter") return h("li", { class: "chapter" }, m.text);
+        if (m.kind === "tool") return h("li", { class: "tool" }, h("p", { class: "text" }, h("span", { class: "tnum" }, m.time), "　" + m.text));
+        const who = m.kind === "me" ? [m.tag ? state(m.tag) : null, h("span", { class: "tnum" }, m.time), h("b", {}, "あなた")]
+          : [h("b", {}, m.label), h("span", { class: "tnum" }, m.time)];
+        return h("li", { class: m.kind }, h("div", { class: "who" }, who),
+          h("div", {}, h("p", { class: "text" }, m.text || "（本文なし）", m.attachments.map((a) => "\n（添付: " + a + "、本体なし）"))));
+      })))];
+  },
+  requests: () => [sec("依頼と成果", "REQUESTS & QUESTIONS", "",
+    h("div", { class: "subchips", role: "tablist" }, [["requests", "依頼 " + D.requests.length], ["questions", "質問 " + D.questions.length]].map(([id, l]) =>
+      h("button", { class: "chip", "aria-selected": String(ui.req === id), onclick: () => { ui.req = id; render(); } }, l))),
+    ui.req === "requests" ? requestRows(true) : (D.questions.length ? h("ul", { class: "rows" }, D.questions.map((x) => h("li", {},
+      rowMeta(x.time, state(x.status.status), x.answer_time ? "答え " + x.answer_time : null), h("p", { class: "ttl big" }, x.text),
+      x.note ? h("p", { class: "note" }, x.note) : null, fixed(x.status)))) : empty("質問の記録なし")))],
+  decisions: () => [sec("判断", "DECISIONS", D.decisions.length + " 件", decisionRows(true)),
+    sec("学び", "LESSONS", D.lessons.length + " 件", D.lessons.length ? h("ul", { class: "rows" }, D.lessons.map((l) => h("li", {}, h("p", { class: "ttl" }, l)))) : empty("学びの記録なし"))],
+  ops: () => {
+    const O = D.ops;
+    const segs = [["artifacts", "成果物 " + O.artifacts.length], ["external", "外部の操作 " + O.external.length], ["files", "ファイル " + O.files.length],
+      ["commands", "コマンド " + O.command_total]];
+    let body;
+    if (ui.op === "artifacts") body = O.artifacts.length ? h("ul", { class: "rows" }, O.artifacts.map((a) => h("li", {}, rowMeta(a.kind, a.status), h("p", { class: "ttl big" }, a.label)))) : empty("成果物の記録なし");
+    if (ui.op === "external") body = O.external.length ? h("ul", { class: "rows" }, O.external.map((x) => h("li", {}, rowMeta(x.time, x.route, state(x.purpose)), h("p", { class: "ttl mono small" }, x.text)))) : empty("外部の操作の記録なし");
+    if (ui.op === "files") body = O.files.length ? h("ul", { class: "rows lined files" }, O.files.map((f) => h("li", { class: "cols" }, h("span", { class: "sub small" }, f.kind),
+      h("span", { class: "mono path" }, f.path, f.diff ? h("details", {}, h("summary", { class: "sub small" }, "差分" + (f.diff_cut ? "（先頭だけ）" : "")), h("pre", { class: "out" }, f.diff)) : null),
+      h("span", { class: "mono small" }, h("span", { class: "plus" }, f.plus), " ", h("span", { class: "minus" }, f.minus))))) : empty("ファイルの記録なし");
+    if (ui.op === "commands") body = O.commands.length ? [
+      h("div", { role: "img", "aria-label": "コマンド " + O.command_total + " 件の結果の内訳", class: "stack-wrap" },
+        h("div", { class: "stack" }, O.command_totals.map(([n, c]) => { const s = h("span", { class: tone(n) }); s.style.flex = String(c); return s; })),
+        h("div", { class: "legend" }, O.command_totals.map(([n, c]) => h("span", {}, h("span", { class: "sq " + tone(n) }), n + " ", h("span", { class: "tnum" }, c))))),
+      h("div", { class: "scroll-x" }, h("ul", { class: "rows lined" }, O.commands.map((c) => h("li", { class: "cmd" }, h("span", { class: "tnum sub" }, c.time), state(c.status),
+        h("span", { class: "mono" }, c.text, c.output ? h("details", {}, h("summary", { class: "sub small" }, "出力（" + c.output_chars + " 文字" + (c.output_cut ? "、先頭と末尾だけ" : "") + "）"), h("pre", { class: "out" }, c.output)) : null),
+        h("span", { class: "tnum sub" }, c.took)))))] : empty("コマンドの記録なし");
+    return [sec("成果物と操作", "ARTIFACTS & OPERATIONS", "",
+      h("div", { class: "subchips", role: "tablist" }, segs.map(([id, l]) => h("button", { class: "chip", "aria-selected": String(ui.op === id), onclick: () => { ui.op = id; render(); } }, l))), body)];
+  },
+  issues: () => [["未解決", "残った課題", "OPEN ISSUES"], ["次に", "次の一手", "NEXT"], ["判断待ち", "判断待ち", "WAITING"]].map(([kind, ja, en]) => {
+    const items = D.issues.filter((x) => x.kind === kind);
+    return sec(ja, en, items.length + " 件", items.length ? h("ul", { class: "rows" }, items.map((x) => h("li", {}, h("p", { class: "ttl" }, x.text)))) : empty("記録なし"));
+  }),
+};
+
+function render() {
+  const tabs = $("#tabs");
+  tabs.replaceChildren(...TABS.map(([id, label, n]) => h("button", { class: "chip", role: "tab", "aria-selected": String(id === ui.tab), onclick: () => { ui.tab = id; render(); } },
+    label, n === null ? null : h("span", { class: "n" }, n))));
+  $("#page").replaceChildren(...VIEWS[ui.tab]().flat().filter(Boolean));
+}
+render();
+
+(() => {
+  const root = document.documentElement;
+  const dark = () => (root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches);
+  const icon = () => $("#theme use").setAttribute("href", dark() ? "#i-sun" : "#i-moon");
+  try { const saved = localStorage.getItem("sr-theme"); if (saved === "dark" || saved === "light") root.dataset.theme = saved; } catch (e) {}
+  icon();
+  $("#theme").addEventListener("click", () => {
+    root.dataset.theme = dark() ? "light" : "dark";
+    try { localStorage.setItem("sr-theme", root.dataset.theme); } catch (e) {}
+    icon();
+  });
+})();
+</script>
+</body>
+</html>

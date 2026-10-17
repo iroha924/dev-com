@@ -246,13 +246,15 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
 
 決めたデザインで、手元用と共有用の単体の HTML を作れるようになる。
 
-- [ ] T08: テンプレートと手元用の render
+- [x] T08: テンプレートと手元用の render
   - 種別: 追加
   - 計画: S7
   - 依存: T06（overrides の反映が要る）, T07（描画を確かめる作り物の会話が要る）
   - 変更: `skills/session-report/scripts/template.html`, `skills/session-report/scripts/session_report.py`, `evals/session-report/fixtures.py`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report -k Render` → OK（CSP がある、外への読み込みが無い、本文の `</script>` や `<img` が逃がされる、check が通らないと書かない）。`python3 evals/session-report/fixtures.py render --twice` → 6 本とも「同じバイト列: はい」
   - コミット: `feat(session-report): 決めたデザインのテンプレートと手元用の render を足す`
+  - 結果: `python3 -m unittest tests.test_session_report -k Render` → 5 件 OK。`python3 evals/session-report/fixtures.py render --twice` → 6 本とも「同じバイト列: はい」。`python3 -m unittest discover -s tests` → 383 件 OK（skip 24）
+  - 結果: `python3 evals/session-report/fixtures.py build <フォルダ>` → 作り物の会話の HTML を Chrome で開き、幅 1280px と 360px（iframe）、ライトとダークで 6 タブ・操作の切り替え・出力の開閉・流れの横の流れを見た。コンソールのエラー 0 件。会話の絞り込みは A5 で見る
 
 - [ ] T09: 共有用の render
   - 種別: 追加
@@ -283,6 +285,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T08 / 表示に要る値（時刻・状態・訂正・件数・流れの位置）は Python の build_view で決め、テンプレートの JS は描くだけにした（同じバイト列とテストのため）。Chrome で見て、短い会話で帯の名前が切れる・0 分の目盛りが隠れる・取り下げが 2 回出る、を直した。ウィンドウの幅を変えられなかったので、幅 375px の iframe で狭い表示を見た
 
 - 2026-10-18 / T25 / T06 のレビュー（ec1863c）の 2 件（F1 追記を作り直すと古い訂正が別の項目に付く P2、F2 元の判定が今の追記の判定になる P2）を再現で確かめて受理 / T25 を足して直した。訂正に対象の本文（target）を保存し、今の本文と違えば効かせず、表示で知らせる（stale_overrides）
 

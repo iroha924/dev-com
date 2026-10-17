@@ -2,6 +2,7 @@
 
     python evals/session-report/fixtures.py check            # 6 本とも、正解の追記が check を通るか
     python evals/session-report/fixtures.py build <フォルダ>  # 6 本の report.json と正解の追記をフォルダに書く
+    python evals/session-report/fixtures.py render [--twice] [--out フォルダ]  # 6 本の report.html を書く（--twice は 2 回書いて比べる）
 
 会話は持ち主の実際の記録ではなく、ここで組み立てる。正解の追記（gold/<名前>.json）は、会話の全文を読んで書いたもの。
 source_digest は作るたびに変わる（記録のパスが入る）ので、gold には "<digest>" と書き、build で埋める。
@@ -192,6 +193,30 @@ def cmd_check(_args):
     return 1 if failed else 0
 
 
+def cmd_render(args):
+    out = args.out or tempfile.mkdtemp(prefix="session-report-fixtures-html-")
+    env = build(out)
+    failed = 0
+    for name in SESSIONS:
+        target = os.path.join(out, name)
+        results = []
+        for _ in range(2 if args.twice else 1):
+            code, text = run(["render", "--dir", target], env)
+            if code:
+                print("%s: render が失敗した\n%s" % (name, text))
+                failed += 1
+                break
+            with open(os.path.join(target, "report.html"), "rb") as f:
+                results.append(f.read())
+        else:
+            same = "" if not args.twice else "、同じバイト列: %s" % ("はい" if results[0] == results[1] else "いいえ")
+            failed += bool(args.twice and results[0] != results[1])
+            print("%s: %s（%d バイト%s）" % (name, os.path.join(target, "report.html"), len(results[0]), same))
+    if not args.out:
+        shutil.rmtree(out, ignore_errors=True)
+    return 1 if failed else 0
+
+
 def cmd_build(args):
     build(args.out)
     print("書いた: %s（%s）" % (args.out, "・".join(SESSIONS)))
@@ -204,6 +229,10 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("check").set_defaults(func=cmd_check)
+    rd = sub.add_parser("render")
+    rd.add_argument("--twice", action="store_true")
+    rd.add_argument("--out")
+    rd.set_defaults(func=cmd_render)
     b = sub.add_parser("build")
     b.add_argument("out")
     b.set_defaults(func=cmd_build)
