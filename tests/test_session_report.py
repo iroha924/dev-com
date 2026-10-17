@@ -989,6 +989,15 @@ class OverrideTest(_ReportBase):
         self.assertFalse(os.path.exists(os.path.join(out, "overrides.json")))
 
 
+class FixturesTest(unittest.TestCase):
+    def test_gold_annotations_pass_check(self):
+        # 作り物の会話 6 本の正解の追記が、会話とずれていない（evals/session-report/fixtures.py）
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "evals", "session-report", "fixtures.py"), "check"],
+                           capture_output=True, encoding="utf-8", env=dict(os.environ, TZ="Asia/Tokyo"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.count("違反 0 件"), 6)
+
+
 class SearchModuleTest(unittest.TestCase):
     def test_uses_session_search(self):
         # 写さずに import している（伏せ字の規則が 2 つに分かれない）

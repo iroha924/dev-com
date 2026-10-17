@@ -1,0 +1,807 @@
+{
+ "format_version": "1",
+ "source_digest": "<digest>",
+ "summary": {
+  "text": "パイプラインの YAML のステージ・ジョブ・キャッシュの書き方を、45 の質問で順に確かめた。",
+  "evidence": [
+   {
+    "ref": "a1",
+    "quote": "ステージ は stages の下に並べます"
+   }
+  ]
+ },
+ "chapters": [
+  {
+   "id": "C1",
+   "title": "ステージ",
+   "from": "u1",
+   "to": "a15"
+  },
+  {
+   "id": "C2",
+   "title": "ジョブ",
+   "from": "u16",
+   "to": "a30"
+  },
+  {
+   "id": "C3",
+   "title": "キャッシュ",
+   "from": "u31",
+   "to": "a45"
+  }
+ ],
+ "requests": [],
+ "questions": [
+  {
+   "id": "Q1",
+   "text": "ステージ の書き方 1",
+   "at": "u1",
+   "status": "答えた",
+   "answer": "a1",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a1",
+     "quote": "stages の下に並べます（例 1）"
+    }
+   ]
+  },
+  {
+   "id": "Q2",
+   "text": "ステージ の書き方 2",
+   "at": "u2",
+   "status": "答えた",
+   "answer": "a2",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a2",
+     "quote": "stages の下に並べます（例 2）"
+    }
+   ]
+  },
+  {
+   "id": "Q3",
+   "text": "ステージ の書き方 3",
+   "at": "u3",
+   "status": "答えた",
+   "answer": "a3",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a3",
+     "quote": "stages の下に並べます（例 3）"
+    }
+   ]
+  },
+  {
+   "id": "Q4",
+   "text": "ステージ の書き方 4",
+   "at": "u4",
+   "status": "答えた",
+   "answer": "a4",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a4",
+     "quote": "stages の下に並べます（例 4）"
+    }
+   ]
+  },
+  {
+   "id": "Q5",
+   "text": "ステージ の書き方 5",
+   "at": "u5",
+   "status": "答えた",
+   "answer": "a5",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a5",
+     "quote": "stages の下に並べます（例 5）"
+    }
+   ]
+  },
+  {
+   "id": "Q6",
+   "text": "ステージ の書き方 6",
+   "at": "u6",
+   "status": "答えた",
+   "answer": "a6",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a6",
+     "quote": "stages の下に並べます（例 6）"
+    }
+   ]
+  },
+  {
+   "id": "Q7",
+   "text": "ステージ の書き方 7",
+   "at": "u7",
+   "status": "答えた",
+   "answer": "a7",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a7",
+     "quote": "stages の下に並べます（例 7）"
+    }
+   ]
+  },
+  {
+   "id": "Q8",
+   "text": "ステージ の書き方 8",
+   "at": "u8",
+   "status": "答えた",
+   "answer": "a8",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a8",
+     "quote": "stages の下に並べます（例 8）"
+    }
+   ]
+  },
+  {
+   "id": "Q9",
+   "text": "ステージ の書き方 9",
+   "at": "u9",
+   "status": "答えた",
+   "answer": "a9",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a9",
+     "quote": "stages の下に並べます（例 9）"
+    }
+   ]
+  },
+  {
+   "id": "Q10",
+   "text": "ステージ の書き方 10",
+   "at": "u10",
+   "status": "答えた",
+   "answer": "a10",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a10",
+     "quote": "stages の下に並べます（例 10）"
+    }
+   ]
+  },
+  {
+   "id": "Q11",
+   "text": "ステージ の書き方 11",
+   "at": "u11",
+   "status": "答えた",
+   "answer": "a11",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a11",
+     "quote": "stages の下に並べます（例 11）"
+    }
+   ]
+  },
+  {
+   "id": "Q12",
+   "text": "ステージ の書き方 12",
+   "at": "u12",
+   "status": "答えた",
+   "answer": "a12",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a12",
+     "quote": "stages の下に並べます（例 12）"
+    }
+   ]
+  },
+  {
+   "id": "Q13",
+   "text": "ステージ の書き方 13",
+   "at": "u13",
+   "status": "答えた",
+   "answer": "a13",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a13",
+     "quote": "stages の下に並べます（例 13）"
+    }
+   ]
+  },
+  {
+   "id": "Q14",
+   "text": "ステージ の書き方 14",
+   "at": "u14",
+   "status": "答えた",
+   "answer": "a14",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a14",
+     "quote": "stages の下に並べます（例 14）"
+    }
+   ]
+  },
+  {
+   "id": "Q15",
+   "text": "ステージ の書き方 15",
+   "at": "u15",
+   "status": "答えた",
+   "answer": "a15",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a15",
+     "quote": "stages の下に並べます（例 15）"
+    }
+   ]
+  },
+  {
+   "id": "Q16",
+   "text": "ジョブ の書き方 1",
+   "at": "u16",
+   "status": "答えた",
+   "answer": "a16",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a16",
+     "quote": "jobs の下に並べます（例 1）"
+    }
+   ]
+  },
+  {
+   "id": "Q17",
+   "text": "ジョブ の書き方 2",
+   "at": "u17",
+   "status": "答えた",
+   "answer": "a17",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a17",
+     "quote": "jobs の下に並べます（例 2）"
+    }
+   ]
+  },
+  {
+   "id": "Q18",
+   "text": "ジョブ の書き方 3",
+   "at": "u18",
+   "status": "答えた",
+   "answer": "a18",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a18",
+     "quote": "jobs の下に並べます（例 3）"
+    }
+   ]
+  },
+  {
+   "id": "Q19",
+   "text": "ジョブ の書き方 4",
+   "at": "u19",
+   "status": "答えた",
+   "answer": "a19",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a19",
+     "quote": "jobs の下に並べます（例 4）"
+    }
+   ]
+  },
+  {
+   "id": "Q20",
+   "text": "ジョブ の書き方 5",
+   "at": "u20",
+   "status": "答えた",
+   "answer": "a20",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a20",
+     "quote": "jobs の下に並べます（例 5）"
+    }
+   ]
+  },
+  {
+   "id": "Q21",
+   "text": "ジョブ の書き方 6",
+   "at": "u21",
+   "status": "答えた",
+   "answer": "a21",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a21",
+     "quote": "jobs の下に並べます（例 6）"
+    }
+   ]
+  },
+  {
+   "id": "Q22",
+   "text": "ジョブ の書き方 7",
+   "at": "u22",
+   "status": "答えた",
+   "answer": "a22",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a22",
+     "quote": "jobs の下に並べます（例 7）"
+    }
+   ]
+  },
+  {
+   "id": "Q23",
+   "text": "ジョブ の書き方 8",
+   "at": "u23",
+   "status": "答えた",
+   "answer": "a23",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a23",
+     "quote": "jobs の下に並べます（例 8）"
+    }
+   ]
+  },
+  {
+   "id": "Q24",
+   "text": "ジョブ の書き方 9",
+   "at": "u24",
+   "status": "答えた",
+   "answer": "a24",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a24",
+     "quote": "jobs の下に並べます（例 9）"
+    }
+   ]
+  },
+  {
+   "id": "Q25",
+   "text": "ジョブ の書き方 10",
+   "at": "u25",
+   "status": "答えた",
+   "answer": "a25",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a25",
+     "quote": "jobs の下に並べます（例 10）"
+    }
+   ]
+  },
+  {
+   "id": "Q26",
+   "text": "ジョブ の書き方 11",
+   "at": "u26",
+   "status": "答えた",
+   "answer": "a26",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a26",
+     "quote": "jobs の下に並べます（例 11）"
+    }
+   ]
+  },
+  {
+   "id": "Q27",
+   "text": "ジョブ の書き方 12",
+   "at": "u27",
+   "status": "答えた",
+   "answer": "a27",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a27",
+     "quote": "jobs の下に並べます（例 12）"
+    }
+   ]
+  },
+  {
+   "id": "Q28",
+   "text": "ジョブ の書き方 13",
+   "at": "u28",
+   "status": "答えた",
+   "answer": "a28",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a28",
+     "quote": "jobs の下に並べます（例 13）"
+    }
+   ]
+  },
+  {
+   "id": "Q29",
+   "text": "ジョブ の書き方 14",
+   "at": "u29",
+   "status": "答えた",
+   "answer": "a29",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a29",
+     "quote": "jobs の下に並べます（例 14）"
+    }
+   ]
+  },
+  {
+   "id": "Q30",
+   "text": "ジョブ の書き方 15",
+   "at": "u30",
+   "status": "答えた",
+   "answer": "a30",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a30",
+     "quote": "jobs の下に並べます（例 15）"
+    }
+   ]
+  },
+  {
+   "id": "Q31",
+   "text": "キャッシュ の書き方 1",
+   "at": "u31",
+   "status": "答えた",
+   "answer": "a31",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a31",
+     "quote": "Cache@2 の下に並べます（例 1）"
+    }
+   ]
+  },
+  {
+   "id": "Q32",
+   "text": "キャッシュ の書き方 2",
+   "at": "u32",
+   "status": "答えた",
+   "answer": "a32",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a32",
+     "quote": "Cache@2 の下に並べます（例 2）"
+    }
+   ]
+  },
+  {
+   "id": "Q33",
+   "text": "キャッシュ の書き方 3",
+   "at": "u33",
+   "status": "答えた",
+   "answer": "a33",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a33",
+     "quote": "Cache@2 の下に並べます（例 3）"
+    }
+   ]
+  },
+  {
+   "id": "Q34",
+   "text": "キャッシュ の書き方 4",
+   "at": "u34",
+   "status": "答えた",
+   "answer": "a34",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a34",
+     "quote": "Cache@2 の下に並べます（例 4）"
+    }
+   ]
+  },
+  {
+   "id": "Q35",
+   "text": "キャッシュ の書き方 5",
+   "at": "u35",
+   "status": "答えた",
+   "answer": "a35",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a35",
+     "quote": "Cache@2 の下に並べます（例 5）"
+    }
+   ]
+  },
+  {
+   "id": "Q36",
+   "text": "キャッシュ の書き方 6",
+   "at": "u36",
+   "status": "答えた",
+   "answer": "a36",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a36",
+     "quote": "Cache@2 の下に並べます（例 6）"
+    }
+   ]
+  },
+  {
+   "id": "Q37",
+   "text": "キャッシュ の書き方 7",
+   "at": "u37",
+   "status": "答えた",
+   "answer": "a37",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a37",
+     "quote": "Cache@2 の下に並べます（例 7）"
+    }
+   ]
+  },
+  {
+   "id": "Q38",
+   "text": "キャッシュ の書き方 8",
+   "at": "u38",
+   "status": "答えた",
+   "answer": "a38",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a38",
+     "quote": "Cache@2 の下に並べます（例 8）"
+    }
+   ]
+  },
+  {
+   "id": "Q39",
+   "text": "キャッシュ の書き方 9",
+   "at": "u39",
+   "status": "答えた",
+   "answer": "a39",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a39",
+     "quote": "Cache@2 の下に並べます（例 9）"
+    }
+   ]
+  },
+  {
+   "id": "Q40",
+   "text": "キャッシュ の書き方 10",
+   "at": "u40",
+   "status": "答えた",
+   "answer": "a40",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a40",
+     "quote": "Cache@2 の下に並べます（例 10）"
+    }
+   ]
+  },
+  {
+   "id": "Q41",
+   "text": "キャッシュ の書き方 11",
+   "at": "u41",
+   "status": "答えた",
+   "answer": "a41",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a41",
+     "quote": "Cache@2 の下に並べます（例 11）"
+    }
+   ]
+  },
+  {
+   "id": "Q42",
+   "text": "キャッシュ の書き方 12",
+   "at": "u42",
+   "status": "答えた",
+   "answer": "a42",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a42",
+     "quote": "Cache@2 の下に並べます（例 12）"
+    }
+   ]
+  },
+  {
+   "id": "Q43",
+   "text": "キャッシュ の書き方 13",
+   "at": "u43",
+   "status": "答えた",
+   "answer": "a43",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a43",
+     "quote": "Cache@2 の下に並べます（例 13）"
+    }
+   ]
+  },
+  {
+   "id": "Q44",
+   "text": "キャッシュ の書き方 14",
+   "at": "u44",
+   "status": "答えた",
+   "answer": "a44",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a44",
+     "quote": "Cache@2 の下に並べます（例 14）"
+    }
+   ]
+  },
+  {
+   "id": "Q45",
+   "text": "キャッシュ の書き方 15",
+   "at": "u45",
+   "status": "答えた",
+   "answer": "a45",
+   "note": "",
+   "evidence": [
+    {
+     "ref": "a45",
+     "quote": "Cache@2 の下に並べます（例 15）"
+    }
+   ]
+  }
+ ],
+ "decisions": [],
+ "lessons": [],
+ "issues": [],
+ "command_notes": [],
+ "owner_messages": {
+  "u1": [
+   "Q1"
+  ],
+  "u2": [
+   "Q2"
+  ],
+  "u3": [
+   "Q3"
+  ],
+  "u4": [
+   "Q4"
+  ],
+  "u5": [
+   "Q5"
+  ],
+  "u6": [
+   "Q6"
+  ],
+  "u7": [
+   "Q7"
+  ],
+  "u8": [
+   "Q8"
+  ],
+  "u9": [
+   "Q9"
+  ],
+  "u10": [
+   "Q10"
+  ],
+  "u11": [
+   "Q11"
+  ],
+  "u12": [
+   "Q12"
+  ],
+  "u13": [
+   "Q13"
+  ],
+  "u14": [
+   "Q14"
+  ],
+  "u15": [
+   "Q15"
+  ],
+  "u16": [
+   "Q16"
+  ],
+  "u17": [
+   "Q17"
+  ],
+  "u18": [
+   "Q18"
+  ],
+  "u19": [
+   "Q19"
+  ],
+  "u20": [
+   "Q20"
+  ],
+  "u21": [
+   "Q21"
+  ],
+  "u22": [
+   "Q22"
+  ],
+  "u23": [
+   "Q23"
+  ],
+  "u24": [
+   "Q24"
+  ],
+  "u25": [
+   "Q25"
+  ],
+  "u26": [
+   "Q26"
+  ],
+  "u27": [
+   "Q27"
+  ],
+  "u28": [
+   "Q28"
+  ],
+  "u29": [
+   "Q29"
+  ],
+  "u30": [
+   "Q30"
+  ],
+  "u31": [
+   "Q31"
+  ],
+  "u32": [
+   "Q32"
+  ],
+  "u33": [
+   "Q33"
+  ],
+  "u34": [
+   "Q34"
+  ],
+  "u35": [
+   "Q35"
+  ],
+  "u36": [
+   "Q36"
+  ],
+  "u37": [
+   "Q37"
+  ],
+  "u38": [
+   "Q38"
+  ],
+  "u39": [
+   "Q39"
+  ],
+  "u40": [
+   "Q40"
+  ],
+  "u41": [
+   "Q41"
+  ],
+  "u42": [
+   "Q42"
+  ],
+  "u43": [
+   "Q43"
+  ],
+  "u44": [
+   "Q44"
+  ],
+  "u45": [
+   "Q45"
+  ]
+ }
+}

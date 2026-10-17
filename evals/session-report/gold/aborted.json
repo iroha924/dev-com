@@ -1,0 +1,59 @@
+{
+ "format_version": "1",
+ "source_digest": "<digest>",
+ "summary": {
+  "text": "YAML を templates に分ける依頼は、ファイルを読んだところで中断した。",
+  "evidence": [
+   {
+    "ref": "a1",
+    "quote": "azure-pipelines.yml を読みます"
+   }
+  ]
+ },
+ "chapters": [],
+ "requests": [
+  {
+   "id": "R1",
+   "text": "パイプラインの YAML を全部 templates に分ける",
+   "at": "u1",
+   "lifecycle": "有効",
+   "evidence": [
+    {
+     "ref": "u1",
+     "quote": "templates に分けて"
+    }
+   ],
+   "criteria": [
+    {
+     "text": "YAML を templates に分ける",
+     "origin": "持ち主",
+     "status": "未確認",
+     "basis": "途中で中断",
+     "evidence": []
+    }
+   ]
+  }
+ ],
+ "questions": [],
+ "decisions": [],
+ "lessons": [],
+ "issues": [
+  {
+   "id": "I1",
+   "kind": "未解決",
+   "text": "中断したので、templates に分ける作業は始まっていない",
+   "evidence": [
+    {
+     "ref": "a1",
+     "quote": "azure-pipelines.yml を読みます"
+    }
+   ]
+  }
+ ],
+ "command_notes": [],
+ "owner_messages": {
+  "u1": [
+   "R1"
+  ]
+ }
+}

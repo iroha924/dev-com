@@ -223,13 +223,14 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `fix(session-report): check で質問の答えを Codex の発言に限り、形の違反に項目 ID を出す`
   - 結果: red を直す前のコードで実測 → 2 か所の subTest が FAIL。直した後 `python3 -m unittest discover -s tests` → 375 件 OK（skip 24）
 
-- [ ] T07: 作り物の会話と正解の追記
+- [x] T07: 作り物の会話と正解の追記
   - 種別: 追加
   - 計画: S10
   - 依存: T05（正解の追記を check で確かめる形が要る）
-  - 変更: `evals/session-report/fixtures.py`, `evals/session-report/gold/`
+  - 変更: `evals/session-report/fixtures.py`, `evals/session-report/gold/`, `tests/test_session_report.py`
   - 完了条件: `python3 evals/session-report/fixtures.py check` → 6 本（短い・長い・条件の変更・失敗の後の解消・承認待ち・中断）の全部で check の違反 0 件
   - コミット: `test(session-report): 作り物の会話 6 本と正解の追記を足す`
+  - 結果: `python3 evals/session-report/fixtures.py check` → 6 本とも「違反 0 件」。`python3 -m unittest tests.test_session_report -k Fixtures` → OK
 
 ## P4: HTML にする
 
@@ -272,6 +273,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T07 / 変更の欄に `tests/test_session_report.py` を足した（前: fixtures.py と gold/、後: それに加えてテスト）。正解の追記が会話とずれないように、テストから fixtures の check を流すため。長い会話（持ち主の発言 45 件）の正解は形が規則的なので、組み立てて JSON にした
 
 - 2026-10-18 / T24 / T05 のレビュー（78c92c4）の 2 件（F1 answer に持ち主の発言 P2、F2 形の違反に項目 ID が無い P2）を再現で確かめて受理 / T24 を足して直した
 

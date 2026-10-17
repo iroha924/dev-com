@@ -1,0 +1,76 @@
+{
+ "format_version": "1",
+ "source_digest": "<digest>",
+ "summary": {
+  "text": "Work Item #1287 の更新は、送る内容を見せて承認を待っているところで止まっている。まだ送っていない。",
+  "evidence": [
+   {
+    "ref": "a1",
+    "quote": "送ってよいですか？"
+   }
+  ]
+ },
+ "chapters": [],
+ "requests": [
+  {
+   "id": "R1",
+   "text": "Work Item #1287 を Resolved にし、コメントに PR #482 を書く",
+   "at": "u1",
+   "lifecycle": "有効",
+   "evidence": [
+    {
+     "ref": "u1",
+     "quote": "Work Item #1287 を Resolved にして"
+    }
+   ],
+   "criteria": [
+    {
+     "text": "State を Resolved にする",
+     "origin": "持ち主",
+     "status": "できていない",
+     "basis": "DryRun だけで送っていない",
+     "evidence": [
+      {
+       "ref": "c1",
+       "quote": "\"method\":\"PATCH\""
+      }
+     ]
+    },
+    {
+     "text": "コメントに PR #482 を書く",
+     "origin": "持ち主",
+     "status": "できていない",
+     "basis": "DryRun だけで送っていない",
+     "evidence": [
+      {
+       "ref": "a1",
+       "quote": "コメントに PR #482 を入れます"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "questions": [],
+ "decisions": [],
+ "lessons": [],
+ "issues": [
+  {
+   "id": "I1",
+   "kind": "判断待ち",
+   "text": "Work Item #1287 の更新を送ってよいかの承認",
+   "evidence": [
+    {
+     "ref": "a1",
+     "quote": "送ってよいですか？"
+    }
+   ]
+  }
+ ],
+ "command_notes": [],
+ "owner_messages": {
+  "u1": [
+   "R1"
+  ]
+ }
+}

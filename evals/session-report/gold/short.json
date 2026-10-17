@@ -1,0 +1,91 @@
+{
+ "format_version": "1",
+ "source_digest": "<digest>",
+ "summary": {
+  "text": "datetime.utcnow() の非推奨の警告 3 件を、datetime.now(timezone.utc) への置き換えで消した。テストは変えていない。",
+  "evidence": [
+   {
+    "ref": "a1",
+    "quote": "警告は 0 件になりました"
+   }
+  ]
+ },
+ "chapters": [],
+ "requests": [
+  {
+   "id": "R1",
+   "text": "pytest の DeprecationWarning を消す（テストの中身は変えない）",
+   "at": "u1",
+   "lifecycle": "有効",
+   "evidence": [
+    {
+     "ref": "u1",
+     "quote": "警告を消して"
+    }
+   ],
+   "criteria": [
+    {
+     "text": "警告が 0 件になる",
+     "origin": "持ち主",
+     "status": "できた",
+     "basis": "テストの出力で確認",
+     "evidence": [
+      {
+       "ref": "c2",
+       "quote": "4 passed in 2.05s"
+      }
+     ]
+    },
+    {
+     "text": "テストの中身を変えない",
+     "origin": "持ち主",
+     "status": "できた",
+     "basis": "変更は src/clock.py だけ",
+     "evidence": [
+      {
+       "ref": "f1",
+       "quote": "src/clock.py"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "questions": [],
+ "decisions": [
+  {
+   "id": "D1",
+   "text": "datetime.utcnow() を datetime.now(timezone.utc) に置き換える",
+   "at": "a1",
+   "by": "Codex の提案のまま",
+   "why": "utcnow は非推奨で、置き換え先がある",
+   "alternatives": [],
+   "supersedes": null,
+   "evidence": [
+    {
+     "ref": "a1",
+     "quote": "datetime.now(timezone.utc) に置き換えました"
+    }
+   ]
+  }
+ ],
+ "lessons": [
+  {
+   "id": "L1",
+   "text": "非推奨の警告は、置き換え先のある呼び出しから消す",
+   "evidence": [
+    {
+     "ref": "c1",
+     "quote": "datetime.utcnow() is deprecated"
+    }
+   ]
+  }
+ ],
+ "issues": [],
+ "command_notes": [],
+ "owner_messages": {
+  "u1": [
+   "R1"
+  ]
+ }
+}

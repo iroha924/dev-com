@@ -1,0 +1,110 @@
+{
+ "format_version": "1",
+ "source_digest": "<digest>",
+ "summary": {
+  "text": "CI でだけ落ちる test_retry の原因は 2 秒のタイムアウトで、環境変数で変えられるようにした。手元では通り、CI では未確認。",
+  "evidence": [
+   {
+    "ref": "a2",
+    "quote": "手元では通りました"
+   }
+  ]
+ },
+ "chapters": [],
+ "requests": [
+  {
+   "id": "R1",
+   "text": "CI でだけ落ちる test_retry の原因を調べて直す",
+   "at": "u1",
+   "lifecycle": "有効",
+   "evidence": [
+    {
+     "ref": "u1",
+     "quote": "原因を調べて直して"
+    }
+   ],
+   "criteria": [
+    {
+     "text": "原因が分かる",
+     "origin": "持ち主",
+     "status": "できた",
+     "basis": "回答で説明",
+     "evidence": [
+      {
+       "ref": "a1",
+       "quote": "2 秒のタイムアウトに届いていません"
+      }
+     ]
+    },
+    {
+     "text": "CI で通る",
+     "origin": "Codex",
+     "status": "未確認",
+     "basis": "CI では流していない",
+     "evidence": [
+      {
+       "ref": "a2",
+       "quote": "CI ではまだ流していません"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "questions": [],
+ "decisions": [
+  {
+   "id": "D1",
+   "text": "タイムアウトを環境変数 RETRY_TIMEOUT で変えられるようにし、既定を 10 秒にする",
+   "at": "a2",
+   "by": "Codex の提案のまま",
+   "why": "CI のエージェントは遅い",
+   "alternatives": [],
+   "supersedes": null,
+   "evidence": [
+    {
+     "ref": "f1",
+     "quote": "RETRY_TIMEOUT"
+    }
+   ]
+  }
+ ],
+ "lessons": [
+  {
+   "id": "L1",
+   "text": "CI でだけ落ちるテストは、まずエージェントの遅さとタイムアウトを疑う",
+   "evidence": [
+    {
+     "ref": "c1",
+     "quote": "TimeoutError: 2.0s"
+    }
+   ]
+  }
+ ],
+ "issues": [
+  {
+   "id": "I1",
+   "kind": "次に",
+   "text": "CI で test_retry を流して確かめる",
+   "evidence": [
+    {
+     "ref": "a2",
+     "quote": "CI ではまだ流していません"
+    }
+   ]
+  }
+ ],
+ "command_notes": [
+  {
+   "id": "N1",
+   "failed": "c1",
+   "resolved_by": "c2",
+   "text": "タイムアウトを延ばして通った"
+  }
+ ],
+ "owner_messages": {
+  "u1": [
+   "R1"
+  ]
+ }
+}

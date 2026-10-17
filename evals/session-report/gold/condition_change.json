@@ -1,0 +1,100 @@
+{
+ "format_version": "1",
+ "source_digest": "<digest>",
+ "summary": {
+  "text": "失敗したテストの名前を JUnit XML から抜き出すスクリプトを書き、途中の指定で出力を JSON にした。Markdown の表は取り下げ。",
+  "evidence": [
+   {
+    "ref": "a2",
+    "quote": "出力を JSON の配列にしました"
+   }
+  ]
+ },
+ "chapters": [],
+ "requests": [
+  {
+   "id": "R1",
+   "text": "ビルドのログから失敗したテストの名前を抜き出すスクリプト",
+   "at": "u1",
+   "lifecycle": "有効",
+   "evidence": [
+    {
+     "ref": "u1",
+     "quote": "失敗したテストの名前だけを抜き出すスクリプトを書いて"
+    }
+   ],
+   "criteria": [
+    {
+     "text": "失敗したテストの名前を抜き出す",
+     "origin": "持ち主",
+     "status": "できた",
+     "basis": "手元で流して出力を確認",
+     "evidence": [
+      {
+       "ref": "c1",
+       "quote": "tests/test_retry.py::test_x"
+      }
+     ]
+    },
+    {
+     "text": "出力は JSON",
+     "origin": "持ち主",
+     "status": "できた",
+     "basis": "手元で流して出力を確認",
+     "evidence": [
+      {
+       "ref": "a2",
+       "quote": "出力を JSON の配列にしました"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "R2",
+   "text": "Markdown の表で出す",
+   "at": "u2",
+   "lifecycle": "取り下げ",
+   "evidence": [
+    {
+     "ref": "u2",
+     "quote": "Markdown の表は要らない"
+    }
+   ],
+   "criteria": []
+  }
+ ],
+ "questions": [],
+ "decisions": [
+  {
+   "id": "D1",
+   "text": "出力を JSON の配列にする",
+   "at": "u2",
+   "by": "持ち主",
+   "why": "持ち主の指定",
+   "alternatives": [
+    "Markdown の表"
+   ],
+   "supersedes": null,
+   "evidence": [
+    {
+     "ref": "u2",
+     "quote": "出力は JSON にして"
+    }
+   ]
+  }
+ ],
+ "lessons": [],
+ "issues": [],
+ "command_notes": [],
+ "owner_messages": {
+  "u1": [
+   "R1"
+  ],
+  "u2": [
+   "R1",
+   "R2",
+   "D1"
+  ]
+ }
+}
