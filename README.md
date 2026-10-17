@@ -122,7 +122,7 @@ flowchart TD
 | [`code-comments`](#code-comments) | skill | 自動 | 使わない | コードのコメントを書く・直すとき |
 | [`root-cause`](#root-cause) | skill | 自動 | 使わない | どのコミットで壊れたかを git bisect で探すとき |
 | [`session-search`](#会話の検索) | skill | 自動 | 使わない | 「前に〇〇って何て言ってた？」と過去の Codex の会話を探すとき |
-| [`session-report`](#会話のレポート) | skill | 自動 | 使わない | 1 つの会話を、振り返り・共有用の HTML にするとき |
+| [`session-report`](#会話のレポート) | skill | 自動 | 使わない | 1 つの会話を、振り返り用の HTML にするとき |
 | [`change-risk-reviewer`](#change-risk-reviewer) | agent | `pr-review-assist` から | 使わない | 差分を独立した文脈で読むレビュアー |
 | [`incident-evidence-analyst`](#incident-evidence-analyst) | agent | `incident-report` から | 使わない | 障害のログを大量に読んで整理する |
 | [`design-challenger`](#design-challenger) | agent | `grill` から | 読む | 要件や設計の叩き台に反論する議論の相手 |
@@ -165,7 +165,7 @@ flowchart LR
 | CI が落ちたとき | `ci-failure-triage` | 「ビルド 4567 が落ちた原因を切り分けて」 |
 | いつから壊れたか分からないとき | `root-cause` | 「このテストがどのコミットで落ちるようになったか bisect で探して」 |
 | 前に何を決めたか思い出したいとき | `session-search` | 「前に CI の自動の再実行をどうするって決めたっけ？」 |
-| 長い会話を振り返る・スプリントで見せたいとき | `session-report` | 「このセッションのレポートを作って」「共有用も作って」 |
+| 長い会話を振り返りたいとき | `session-report` | 「このセッションのレポートを作って」 |
 | 障害の後 | `incident-report` | `$incident-report このログからポストモーテムを書いて` |
 | 金曜のスプリントレビュー・振り返り前 | `sprint-report`（review） | 「今スプリントのまとめと振り返りの材料を出して」 |
 
@@ -387,7 +387,7 @@ min_rate_limit_remaining_percent = 40
 
 ## 会話のレポート
 
-`session-report` は、Codex の 1 つの会話を、依頼と成果・決めたこと・残った課題・実際の会話をタブで見られる単体の HTML にする。振り返りと、1 週間スプリントでの共有に使う。
+`session-report` は、Codex の 1 つの会話を、依頼と成果・決めたこと・残った課題・実際の会話をタブで見られる単体の HTML にする。持ち主が自分で振り返るために使う（誰にも共有しない）。
 
 ```mermaid
 flowchart LR
@@ -396,7 +396,7 @@ flowchart LR
     j1 --> i["input<br/>Codex に読ませる範囲"]
     i --> c["Codex が読んで<br/>annotations.json を書く"]
     c --> k["check<br/>根拠と漏れを確かめる"]
-    k --> h["render<br/>report.html（手元用）<br/>report-share.html（共有用）"]
+    k --> h["render<br/>report.html"]
     o["override<br/>持ち主の訂正"] --> h
 ```
 
@@ -404,10 +404,10 @@ flowchart LR
 - 書き足しには、根拠の発言か操作の ID と引用を付ける。`check` は、引用が本文にあるか、ID があるか、持ち主の発言の扱いが漏れていないか、形が合うかを確かめ、通らなければ HTML を書かない。**意味の取り違えまでは止められない。**
 - 依頼の成否は、条件ごとの判定（できた・一部・できていない・未確認）からスクリプトが決める。持ち主は `override` で直せ、HTML には元の判定と理由も出る。
 - HTML は 1 つのテンプレート（2026-10-18 に決めたデザイン: hir4ta knowledge の色、横線の区切り、角丸なし）に当てはめる。外への読み込みは無く、同じ記録と同じ追記からは同じバイト列になる。
-- 手元用は会話の全文と、コマンドの出力（先頭と末尾 2,000 文字ずつ）と差分（1 ファイル 20,000 文字）まで載せる。共有用は要点と根拠の引用だけで、会話の全文・操作の詳細・差分・コマンド・絶対パス・URL を除く。**共有してよいかは持ち主が確かめる。**画像の本体はどちらにも載せない。
+- 会話の全文と、コマンドの出力（先頭と末尾 2,000 文字ずつ）と差分（1 ファイル 20,000 文字）まで載せる。画像の本体は載せない。
 - 置き場所は `%LOCALAPPDATA%\hirata-codex\session-report\<会話の ID>\`。
 
-使い方は Codex に「このセッションのレポートを作って」「共有用も作って」と頼む。手順は `skills/session-report/SKILL.md`。
+使い方は Codex に「このセッションのレポートを作って」と頼む。手順は `skills/session-report/SKILL.md`。
 
 ### 確かめ方
 
@@ -415,7 +415,7 @@ flowchart LR
 
 ```bash
 python3 evals/session-report/fixtures.py check           # 正解の追記が check を通るか
-python3 evals/session-report/fixtures.py render --twice  # 手元用と共有用を 2 回書いて同じバイト列か
+python3 evals/session-report/fixtures.py render --twice  # 2 回書いて同じバイト列か
 ```
 
 会社の PC の記録の形は、`probe`（記録の中身を出さず、項目の種類・件数・有無だけを数える）で確かめる。

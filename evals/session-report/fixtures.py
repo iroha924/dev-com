@@ -2,7 +2,7 @@
 
     python evals/session-report/fixtures.py check            # 6 本とも、正解の追記が check を通るか
     python evals/session-report/fixtures.py build <フォルダ>  # 6 本の report.json と正解の追記をフォルダに書く
-    python evals/session-report/fixtures.py render [--twice] [--out フォルダ]  # 6 本の手元用と共有用の HTML を書く（--twice は 2 回書いて比べる）
+    python evals/session-report/fixtures.py render [--twice] [--out フォルダ]  # 6 本の HTML を書く（--twice は 2 回書いて比べる）
 
 会話は持ち主の実際の記録ではなく、ここで組み立てる。正解の追記（gold/<名前>.json）は、会話の全文を読んで書いたもの。
 source_digest は作るたびに変わる（記録のパスが入る）ので、gold には "<digest>" と書き、build で埋める。
@@ -199,7 +199,7 @@ def cmd_render(args):
     failed = 0
     for name in SESSIONS:
         target = os.path.join(out, name)
-        for extra, filename in (([], "report.html"), (["--share"], "report-share.html")):
+        for extra, filename in (([], "report.html"),):
             results = []
             for _ in range(2 if args.twice else 1):
                 code, text = run(["render", "--dir", target] + extra, env)

@@ -1,6 +1,6 @@
 ---
 name: session-report
-description: Codex の 1 つの会話を、依頼と成果・決めたこと・残った課題・実際の会話をタブで見られる単体の HTML にする（手元用と共有用）。「このセッションのレポートを作って」「この会話を振り返る HTML」「スプリントで共有するまとめ」と言われたときに使う。過去の会話の中身を探すだけなら session-search、スプリント全体のまとめは sprint-report。
+description: Codex の 1 つの会話を、依頼と成果・決めたこと・残った課題・実際の会話をタブで見られる単体の HTML にする。「このセッションのレポートを作って」「この会話を振り返る HTML」と言われたときに使う。過去の会話の中身を探すだけなら session-search、スプリント全体のまとめは sprint-report。
 metadata:
   short-description: 会話を振り返る HTML を作る
 ---
@@ -49,7 +49,6 @@ REPORT input <ID>
 - 失敗したコマンドを後の操作で解消したら、`command_notes` に失敗した操作と解消した操作の ID を書く。
 - 章（chapters）は、持ち主の発言が 40 件を超える会話だけ。ほかは `[]`。
 - `source_digest` は report.json の `digest` をそのまま写す。推論の中身は書かない。PAT・パスワード・トークンは書かない。
-- 追記の文（要約・依頼・条件・決定・学び・課題）には、URL と絶対パスを書かない。ファイルは名前だけ、場所は言葉で書く（共有用を作るとき、`render --share` が見つけると止まる）。
 - annotations.json は UTF-8 で書く（PowerShell の `Out-File` と `>` は UTF-16 になるので使わない）。
 
 ## 4. 確かめて直す
@@ -63,11 +62,9 @@ REPORT check <ID>
 ## 5. HTML にする
 
 ```powershell
-REPORT render <ID>            # 手元用: report.html（会話の全文と、操作の出力・差分を上限付きで）
-REPORT render <ID> --share    # 共有用: report-share.html（要点と根拠の引用だけ）
+REPORT render <ID>            # report.html（会話の全文と、操作の出力・差分を上限付きで）
 ```
 
-- 共有用は、持ち主が「共有したい」「スプリントで見せる」と言ったときだけ作る。会話の全文・操作の詳細・差分・コマンド・絶対パス・URL を除くが、**要約と引用に共有してよくない内容が残っていないかは持ち主が確かめる。**そう伝える。
 - 記録が変わって check が「source_digest が違う」と出たら、追記を作り直すか、持ち主に聞いて `--stale-ok` で古い追記のまま書く。
 - できたファイルのパスを持ち主に伝える。ブラウザで開くと、概要・会話・依頼と成果・判断と学び・成果物と操作・課題と次の一手のタブで見られる。
 

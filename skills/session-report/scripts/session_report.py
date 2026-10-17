@@ -5,7 +5,7 @@
     python session_report.py input [<thread_id> | --dir DIR] [--part N]
     python session_report.py show-op <操作の ID> [<thread_id> | --dir DIR]
     python session_report.py check [<thread_id> | --dir DIR]
-    python session_report.py render [<thread_id> | --dir DIR] [--stale-ok] [--share]
+    python session_report.py render [<thread_id> | --dir DIR] [--stale-ok]
     python session_report.py override <項目 ID> [<thread_id> | --dir DIR] (--status <状態> --reason <理由> | --clear)
 
 probe: 記録の形（行の種類、項目の種類とキー名、件数、有無）だけを数えて出す。本文・コマンド・出力・パス・引数・検索語・
@@ -1883,7 +1883,7 @@ def build_view(report, ann, overrides, stale=False):
         notices.append("持ち主の訂正 %s は、追記を作り直して対象が変わったので使っていない（override で直し直すか --clear で消す）。" % item_id)
     issues = [{"kind": i["kind"], "text": i["text"]} for i in ann["issues"]]
     view = {
-        "renderer_version": RENDERER_VERSION, "share": False,
+        "renderer_version": RENDERER_VERSION,
         "meta": {"title": s.get("title") or _clip(first_owner, 60) or s["id"], "span": span, "length": length,
                  "cwd": s.get("cwd"), "branch": s.get("branch")},
         "notices": notices, "summary": ann["summary"]["text"], "requests": requests, "questions": questions,
@@ -1898,83 +1898,6 @@ def build_view(report, ann, overrides, stale=False):
                     ["ops", "成果物と操作", len(artifacts) + len(external) + len(file_rows) + len(commands)],
                     ["issues", "課題と次の一手", len(issues)]]
     return view
-
-
-# 共有用に出さない URL と絶対パスを、広めに見つける。形を数え上げて「その部分だけ除く」作りは抜けが出るので、
-# 見つけたら、Codex が書いた文なら render --share を止めて書き直させ、記録から来る文なら丸ごと省く。
-# 誤って見つけても書き直しが 1 回増えるだけで、漏れる向きにはならない。
-_SHARE_RISK = re.compile(
-    r"(?i)[a-z][a-z0-9+.-]*://"                       # https://、file://、ssh:// など
-    r"|(?<![a-z0-9])(?:mailto|data|javascript|vbscript|file|tel|urn):(?=\S)"  # :// の無い URL の形
-    r"|(?<![a-z0-9])www\."                            # www.example.com（日本語の直後も拾う）
-    r"|[a-z]:[\\/]"                                   # C:\ と C:/
-    r"|\\\\|//[^\s/]"                                # UNC（\\server と //server）
-    r"|(?<![a-z0-9._-])/(?=[^\s/])"                    # 前が英数字でない / はパスの頭とみなす（/tmp、/日本語/…、依頼/質問 も拾う）
-    r"|~[\\/]")                                       # ~/...
-SHARE_OMITTED = "（パスか URL を含むため省略）"
-SHARE_NOTICE = ("共有用: 会話の全文・操作の詳細（外部の操作・ファイル・コマンド・差分）・絶対パス・URL は除いた。"
-                "要約と引用に共有してよくない内容が残っていないかは、持ち主が確かめる。")
-
-
-def share_risk(text):
-    return isinstance(text, str) and bool(_SHARE_RISK.search(text))
-
-
-def share_problems(ann, overrides):
-    """共有用に出す、Codex が書いた文と持ち主の訂正の理由のうち、URL か絶対パスがあるもの。"""
-    fields = [("summary", ann["summary"]["text"])]
-    for r in ann["requests"]:
-        fields.append((r["id"], r["text"]))
-        for n, c in enumerate(r["criteria"], 1):
-            fields += [("%s.%d" % (r["id"], n), c["text"]), ("%s.%d.basis" % (r["id"], n), c["basis"])]
-    for q in ann["questions"]:
-        fields += [(q["id"], q["text"]), (q["id"] + ".note", q["note"])]
-    for d in ann["decisions"]:
-        fields += [(d["id"], d["text"]), (d["id"] + ".why", d["why"])] + [(d["id"] + ".alternatives", a) for a in d["alternatives"]]
-    for x in ann["lessons"] + ann["issues"]:
-        fields.append((x["id"], x["text"]))
-    for c in ann["chapters"]:
-        fields.append((c["id"], c["title"]))
-    stale = set(stale_overrides(ann, overrides))
-    for item_id, o in sorted(overrides.items()):
-        if item_id not in stale:  # 効いていない古い訂正の理由は、HTML に出ないので確かめない
-            fields.append(("override " + item_id, o.get("reason")))
-    return ["%s: 共有用の文に URL か絶対パスがある。書き直す（ファイルは名前だけ、場所は言葉で）" % k for k, v in fields if share_risk(v)]
-
-
-def _omit_tree(obj):
-    """記録から来る文に URL か絶対パスがあれば、その文を丸ごと省く（最後の守り）。"""
-    if isinstance(obj, str):
-        return SHARE_OMITTED if share_risk(obj) else obj
-    if isinstance(obj, list):
-        return [_omit_tree(v) for v in obj]
-    if isinstance(obj, dict):
-        return {k: _omit_tree(v) for k, v in obj.items()}
-    return obj
-
-
-def build_share_view(report, ann, overrides, stale=False):
-    """共有用のデータ。手元用のデータから、会話の全文・操作の詳細を除き、URL と絶対パスを除く。"""
-    full = build_view(report, ann, overrides, stale)
-    cwd = full["meta"].get("cwd") or ""
-    flow = full["flow"]
-    if flow:
-        flow = dict(flow, marks=[[name, [dict(m, label="コマンドの失敗") for m in marks]] if name == "失敗" else [name, marks]
-                                 for name, marks in flow["marks"]])
-    view = {
-        "renderer_version": full["renderer_version"], "share": True,
-        # 題名は会話の本文（最初の発言・会話から付いたスレッドの名前）から作らず、Codex が書いた要点から作る
-        "meta": dict(full["meta"], cwd=re.split(r"[\\/]", cwd.rstrip("\\/"))[-1] if cwd else None,
-                     title=_clip(full["requests"][0]["text"] if full["requests"] else full["summary"], 60) or "会話のレポート"),
-        "notices": [SHARE_NOTICE] + full["notices"], "summary": full["summary"], "requests": full["requests"],
-        "questions": full["questions"], "decisions": full["decisions"], "lessons": full["lessons"], "issues": full["issues"],
-        "flow": flow, "chat": None, "coverage": full["coverage"], "counts": {"messages": full["counts"]["messages"]},
-        "ops": {"artifacts": full["ops"]["artifacts"], "external": [], "files": [], "commands": [], "command_total": 0,
-                "command_totals": []},
-    }
-    view["tabs"] = [[tid, label, (None if tid == "chat" else len(full["ops"]["artifacts"]) if tid == "ops" else n)]
-                    for tid, label, n in full["tabs"]]
-    return _omit_tree(view)
 
 
 def embed_json(view):
@@ -2013,15 +1936,8 @@ def cmd_render(args):
         return 1
     ov_path = os.path.join(out, "overrides.json")
     overrides = read_json(ov_path) if os.path.isfile(ov_path) else {}
-    if args.share:
-        problems = share_problems(ann, overrides)
-        if problems:
-            for p in problems:
-                print(p)
-            print("共有用の文に URL か絶対パスがあるので、report-share.html を書かない（%d 件）" % len(problems), file=sys.stderr)
-            return 1
-    view = (build_share_view if args.share else build_view)(report, ann, overrides, stale=stale)
-    path = os.path.join(out, "report-share.html" if args.share else "report.html")
+    view = build_view(report, ann, overrides, stale=stale)
+    path = os.path.join(out, "report.html")
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(render_html(view))
     print("書いた: %s" % path)
@@ -2071,7 +1987,6 @@ def build_parser():
     rd.add_argument("thread_id", nargs="?", type=_thread_id)
     rd.add_argument("--dir", help="report.json のあるフォルダ（既定は会話の ID から決める）")
     rd.add_argument("--stale-ok", action="store_true", help="記録が変わって digest が違っても、古い追記のまま書く（HTML にそう出す）")
-    rd.add_argument("--share", action="store_true", help="共有用（要点と根拠の引用だけ）の report-share.html を書く")
     rd.set_defaults(func=cmd_render)
     ov = sub.add_parser("override", help="依頼・条件・質問の状態を持ち主が直す（overrides.json に保存する）")
     ov.add_argument("item_id", help="R1（依頼）、R1.2（R1 の 2 つ目の条件）、Q1（質問）")

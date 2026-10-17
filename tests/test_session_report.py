@@ -1111,15 +1111,13 @@ class ViewDetailTest(_Base):
         self.assertEqual(d1["replaced_by"], "D2")
 
 
-class StaleOverrideShareTest(_ReportBase):
-    def test_stale_override_reason_does_not_stop_share_and_can_be_cleared(self):
+class StaleOverrideTest(_ReportBase):
+    def test_stale_override_can_be_cleared(self):
         out = self.make()
         self.write_ann(out, good_annotations(sr.read_json(os.path.join(out, "report.json"))))
         with open(os.path.join(out, "overrides.json"), "w", encoding="utf-8") as f:
             json.dump({"R99": {"status": "できた", "reason": "https://old.example/CANARY", "by": "持ち主", "original": "未確認",
                                "target": "無い依頼"}}, f, ensure_ascii=False)
-        code, stdout, err = self.run_cli("render", "--dir", out, "--share")
-        self.assertEqual(code, 0, stdout + err)
         code, stdout, err = self.run_cli("override", "R99", "--dir", out, "--clear")
         self.assertEqual(code, 0, stdout + err)
         self.assertEqual(sr.read_json(os.path.join(out, "overrides.json")), {})
@@ -1134,9 +1132,7 @@ class FinalReviewTest(_ReportBase):
         ann = good_annotations(report)
         ann["summary"]["text"] = "使ったのは " + self.TOK
         ov = {"R2": {"status": "未確認", "reason": "token " + self.TOK, "by": "持ち主", "original": "できた", "target": "PR を作る"}}
-        for build in (sr.build_view, sr.build_share_view):
-            with self.subTest(build=build.__name__):
-                self.assertNotIn(self.TOK, sr.render_html(build(report, ann, ov)))
+        self.assertNotIn(self.TOK, sr.render_html(sr.build_view(report, ann, ov)))
 
     def test_command_arguments_are_redacted_as_a_whole(self):
         o = sr.operation(dict(cmd("x", 0), command=["python", "login.py", "--password", "alpha reviewphrase omega"]),
@@ -1163,16 +1159,6 @@ class FinalReviewTest(_ReportBase):
 
 class FinalReview2Test(_ReportBase):
     TOK = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
-
-    def test_share_title_is_redacted(self):
-        out = self.make()
-        report = sr.read_json(os.path.join(out, "report.json"))
-        ann = good_annotations(report)
-        ann["requests"][0]["text"] = "使う " + self.TOK
-        self.assertNotIn(self.TOK, sr.render_html(sr.build_share_view(report, ann, {})))
-        ann["requests"] = []
-        ann["summary"]["text"] = "使う " + self.TOK
-        self.assertNotIn(self.TOK, sr.render_html(sr.build_share_view(report, ann, {})))
 
     def test_assignment_argument_is_redacted_as_a_whole(self):
         r = Rollout(T1).turn("t1").user("u1", "流して")
@@ -1217,139 +1203,6 @@ class FinalReview2Test(_ReportBase):
         self.assertEqual([o["status"] for o in self.extract(T1)["operations"]], ["incomplete"])
 
 
-class ShareTest(_Base):
-    def test_share_html_leaves_out_details(self):
-        r = Rollout(T1, cwd="C:\\work\\CANARYCWD\\ci-pipelines").turn("t1")
-        r.user("u1", "Tests タブに何も出ない。CANARYMSG の件も見て")
-        r.item(cmd("python CANARYCMD.py", 1, oid="c1", output="CANARYOUT failed"))
-        r.item({"type": "FileChange", "id": "f1", "status": "completed", "changes": {
-            "C:\\Users\\me\\CANARYPATH\\x.py": {"type": "update", "unified_diff": "--- a\n+++ b\n@@\n-a\n+CANARYDIFF\n"}}})
-        r.agent("a1", "置き場所がずれていました。詳しくは https://tfs.example/CANARYURL/x を見てください").end("x")
-        self.write(T1, r.text())
-        report = self.extract(T1)
-        out = os.path.join(self.tmp.name, "out")
-        ann = {"format_version": "1", "source_digest": report["digest"],
-               "summary": {"text": "置き場所を直した。",
-                           "evidence": [{"ref": "a1", "quote": "置き場所がずれていました"}]},
-               "chapters": [], "questions": [], "lessons": [], "command_notes": [],
-               "requests": [{"id": "R1", "text": "Tests タブに出す", "at": "u1", "lifecycle": "有効", "criteria": [],
-                             "evidence": [{"ref": "u1", "quote": "Tests タブに何も出ない"}]}],
-               "decisions": [{"id": "D1", "text": "置き場所をそろえる", "at": "a1", "by": "Codex の提案のまま", "why": "",
-                              "alternatives": [], "supersedes": None, "evidence": [{"ref": "a1", "quote": "置き場所がずれていました"}]}],
-               "issues": [{"id": "I1", "kind": "未解決", "text": "CANARYCMD.py が落ちる", "evidence": [{"ref": "c1", "quote": "CANARYOUT"}]}],
-               "owner_messages": {"u1": ["R1"]}}
-        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
-            json.dump(ann, f, ensure_ascii=False)
-        # 追記の文に URL や絶対パスがあれば、共有用は書かずに止まる（Codex が書き直す）
-        ann_risky = json.loads(json.dumps(ann))
-        ann_risky["summary"]["text"] = "置き場所を直した。https://tfs.example/CANARYURL2 と C:\\Users\\me\\CANARYPATH2\\y.py"
-        ann_risky["decisions"][0]["why"] = "場所は/Users/CANARYPARENT/x.py"
-        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
-            json.dump(ann_risky, f, ensure_ascii=False)
-        code, stdout, err = self.run_cli("render", "--dir", out, "--share")
-        self.assertEqual(code, 1)
-        self.assertIn("summary: 共有用の文に URL か絶対パスがある", stdout)
-        self.assertIn("D1.why: 共有用の文に URL か絶対パスがある", stdout)
-        self.assertFalse(os.path.exists(os.path.join(out, "report-share.html")))
-        # 記録から来る引用に URL があれば、引用を丸ごと省く
-        ann["decisions"][0]["evidence"] = [{"ref": "a1", "quote": "https://tfs.example/CANARYURL/x"}]
-        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
-            json.dump(ann, f, ensure_ascii=False)
-        code, stdout, err = self.run_cli("render", "--dir", out, "--share")
-        self.assertEqual(code, 0, stdout + err)
-        html = open(os.path.join(out, "report-share.html"), encoding="utf-8").read()
-        for canary in ("CANARYMSG", "CANARYOUT", "CANARYDIFF", "CANARYPATH", "CANARYURL", "CANARYCWD", "tfs.example", "C:\\\\"):
-            with self.subTest(canary=canary):
-                self.assertNotIn(canary, html)
-        view = json.loads(html.split('id="data">', 1)[1].split("</script>", 1)[0])
-        self.assertTrue(view["share"])
-        self.assertIsNone(view["chat"])
-        self.assertIn("共有してよくない内容が残っていないかは、持ち主が確かめる", view["notices"][0])
-        self.assertEqual(view["meta"]["cwd"], "ci-pipelines")
-        self.assertEqual(view["meta"]["title"], "Tests タブに出す")
-        self.assertEqual(view["summary"], "置き場所を直した。")
-        self.assertEqual(view["decisions"][0]["quote"], "（パスか URL を含むため省略）")
-        self.assertEqual([m[0] for m in view["flow"]["marks"]], ["依頼", "決定", "失敗"])
-        self.assertEqual(view["flow"]["marks"][2][1][0]["label"], "コマンドの失敗")
-        # 課題の本文（持ち主が読むために Codex が書いた要点）は残す。コマンドの名前が入っていても消さない
-        self.assertEqual(view["issues"][0]["text"], "CANARYCMD.py が落ちる")
-        # 手元用には詳細が残る
-        self.run_cli("render", "--dir", out)
-        local = open(os.path.join(out, "report.html"), encoding="utf-8").read()
-        self.assertIn("CANARYOUT", local)
-        self.assertIn("CANARYMSG", local)
-
-
-class ShareRiskTest(unittest.TestCase):
-    RISKY = ["/workspace/CANARYPARENT/x.py", "C:/Users/CANARYPARENT/x.py", "//server/CANARYSHARE/x.py",
-             '"C:\\Users\\Jane Doe\\CANARYPARENT\\x.py"', '"/Users/Jane Doe/CANARYPARENT/x.py"', "参照https://example.test/CANARYURL",
-             "場所は/Users/CANARYPARENT/x.py", "確認(https://example.test/x)してから", "\\\\server\\share\\a.txt", "~/CANARY/x",
-             "www.example.test/CANARY", "file:///C:/CANARY", "C:\\work\\CANARY", "/CANARY_ROOT", "/日本語/CANARY.txt",
-             "/Company Data/CANARY.txt", "場所は /tmp", "参照www.example.test/CANARY", "mailto:person@CANARY.example",
-             "data:text/plain,CANARY", "依頼/質問"]
-    PLAIN = ["tests/test_retry.py は相対", "ratio 1/2 と CI/CD", "src\\clock.py を直した", "and/or",
-             "_apis/wit/workitems/1287 を PATCH", "データ: 3 件", "PR #482 を作った"]
-
-    def test_risky_strings_are_found(self):
-        for s in self.RISKY:
-            with self.subTest(s=s):
-                self.assertTrue(sr.share_risk(s))
-        for s in self.PLAIN:
-            with self.subTest(s=s):
-                self.assertFalse(sr.share_risk(s))
-
-
-_cspec = importlib.util.spec_from_file_location("compare", os.path.join(ROOT, "evals", "session-report", "compare.py"))
-compare = importlib.util.module_from_spec(_cspec)
-_cspec.loader.exec_module(compare)
-
-
-class CompareTest(unittest.TestCase):
-    def gold(self, name):
-        with open(os.path.join(ROOT, "evals", "session-report", "gold", name + ".json"), encoding="utf-8") as f:
-            return json.load(f)
-
-    def test_gold_against_itself_is_clean(self):
-        for name in ("short", "condition_change", "fail_then_fix", "waiting_approval", "aborted", "long"):
-            with self.subTest(name=name):
-                r = compare.compare(self.gold(name), self.gold(name))
-                self.assertEqual((r["requests_missed"], r["criteria_missed"], r["decisions_missed"], r["done_misjudged"]), ([], [], [], []))
-
-    def test_counts_misses_and_wrong_done(self):
-        gold = self.gold("fail_then_fix")
-        cand = json.loads(json.dumps(gold))
-        cand["requests"][0]["criteria"] = [dict(cand["requests"][0]["criteria"][0]),
-                                           dict(cand["requests"][0]["criteria"][1], status="できた")]  # CI で通るを「できた」に
-        cand["decisions"] = []
-        r = compare.compare(gold, cand)
-        self.assertEqual(r["decisions_missed"], ["D1: タイムアウトを環境変数 RETRY_TIMEOUT で変えられるようにし、既定を 10 秒にする"])
-        self.assertEqual(r["done_misjudged"], ["R1（正解: 一部）", "R1 の条件「CI で通る」（正解: 未確認）"])
-        # 条件を 1 つ落とし、依頼の文を言い換えても、同じ発言の依頼として対応を付ける
-        cand = json.loads(json.dumps(gold))
-        cand["requests"][0]["text"] = "テストが CI で落ちる件"
-        del cand["requests"][0]["criteria"][1]
-        r = compare.compare(gold, cand)
-        self.assertEqual((r["requests_missed"], r["criteria_missed"]), ([], ["R1: CI で通る"]))
-        # 依頼が丸ごと無い
-        cand["requests"] = []
-        r = compare.compare(gold, cand)
-        self.assertEqual((r["requests_missed"], len(r["criteria_missed"])), (["R1"], 2))
-        self.assertIn("依頼 1 のうち取りこぼし 1・条件 2 のうち 2", compare.summary_line("x", r))
-
-    def test_one_candidate_is_matched_to_one_request(self):
-        crit = [{"text": "テストが通る", "origin": "持ち主", "status": "できた", "basis": "", "evidence": []}]
-        req = lambda rid, text: {"id": rid, "text": text, "at": "u1", "lifecycle": "有効", "criteria": crit, "evidence": []}
-        gold = {"requests": [req("R1", "Windows 対応"), req("R2", "Linux 対応")], "decisions": []}
-        cand = {"requests": [req("R1", "Windows 対応")], "decisions": []}
-        r = compare.compare(gold, cand)
-        self.assertEqual((r["requests_missed"], r["criteria_missed"]), (["R2"], ["R2: テストが通る"]))
-
-    def test_withdrawn_requests_are_not_counted(self):
-        gold = self.gold("condition_change")
-        r = compare.compare(gold, {"requests": [], "decisions": []})
-        self.assertEqual(r["requests_missed"], ["R1"])
-
-
 class FixturesTest(unittest.TestCase):
     def test_gold_annotations_pass_check(self):
         # 作り物の会話 6 本の正解の追記が、会話とずれていない（evals/session-report/fixtures.py）
@@ -1362,7 +1215,7 @@ class FixturesTest(unittest.TestCase):
         r = subprocess.run([sys.executable, os.path.join(ROOT, "evals", "session-report", "fixtures.py"), "render", "--twice"],
                            capture_output=True, encoding="utf-8", env=dict(os.environ, TZ="Asia/Tokyo"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(r.stdout.count("同じバイト列: はい"), 12)  # 6 本の手元用と共有用
+        self.assertEqual(r.stdout.count("同じバイト列: はい"), 6)
 
 
 class SearchModuleTest(unittest.TestCase):
