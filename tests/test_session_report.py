@@ -1084,6 +1084,53 @@ class RenderTest(_ReportBase):
         self.assertEqual([m[0] for m in view["flow"]["marks"]], ["依頼", "決定", "失敗"])
 
 
+class ShareTest(_Base):
+    def test_share_html_leaves_out_details(self):
+        r = Rollout(T1, cwd="C:\\work\\CANARYCWD\\ci-pipelines").turn("t1")
+        r.user("u1", "Tests タブに何も出ない。CANARYMSG の件も見て")
+        r.item(cmd("python CANARYCMD.py", 1, oid="c1", output="CANARYOUT failed"))
+        r.item({"type": "FileChange", "id": "f1", "status": "completed", "changes": {
+            "C:\\Users\\me\\CANARYPATH\\x.py": {"type": "update", "unified_diff": "--- a\n+++ b\n@@\n-a\n+CANARYDIFF\n"}}})
+        r.agent("a1", "置き場所がずれていました。詳しくは https://tfs.example/CANARYURL/x を見てください").end("x")
+        self.write(T1, r.text())
+        report = self.extract(T1)
+        out = os.path.join(self.tmp.name, "out")
+        ann = {"format_version": "1", "source_digest": report["digest"],
+               "summary": {"text": "置き場所を直した。https://tfs.example/CANARYURL2 と C:\\Users\\me\\CANARYPATH2\\y.py",
+                           "evidence": [{"ref": "a1", "quote": "置き場所がずれていました"}]},
+               "chapters": [], "questions": [], "lessons": [], "command_notes": [],
+               "requests": [{"id": "R1", "text": "Tests タブに出す", "at": "u1", "lifecycle": "有効", "criteria": [],
+                             "evidence": [{"ref": "u1", "quote": "Tests タブに何も出ない"}]}],
+               "decisions": [{"id": "D1", "text": "置き場所をそろえる", "at": "a1", "by": "Codex の提案のまま", "why": "",
+                              "alternatives": [], "supersedes": None, "evidence": [{"ref": "a1", "quote": "置き場所がずれていました"}]}],
+               "issues": [{"id": "I1", "kind": "未解決", "text": "CANARYCMD.py が落ちる", "evidence": [{"ref": "c1", "quote": "CANARYOUT"}]}],
+               "owner_messages": {"u1": ["R1"]}}
+        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(ann, f, ensure_ascii=False)
+        code, stdout, err = self.run_cli("render", "--dir", out, "--share")
+        self.assertEqual(code, 0, stdout + err)
+        html = open(os.path.join(out, "report-share.html"), encoding="utf-8").read()
+        for canary in ("CANARYMSG", "CANARYOUT", "CANARYDIFF", "CANARYPATH", "CANARYURL", "CANARYCWD", "tfs.example", "C:\\\\"):
+            with self.subTest(canary=canary):
+                self.assertNotIn(canary, html)
+        view = json.loads(html.split('id="data">', 1)[1].split("</script>", 1)[0])
+        self.assertTrue(view["share"])
+        self.assertIsNone(view["chat"])
+        self.assertIn("共有してよくない内容が残っていないかは、持ち主が確かめる", view["notices"][0])
+        self.assertEqual(view["meta"]["cwd"], "ci-pipelines")
+        self.assertEqual(view["meta"]["title"], "Tests タブに出す")
+        self.assertIn("置き場所を直した。[URL] と y.py", view["summary"])
+        self.assertEqual([m[0] for m in view["flow"]["marks"]], ["依頼", "決定", "失敗"])
+        self.assertEqual(view["flow"]["marks"][2][1][0]["label"], "コマンドの失敗")
+        # 課題の本文（持ち主が読むために Codex が書いた要点）は残す。コマンドの名前が入っていても消さない
+        self.assertEqual(view["issues"][0]["text"], "CANARYCMD.py が落ちる")
+        # 手元用には詳細が残る
+        self.run_cli("render", "--dir", out)
+        local = open(os.path.join(out, "report.html"), encoding="utf-8").read()
+        self.assertIn("CANARYOUT", local)
+        self.assertIn("CANARYMSG", local)
+
+
 class FixturesTest(unittest.TestCase):
     def test_gold_annotations_pass_check(self):
         # 作り物の会話 6 本の正解の追記が、会話とずれていない（evals/session-report/fixtures.py）
@@ -1096,7 +1143,7 @@ class FixturesTest(unittest.TestCase):
         r = subprocess.run([sys.executable, os.path.join(ROOT, "evals", "session-report", "fixtures.py"), "render", "--twice"],
                            capture_output=True, encoding="utf-8", env=dict(os.environ, TZ="Asia/Tokyo"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(r.stdout.count("同じバイト列: はい"), 6)
+        self.assertEqual(r.stdout.count("同じバイト列: はい"), 12)  # 6 本の手元用と共有用
 
 
 class SearchModuleTest(unittest.TestCase):

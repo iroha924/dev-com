@@ -256,13 +256,14 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - 結果: `python3 -m unittest tests.test_session_report -k Render` → 5 件 OK。`python3 evals/session-report/fixtures.py render --twice` → 6 本とも「同じバイト列: はい」。`python3 -m unittest discover -s tests` → 383 件 OK（skip 24）
   - 結果: `python3 evals/session-report/fixtures.py build <フォルダ>` → 作り物の会話の HTML を Chrome で開き、幅 1280px と 360px（iframe）、ライトとダークで 6 タブ・操作の切り替え・出力の開閉・流れの横の流れを見た。コンソールのエラー 0 件。会話の絞り込みは A5 で見る
 
-- [ ] T09: 共有用の render
+- [x] T09: 共有用の render
   - 種別: 追加
   - 計画: S8
   - 依存: T08（テンプレートと render が要る）
-  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - 変更: `skills/session-report/scripts/session_report.py`, `skills/session-report/scripts/template.html`, `evals/session-report/fixtures.py`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report -k Share` → OK（会話の全文・コマンド・差分・絶対パス・URL に入れた目印が report-share.html に無い、頭に共有の可否の注意）
   - コミット: `feat(session-report): 要点と根拠の抜粋だけの共有用の render を足す`
+  - 結果: `python3 -m unittest tests.test_session_report -k Share` → OK（会話の本文・コマンド・出力・差分・絶対パス・URL・作業フォルダの目印が report-share.html に無い、頭に共有の可否の知らせ）。`python3 evals/session-report/fixtures.py render --twice` → 手元用と共有用の 12 本とも「同じバイト列: はい」。`python3 -m unittest discover -s tests` → 384 件 OK（skip 24）
 
 ## P5: 使える形にまとめる
 
@@ -285,6 +286,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T09 / 変更の欄に template.html と fixtures.py を足した（前: session_report.py とテスト、後: それに加えて、共有用の操作のタブの表示と、fixtures で共有用も書いて比べるため）。目印のテストで、共有用の題名が持ち主の最初の発言から作られて会話の本文が出ることが分かった。共有用の題名は、Codex が書いた最初の依頼の要点（無ければ要約）から作る。スレッドの名前も会話から付くので共有用では使わない
 
 - 2026-10-18 / T08 / 表示に要る値（時刻・状態・訂正・件数・流れの位置）は Python の build_view で決め、テンプレートの JS は描くだけにした（同じバイト列とテストのため）。Chrome で見て、短い会話で帯の名前が切れる・0 分の目盛りが隠れる・取り下げが 2 回出る、を直した。ウィンドウの幅を変えられなかったので、幅 375px の iframe で狭い表示を見た
 

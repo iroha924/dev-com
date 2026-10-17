@@ -377,6 +377,9 @@ const VIEWS = {
       h("div", { class: "scroll-x" }, h("ul", { class: "rows lined" }, O.commands.map((c) => h("li", { class: "cmd" }, h("span", { class: "tnum sub" }, c.time), state(c.status),
         h("span", { class: "mono" }, c.text, c.output ? h("details", {}, h("summary", { class: "sub small" }, "出力（" + c.output_chars + " 文字" + (c.output_cut ? "、先頭と末尾だけ" : "") + "）"), h("pre", { class: "out" }, c.output)) : null),
         h("span", { class: "tnum sub" }, c.took)))))] : empty("コマンドの記録なし");
+    if (D.share) return [sec("成果物と操作", "ARTIFACTS & OPERATIONS", O.artifacts.length + " 件",
+      O.artifacts.length ? h("ul", { class: "rows" }, O.artifacts.map((a) => h("li", {}, rowMeta(a.kind, a.status), h("p", { class: "ttl big" }, a.label)))) : empty("成果物の記録なし"),
+      h("p", { class: "note small" }, "共有用のため、外部の操作・ファイル・コマンドは載せていない"))];
     return [sec("成果物と操作", "ARTIFACTS & OPERATIONS", "",
       h("div", { class: "subchips", role: "tablist" }, segs.map(([id, l]) => h("button", { class: "chip", "aria-selected": String(ui.op === id), onclick: () => { ui.op = id; render(); } }, l))), body)];
   },
