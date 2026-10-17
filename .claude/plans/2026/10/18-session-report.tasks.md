@@ -174,6 +174,16 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `feat(session-report): 追記の形を決め、根拠と漏れを確かめる check を足す`
   - 結果: `python3 -m unittest tests.test_session_report -k Check` → 4 件 OK（引用・ref・持ち主の発言・digest の 4 つで終了コード 1 と項目 ID、ほかに重複 ID・形・答えの発言・at・owner_messages の値とキー・条件の根拠）。依頼の状態の集め方の 4 通りは T04 の test_request_status。`python3 -m unittest discover -s tests` → 376 件 OK（skip 24）
 
+- [x] T21: input の未決の項目の伏せ字・同じ ID の操作の位置・見出しを含めた上限を直す
+  - 種別: 修正
+  - 計画: S4
+  - 依存: T20（直す対象の input の区切り方が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Input` → 2 件 FAIL（未決の項目に伏せ字が無い、同じ ID の操作がもう一度来ると後ろへ移る）。上限の確かめは同じテストの後ろにあり、直した後に流した
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): input の未決の項目に伏せ字をかけ、同じ ID の操作を最初の位置に置き、見出しを含めて上限に収める`
+  - 結果: red を直す前のコードで実測 → 2 件 FAIL。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 69 件 OK（50,000 文字の発言 3 件と未決の項目 100 件で、どの input も 60,000 文字以内）
+
 - [ ] T06: override
   - 種別: 追加
   - 計画: S6
@@ -231,6 +241,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T21 / T04 のレビュー（ec379e8）の 3 件（F1 未決の項目の伏せ字 P2、F2 同じ ID の操作の位置 P2、F3 見出しを含めると上限を超える P2）を再現で確かめて受理 / T21 を足して直した。未決の項目は 3,000 文字まで書き、超えた分は件数だけにした。1 件で上限を超える発言は分けない
 
 - 2026-10-18 / T05 / 引用の照合で空白を 1 つに詰めると、日本語の本文に無い空白を引用に入れたときに一致しない。空白をすべて除いて比べることにした。スキーマの検査は、annotations.schema.json で使う語（type・enum・required・properties・additionalProperties・items・pattern・$ref）だけを標準ライブラリで確かめる
 

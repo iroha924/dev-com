@@ -1051,7 +1051,7 @@ def collect_operations(data):
             continue
         key = op["id"] or "L%d" % line_no
         op["id"] = key
-        op["seq"] = line_no
+        op["seq"] = ops[key]["seq"] if key in ops else line_no  # 同じ ID の記録がもう一度来ても、最初の位置に置く
         if key not in ops:
             order.append(key)
         ops[key] = op
@@ -1131,7 +1131,9 @@ def cmd_extract(args):
 
 # --- input と show-op: Codex に読ませる材料 ---------------------------------------------------------
 
-INPUT_LIMIT = 60000  # 1 つの input の文字数の上限（持ち主の発言の切れ目で分ける）
+INPUT_LIMIT = 60000  # 1 つの input の文字数の上限（見出しと未決の項目を含む）
+HEADER_RESERVE = 4000  # 見出しと未決の項目に取っておく文字数
+PENDING_LIMIT = 3000  # 未決の項目の文字数の上限（超えた分は件数だけ書く）
 KIND_LABEL = {"user": "持ち主", "commentary": "Codex（途中の回答）", "final": "Codex（最終の回答）"}
 ROUTE_LABEL = {"command": "コマンド", "mcp": "MCP", "web": "Web", "file": "ファイルの変更", "image": "画像を開いた",
                "extension": "拡張"}
@@ -1221,14 +1223,22 @@ def split_parts(entries, limit=INPUT_LIMIT):
 
 def pending_items(annotations):
     """前の範囲までの追記で未決の項目（できた以外の有効な依頼、答えた以外の質問）。"""
-    out = []
+    rows = []
     for r in annotations.get("requests") or []:
         st = request_status(r)
         if st and st != "できた":
-            out.append("- %s（%s）: %s" % (r.get("id"), st, r.get("text")))
+            rows.append("- %s（%s）: %s" % (r.get("id"), st, r.get("text")))
     for q in annotations.get("questions") or []:
         if q.get("status") != "答えた":
-            out.append("- %s（%s）: %s" % (q.get("id"), q.get("status"), q.get("text")))
+            rows.append("- %s（%s）: %s" % (q.get("id"), q.get("status"), q.get("text")))
+    out, size = [], 0
+    for n, row in enumerate(rows):
+        row = ss.redact(row[:300])  # 追記は手でも直せるので、Codex に渡す前に伏せ字をかける
+        if size + len(row) > PENDING_LIMIT:
+            out.append("- ほか %d 件（annotations.json を読む）" % (len(rows) - n))
+            break
+        out.append(row)
+        size += len(row) + 1
     return out
 
 
@@ -1248,7 +1258,7 @@ def resolve_dir(args):
 def cmd_input(args):
     out = resolve_dir(args)
     report = read_json(os.path.join(out, "report.json"))
-    parts = split_parts(input_entries(report))
+    parts = split_parts(input_entries(report), limit=INPUT_LIMIT - HEADER_RESERVE)
     if not 1 <= args.part <= len(parts):
         print("範囲は 1〜%d" % len(parts), file=sys.stderr)
         return 1

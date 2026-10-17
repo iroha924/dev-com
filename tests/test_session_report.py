@@ -765,6 +765,37 @@ class InputTest(_Base):
         self.assertEqual(code, 1)
         self.assertIn("範囲は 1〜1", err)
 
+    def test_pending_items_are_redacted_and_parts_keep_the_limit(self):
+        tok = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
+        self.assertNotIn(tok, "\n".join(sr.pending_items({"requests": [
+            {"id": "R1", "text": "使う " + tok, "lifecycle": "有効", "criteria": []}]})))
+        r = Rollout(T1).turn("t1")
+        r.user("u1", "a" * 50000).agent("a1", "b" * 50000).user("u2", "c" * 50000).end("x")
+        self.write(T1, r.text())
+        self.extract(T1)
+        out = os.path.join(self.tmp.name, "out")
+        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump({"requests": [{"id": "R%d" % n, "text": "長い依頼 " + "z" * 300, "lifecycle": "有効", "criteria": []}
+                                    for n in range(100)]}, f, ensure_ascii=False)
+        n = 1
+        while self.run_cli("input", "--dir", out, "--part", str(n))[0] == 0:
+            with open(os.path.join(out, "input-%d.md" % n), encoding="utf-8") as f:
+                self.assertLessEqual(len(f.read()), sr.INPUT_LIMIT)
+            n += 1
+        self.assertGreater(n, 2)
+
+    def test_repeated_operation_keeps_its_place(self):
+        r = Rollout(T1).turn("t1").user("u1", "a")
+        r.item(cmd("python x.py", 1, oid="c1"))
+        r.agent("a1", "直します", phase="commentary")
+        r.item(cmd("python x.py", 0, oid="c1"))  # 同じ ID の完了の記録がもう一度
+        r.agent("a2", "直りました").end("直りました")
+        self.write(T1, r.text())
+        rep = self.extract(T1)
+        self.assertEqual(rep["operations"][0]["status"], "ok")
+        text = "".join(e for e, _ in sr.input_entries(rep))
+        self.assertLess(text.index("[c1]"), text.index("[a1]"))
+
     def test_request_status(self):
         cases = [([], "未確認"), (["できた", "できた"], "できた"), (["できた", "未確認"], "一部"), (["一部"], "一部"),
                  (["できていない", "未確認"], "できていない"), (["未確認"], "未確認")]
