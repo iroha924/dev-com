@@ -35,7 +35,7 @@ import unicodedata
 
 SCHEMA_VERSION = "3"
 # 取り出し方・正規化・伏せ字を変えたら上げる。上がると全部を取り込み直す。
-EXTRACT_VERSION = "3"
+EXTRACT_VERSION = "4"
 # 単語の索引の作り方。変えたら単語の索引だけを作り直す（取り込み直しや埋め込みの作り直しは要らない）
 WORDS_VERSION = "2"
 
@@ -108,10 +108,16 @@ _SECRET_PATTERNS = [
     # 秘密鍵のブロック（END が無く途中で切れたものも、鍵の本文らしい部分まで伏せる）
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|[A-Za-z0-9+/=\s]*)", re.S),
      "[REDACTED-PRIVATE-KEY]"),
+    # PowerShell の変数への代入: $env:SSH_KEY_DIR = "C:\dir\" / $password = "...（改行も）..."。PowerShell では \ は
+    # 逃がしの文字ではないので、バッククォートだけを逃がしと見て、閉じる引用符で止める（次の行まで消さない）
+    (re.compile(r"(?i)(\$(?:env:)?\w*(?:" + _KEY_NAME + "|" + _SECRET_WORD + r")\w*[ \t]*=[ \t]*)(\"(?:[^\"`]|`.){1,100000}\")"),
+     _keep_quote),
+    # Python の代入: password = 'abc\'def'（$ の付かない名前は、\' を閉じる引用符と見ない。$ の付く PowerShell は後の規則）
+    (re.compile(r"(?i)(?<![\w$])((?:[a-z_]\w*?)?" + _KEY_NAME + r"[ \t]*:?=[ \t]*)('(?:[^'\\\n]|\\.)*')"), _keep_quote),
     # Authorization ヘッダーと Bearer トークン
     # Authorization ヘッダー: 方式の名前（Basic・SharedKey など、知らないものも）を含めて、行の終わりか引用符まで伏せる
-    (re.compile(r"(?i)(authorization[\"']?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(authorization[\"']?[ \t]*[:=][ \t]*)(?![ \t\"'])((?:=\"[^\"\r\n]*\"|='[^'\r\n]*'|[^\r\n\"']){3,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(authorization[\"']?\]?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(authorization[\"']?\]?[ \t]*[:=][ \t]*)(?![ \t\"'])((?:=\"[^\"\r\n]*\"|='[^'\r\n]*'|[^\r\n\"']){3,})"), r"\1[REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
     # PowerShell: パイプで渡す '...' | ConvertTo-SecureString、引数の '...'・"..."・引用符なし、-Password などの引数
     (re.compile(r"(?i)(" + _DQ + "|" + _SQ + r")(\s*\)?\s*\|\s*ConvertTo-SecureString)"), r"'[REDACTED]'\2"),
@@ -162,8 +168,8 @@ _SECRET_PATTERNS = [
     # mysql -pPASSWORD（-p に続けて書く）
     (re.compile(r"(?i)(\bmysql(?:dump)?\b[^\n|;]*?\s-p)([^\s'\"|;-][^\s'\"|;]*)"), r"\1[REDACTED]"),
     # curl -u user:pw / --user user:pw
-    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)(?:\s+|=)?[^\s:'\"=]*:)([^\s'\"|;]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)(?:\s+|=)?([\"'])[^\s:'\"]*:)((?:(?!\2)[^\n])+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-(?!-)[A-Za-z]*u|--user)(?:\s+|=)?[^\s:'\"=]*:)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-(?!-)[A-Za-z]*u|--user)(?:\s+|=)?([\"'])[^\s:'\"]*:)((?:(?!\2)[^\n])+)"), r"\1[REDACTED]"),
     # -StorageAccountKey X / --account-key X / --sas-token X
     (re.compile(r"(?i)((?:^|\s)--?(?:storageaccountkey|account-key|sas-token|client-secret)(?:\s+|=))(" + _DQ + "|" + _SQ + ")"),
      _keep_quote),
@@ -190,7 +196,7 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
      lambda m: m.group(1) + m.group(2)[:2] + "[REDACTED]" + m.group(2)[-2:]),
     # YAML のブロック: secret: | の次の行から、字下げが続くところまで
-    (re.compile(r"(?im)^(([ \t]*)(-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>](?:[-+]?[1-9]?|[1-9][-+])[ \t]*\r?\n)"
+    (re.compile(r"(?im)^(([ \t]*)(-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>](?:[-+]?[1-9]?|[1-9][-+])[ \t]*(?:#[^\n]*)?\r?\n)"
                 r"((?:(?:[ \t]*\r?\n)*\2(?(3)  )[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
     # 環境変数の名前: AWS_SECRET_ACCESS_KEY=... / GITHUB_TOKEN: ... / DB_PASS=...（区切りの語が secret・token・password・key・pat・pass）。
     # 引用符付きの値（$env:AZURE_OPENAI_KEY = "..."）も
@@ -198,6 +204,11 @@ _SECRET_PATTERNS = [
       for flags, name in _ENV_NAMES],
     *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]")
       for flags, name in _ENV_NAMES],
+    # Azure Pipelines の変数: - name: DB_PASSWORD / value: X（名前の行の次の value）
+    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*\r?\n[ \t]*value:[ \t]*)(" + _DQ + "|" + _SQ + ")"),
+     _keep_quote),
+    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*\r?\n[ \t]*value:[ \t]*)(?![\"'|>])([^\s#]+)"),
+     r"\1[REDACTED]"),
     # PowerShell の変数: $pass = '...' / $pw = "..." / $adminPass = ...
     (re.compile(r"(?i)(\$\w*(?:pass|pw)\w*[ \t]*=[ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(\$\w*(?:pass|pw)\w*[ \t]*=[ \t]*)(?![\"'$(@\[])([^\s;|]+)"), r"\1[REDACTED]"),
@@ -207,6 +218,7 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)((?:NetworkCredential\s*(?:\]::new)?|HttpNtlmAuth|HTTPBasicAuth|HTTPDigestAuth|\bauth\s*=\s*)\s*\(\s*"
                 r"(?:" + _DQ + "|" + _SQ + r")\s*,\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     # TFVC: tf ... /login:DOMAIN\user,X
+    (re.compile(r"(?i)(/login:[^,\s\"']+,)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(/login:[^,\s\"']+,)([^\s\"']+)"), r"\1[REDACTED]"),
     # net use \\host\share /user:DOMAIN\user X（パスワードを後ろに書く順）
     (re.compile(r"(?i)(\bnet\s+use\b[^\n|;]*?/user:\S+\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
@@ -572,8 +584,9 @@ def parse_rollout(path, data):
                 if it.get("type") == "UserMessage":
                     add("user", _texts(it.get("content"), {"text"}, USER_SKIP_TYPES, counters), i, ts, _str(it.get("id")))
                 elif it.get("type") == "AgentMessage":
-                    # partial_answer は回答の確かな部分（Codex は回答の側に数える）。commentary だけが途中の回答
-                    kind = "final" if it.get("phase") in ("final_answer", "partial_answer") else "commentary"
+                    # partial_answer は回答の確かな部分（Codex は回答の側に数える）。commentary だけが途中の回答。
+                    # phase の無い回答は、Codex と同じく最終の回答として扱う（core/src/stream_events_utils.rs）
+                    kind = "commentary" if it.get("phase") == "commentary" else "final"
                     add(kind, _texts(it.get("content"), {"Text", "text"}, set(), counters), i, ts, _str(it.get("id")))
             elif ptype == "user_message":  # Legacy
                 if isinstance(payload.get("message"), str):
@@ -596,13 +609,17 @@ def parse_rollout(path, data):
 
     # 最終の回答の印（phase=final_answer）が無いターンは、task_complete の last_agent_message を最終の回答にする。
     # turn_id の無い古い記録は全部のターンが None になるので、ターンで済みかを見ず、その行より前の発言だけを見る。
+    import bisect
+    ordered = sorted(messages, key=lambda m: m["line"])  # 足した最終の回答も、行の順の位置に差し込む
+    lines = [m["line"] for m in ordered]
     for tid, last, line_no, ts, tcwd in pending_task_complete:
         if tid is not None and tid in finals_by_turn:
             continue
         # 同じ本文の途中の回答があれば、それを最終の回答に格上げする（二重に持たない）。
         promoted = False
-        for msg in sorted(messages, key=lambda m: m["line"], reverse=True):  # 足した最終の回答は末尾に付くので、行の順に見る
-            if msg["turn_id"] != tid or msg["line"] >= line_no:
+        for pos in range(bisect.bisect_left(lines, line_no) - 1, -1, -1):
+            msg = ordered[pos]
+            if msg["turn_id"] != tid:
                 continue
             if msg["kind"] == "user":
                 break  # このターンの依頼より前は、別のターン
@@ -613,8 +630,13 @@ def parse_rollout(path, data):
         if not promoted:
             saved_turn, saved_cwd = turn_id, cwd
             turn_id, cwd = tid, tcwd
+            before = len(messages)
             add("final", last, line_no, ts, None)
             turn_id, cwd = saved_turn, saved_cwd
+            if len(messages) > before:
+                at = bisect.bisect_right(lines, line_no)
+                ordered.insert(at, messages[-1])
+                lines.insert(at, line_no)
         finals_by_turn.add(tid)
     if response_users and not meta["agent"] and not any(m["kind"] == "user" for m in messages):
         # 持ち主の依頼らしい行はあるのに、読み方の分かる形で 1 件も取れなかった（子のエージェントへの指示は除く）
@@ -795,6 +817,14 @@ class Index:
         self.fts = self._has_table("msg_fts")
         self.words = self._has_table("words_fts")
         self._vec_cache = None
+        if not readonly:
+            # 前のバージョンで forget した会話の、ファイルの行の無い本文（取り込みの途中で止まったもの）も消す
+            orphans = self.db.execute("SELECT m.id FROM messages m JOIN forgotten f ON f.codex_home = m.codex_home "
+                                      "AND f.thread_id = m.thread_id").fetchall()
+            if orphans:
+                with self.db:
+                    for (mid,) in orphans:
+                        self._delete_message(mid)
 
     def close(self):
         self.db.close()

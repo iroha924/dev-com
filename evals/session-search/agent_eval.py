@@ -91,13 +91,34 @@ def run_condition(args, mode, q, prompt):
     """採点を使い回してよい条件（依頼文・正解・モデル・effort・索引・写し・専用の環境・検索の実装）の指紋。"""
     import hashlib
     h = hashlib.sha256()
-    for part in (prompt, json.dumps(q.get("gold"), sort_keys=True), mode, args.model, args.effort, os.path.abspath(args.db),
+    for part in (prompt, json.dumps(q.get("gold"), sort_keys=True), mode, args.model, args.effort, getattr(args, "codex_version", ""),
+                 os.path.abspath(args.db),
                  os.path.abspath(args.plain), os.path.abspath(getattr(args, "snapshot", "") or ""),
                  os.path.abspath(getattr(args, "data", "") or "")):
         h.update(str(part).encode("utf-8") + b"\x1f")
     with open(SCRIPT, "rb") as f:
         h.update(f.read())
+    for root in (args.db, getattr(args, "snapshot", None), getattr(args, "data", None)):
+        h.update(_tree_stamp(root).encode("utf-8"))
     return h.hexdigest()
+
+
+def _tree_stamp(root):
+    """ファイルかフォルダの中身の印（パス・大きさ・更新時刻）。中身が変われば変わる。"""
+    if not root or not os.path.exists(root):
+        return "-"
+    if os.path.isfile(root):
+        st = os.stat(root)
+        return "%d:%d" % (st.st_size, st.st_mtime_ns)
+    out = []
+    for d, _, files in os.walk(root):
+        for f in files:
+            try:
+                st = os.stat(os.path.join(d, f))
+            except OSError:
+                continue
+            out.append("%s:%d:%d" % (os.path.relpath(os.path.join(d, f), root), st.st_size, st.st_mtime_ns))
+    return "\n".join(sorted(out))
 
 
 def run_one(args, mode, q, wrapper, schema_path):
@@ -118,8 +139,15 @@ def run_one(args, mode, q, wrapper, schema_path):
            "-c", "sandbox_workspace_write.writable_roots=[%s]" % json.dumps(os.path.dirname(args.db)),
            "-c", "mcp_servers.node_repl.enabled=false", "-c", "mcp_servers.computer-use.enabled=false",
            "--output-schema", schema_path, "-o", os.path.join(run_dir, "answer.json"), "-"]
+    timed_out = False
     with open(os.path.join(run_dir, "events.jsonl"), "w") as ev, open(os.path.join(run_dir, "stderr.txt"), "w") as er:
-        proc = subprocess.run(cmd, input=prompt, text=True, stdout=ev, stderr=er, timeout=args.timeout)
+        try:
+            proc = subprocess.run(cmd, input=prompt, text=True, stdout=ev, stderr=er, timeout=args.timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+
+            class proc:  # noqa: N801  時間切れは外れとして数える
+                returncode = None
     usage = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "reasoning_output_tokens": 0}
     commands = 0
     for line in open(os.path.join(run_dir, "events.jsonl"), encoding="utf-8"):
@@ -142,6 +170,8 @@ def run_one(args, mode, q, wrapper, schema_path):
               "correct": proc.returncode == 0 and bool(answer.get("found")) and any(tid and tid == g.lower() for g in gold),
               "found": bool(answer.get("found")),
               "thread_id": tid, "gold": gold, "commands": commands, "usage": usage, "answer": answer.get("answer", "")}
+    if timed_out:
+        result["error"] = "時間切れ（%d 秒）" % args.timeout
     json.dump(result, open(result_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     return result
 
@@ -184,6 +214,10 @@ def main():
     schema_path = os.path.join(args.out, "schema.json")
     json.dump(SCHEMA, open(schema_path, "w"))
     wrapper = wrapper_script(args.out, args.snapshot, args.db, args.data)
+    try:  # CLI の版が変われば、前の採点を使い回さない
+        args.codex_version = subprocess.run(["codex", "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        args.codex_version = ""
     jobs = [(m, q) for q in queries for m in args.modes.split(",")]
     results = []
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as ex:

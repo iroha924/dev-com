@@ -1889,7 +1889,8 @@ class EleventhReviewTest(_Base):
         left = 0
         for _ in range(300):
             tok = "".join(rnd.choice(alpha) for _ in range(40))
-            if any(len(piece) >= 8 and piece in ss.redact("鍵 " + tok) for piece in tok.split("/")):
+            out = ss.redact("鍵 " + tok)
+            if any(tok[i:i + 8] in out for i in range(len(tok) - 7)):  # 8 文字の切れ端が 1 つでも残れば数える
                 left += 1
         self.assertLess(left, 15)  # 切れ端も含めて、残るのは 5% 未満
 
@@ -2172,7 +2173,7 @@ class FourteenthReviewTest(_Base):
             tok = ("".join(rnd.choice(string.ascii_letters + string.digits) for _ in range(3)) + rnd.choice(string.digits) + "Q~"
                    + "".join(rnd.choice(alpha) for _ in range(34)))
             out = ss.redact("新しい値 " + tok)
-            if tok in out or any(len(p) >= 8 and p in out for p in tok.replace(".", "~").split("~")):
+            if any(tok[i:i + 8] in out for i in range(len(tok) - 7)):  # 8 文字の切れ端が 1 つでも残れば数える
                 left += 1
         self.assertLess(left, 15)
         for name in ("System.Text.Json9.0.1", "MyApp2.azurewebsites.net", "docs/Release2026Notes.v3.md"):
@@ -2356,6 +2357,179 @@ class SixteenthReviewTest(_Base):
         out = ss.redact("password: |\r\n  alpha\r\n\r\n  bravo\r\nnext: v")
         self.assertNotIn("bravo", out)
         self.assertIn("next: v", out)
+
+
+class SeventeenthReviewTest(_Base):
+    """12 回目のレビュー（Codex 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_more_common_forms(self):
+        cases = ['headers["Authorization"] = "Basic dTpwdzEy"',
+                 "variables:\n  - name: DB_PASSWORD\n    value: MySecret42!",
+                 "password = 'abc\\'MySecret42!'", "db_password = 'x\\'MySecret42!'",
+                 "password: | # comment\n  MySecret42!\nnext: v"]
+        for text in cases:
+            self.assertNotRegex(ss.redact(text), r"MySecret42|dTpwdzEy", text)
+        self.assertIn("value: Release", ss.redact("  - name: buildConfiguration\n    value: Release"))
+        self.assertIn("$x = 'second'", ss.redact("$pwd = 'C:\\Users\\me\\'; $x = 'second'"))  # PowerShell の \ はふつうの文字
+
+    def test_orphan_text_forgotten_by_an_old_version_is_removed(self):
+        idx = self.idx()
+        with idx.db:  # 前のバージョン: ファイルの行の無い本文が残ったまま forget した
+            idx.db.execute("INSERT INTO messages (codex_home, thread_id, path, line, msg_id, ts, kind, text, norm) "
+                           "VALUES (?, ?, 'gone.jsonl', 1, 'u1', '2026-09-01T01:00:00Z', 'user', 'OrphanPrivateText', 'orphanprivatetext')",
+                           (self.home, T1))
+            idx.db.execute("INSERT INTO forgotten VALUES (?, ?, '2026-09-01T00:00:00+00:00')", (self.home, T1))
+        idx.close()
+        idx = self.idx()
+        n = idx.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 0)
+
+    def test_legacy_parse_is_linear_in_turns(self):
+        import time
+
+        def text(n):
+            rows = [line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})]
+            for k in range(n):
+                rows += [line("2026-09-01T01:00:00Z", "event_msg", {"type": "user_message", "message": "依頼 %d" % k}),
+                         line("2026-09-01T01:00:00Z", "event_msg", {"type": "task_complete", "last_agent_message": "答え %d" % k})]
+            return "\n".join(rows).encode()
+        small, big = text(500), text(4000)
+        t0 = time.time()
+        ss.parse_rollout("x", small)
+        t1 = time.time()
+        _, msgs, _ = ss.parse_rollout("x", big)
+        t2 = time.time()
+        self.assertEqual(len(msgs), 8000)
+        self.assertLess(t2 - t1, max(0.05, (t1 - t0) * 8 * 4))  # 8 倍のターンで 32 倍未満（2 乗なら 64 倍）
+
+    def test_agent_eval_keeps_tokens_on_timeout(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        out = os.path.join(self.tmp.name, "ae")
+
+        class Args:
+            pass
+        args = Args()
+        args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(out, "x.sqlite"), "m", "low", 10
+        saved = ae.subprocess.run
+
+        def fake_run(cmd, stdout=None, **kw):
+            stdout.write(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1234, "output_tokens": 50}}) + "\n")
+            stdout.flush()
+            raise ae.subprocess.TimeoutExpired(cmd, 10)
+        ae.subprocess.run = fake_run
+        try:
+            r = ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json")
+        finally:
+            ae.subprocess.run = saved
+        self.assertEqual((r["correct"], r["usage"]["input_tokens"], bool(r.get("error"))), (False, 1234, True))
+
+    def test_agent_eval_reruns_when_the_index_changes(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        out = os.path.join(self.tmp.name, "ae")
+        os.makedirs(out)
+
+        class Args:
+            pass
+        args = Args()
+        args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(self.tmp.name, "x.sqlite"), "m", "low", 10
+        runs = []
+
+        class Done:
+            returncode = 0
+        saved = ae.subprocess.run
+
+        def fake_run(cmd, **kw):
+            runs.append(1)
+            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as f:
+                json.dump({"found": True, "thread_id": T1, "answer": "a", "quote": "q"}, f)
+            return Done()
+        ae.subprocess.run = fake_run
+        try:
+            for content in ("v1", "v2-longer"):
+                with open(args.db, "w") as f:
+                    f.write(content)
+                ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json")
+        finally:
+            ae.subprocess.run = saved
+        self.assertEqual(len(runs), 2)
+
+    def test_run_eval_with_a_subset_of_methods(self):
+        spec2 = importlib.util.spec_from_file_location("run_eval", os.path.join(ROOT, "evals", "session-search", "run_eval.py"))
+        src = open(spec2.origin, encoding="utf-8").read()
+        self.assertIn("if not all(n in base for n in (e_kw, e_q, e_qk)):", src)
+
+
+class EighteenthReviewTest(_Base):
+    """12 回目のレビュー（Claude 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def test_answer_without_phase_is_a_final(self):
+        ts = "2026-09-01T01:00:00Z"
+        text = "\n".join([line(ts, "session_meta", {"id": T1, "source": "exec"}),
+                          line(ts, "event_msg", {"type": "item_completed", "turn_id": "t1", "item": {
+                              "type": "UserMessage", "id": "u1", "content": [{"type": "text", "text": "依頼 ひたきもどき"}]}}),
+                          line(ts, "event_msg", {"type": "item_completed", "turn_id": "t1", "item": {
+                              "type": "AgentMessage", "id": "f1", "content": [{"type": "Text", "text": "phase の無い答え ひたきもどき"}]}}),
+                          line(ts, "event_msg", {"type": "task_complete", "turn_id": "t1", "last_agent_message": None})]) + "\n"
+        self.write(T1, text)
+        kinds = sorted(r["kind"] for r in self.search("ひたきもどき")["results"])
+        self.assertEqual(kinds, ["final", "user"])
+
+    def test_powershell_paths_do_not_swallow_the_next_lines(self):
+        for text in ('$env:SSH_KEY_DIR = "C:\\Users\\me\\.ssh\\"\n証明書の ECONNRESET\nTLS の "設定"',
+                     '$tokenDir = "C:\\tokens\\"\n証明書の ECONNRESET "x"'):
+            self.assertIn("証明書の ECONNRESET", ss.redact(text), text)
+        self.assertNotIn("secondline42", ss.redact('$password = "first\nsecondline42"'))  # 改行を含む文字列は閉じるまで
+
+    def test_quoted_pass_variables_and_neighbors(self):
+        for text in ['DB_PASS="hunter 22"', "$env:SQL_PW = 'hunter 22'", 'net use \\\\fs01\\share /user:CORP\\svc "hunter 22"',
+                     "curl -ku admin:hunter22x https://tfs01:8080/tfs", 'tf get $/p /login:me,"hunter 22"']:
+            self.assertNotRegex(ss.redact(text), r"hunter ?22", text)
+
+    def _agent_eval(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        return ae
+
+    def test_agent_eval_reruns_when_models_or_cli_change(self):
+        ae = self._agent_eval()
+        out = os.path.join(self.tmp.name, "ae")
+        data = os.path.join(self.tmp.name, "data-models")
+        os.makedirs(data)
+
+        class Args:
+            pass
+        runs = []
+
+        class Done:
+            returncode = 0
+        saved = ae.subprocess.run
+
+        def fake_run(cmd, **kw):
+            runs.append(1)
+            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as f:
+                json.dump({"found": True, "thread_id": T1, "answer": "a", "quote": "q"}, f)
+            return Done()
+        ae.subprocess.run = fake_run
+        try:
+            for model_file, version in (("a", "codex 1"), ("ab", "codex 1"), ("ab", "codex 2")):
+                with open(os.path.join(data, "model.bin"), "w") as f:
+                    f.write(model_file)
+                args = Args()
+                args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(out, "x.sqlite"), "m", "low", 10
+                args.snapshot, args.data, args.codex_version = "/copy", data, version
+                ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json")
+        finally:
+            ae.subprocess.run = saved
+        self.assertEqual(len(runs), 3)
 
 
 class SemanticLayerTest(unittest.TestCase):

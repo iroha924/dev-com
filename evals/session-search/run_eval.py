@@ -1,6 +1,6 @@
 """会話の検索の作り方を、同じ問いと正解で比べる。
 
-    python run_eval.py --corpus corpus.json --queries queries.json --work <作業フォルダ> [--methods trigram-and,bm25-sudachi,...]
+    python run_eval.py --corpus corpus.json --queries queries.json --work <作業フォルダ> [--methods product,product-norerank,product-trigram]
 
 問い（queries.json）は {"queries": [{"id", "question", "keywords": [...], "gold": ["t001", ...], "type"}]}。
 question は人が言う自然な文、keywords は Codex が検索に打つ語。正解は会話（スレッド）の単位で数える。
@@ -328,6 +328,8 @@ def main():
             if lex not in base:
                 continue
             e_kw, e_q, e_qk = "embed-%s/kw" % model, "embed-%s/q" % model, "embed-%s/qk" % model
+            if not all(n in base for n in (e_kw, e_q, e_qk)):
+                continue
             for k in (10, 30, 60):
                 for wl, we in ((1, 1), (1, 0.5), (1, 2), (2, 1)):
                     name = "w[%s+%s] k=%d w=%s/%s" % (lex, e_qk, k, wl, we)
