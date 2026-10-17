@@ -101,13 +101,15 @@ base: main
   - 結果: red を直す前のコードで実測 → 3 件 FAIL と 1 件 ERROR、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 40 件 OK
   - 結果: `session_report.py extract <id> --out <一時フォルダ>` → この Mac の実際の記録 2 本で終了コード 0（件数だけを見て消した）
 
-- [ ] T03: extract の操作と成果物
+- [x] T03: extract の操作と成果物
   - 種別: 追加
   - 計画: S3
   - 依存: T02（report.json の形と書き出しが要る）
   - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report -k Operation` → OK（「該当なし」は単独の検索コマンドの終了コード 1 だけ、外部の操作の目的は表にある組み合わせだけ、差分の行数、添付は本体なし、上限での切り詰めの記録、全部の文字列に伏せ字）
   - コミット: `feat(session-report): 操作と成果物を report.json に足す`
+  - 結果: `python3 -m unittest tests.test_session_report -k Operation` → 5 件 OK。`python3 -m unittest discover -s tests` → 356 件 OK（skip 24）
+  - 結果: `session_report.py extract <id> --out <一時フォルダ>` → この Mac の大きい記録 3 本で終了コード 0、操作 134・243・183 件、いちばん大きい記録で 5.7 秒（件数だけを見て消した）
 
 ## P3: Codex の追記を読ませて確かめる
 
@@ -186,6 +188,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T03 / 長い出力の全文に伏せ字をかけると、実際の記録の 1 本で 20 秒かかった（17 秒が伏せ字）。残す部分に 20,000 文字の余白を付けた範囲にだけかける形にして 5.7 秒になった。古い形式の操作（exec_command_end など）は取り出さず、coverage.legacy_operations に数える / 会社の PC の probe で古い形式の操作があれば、取り出すタスクを足す
 
 - 2026-10-18 / T16 / T14 の見直し（9352b33、high）の 4 件（F1 伏せ字の抜け P1、F2 続きだけの revert で前半が無い P1、F3 ZstdError で止まる P2、F4 新旧の形式が混ざるターン P2）を再現で確かめて受理。F2 は Codex のソースの HistoryPosition（前半のファイルの rollout ID と end_byte_offset）で読み方を決め、F4 は session-search を変えずに、読む前に turn_id を入れる形にした / T16 を足して直した
 

@@ -585,6 +585,7 @@ def build_report(path, data, home, other_files=0):
                                        "turn_id": att["turn_id"], "text": "",
                                        "attachments": att["items"]}))
     out_msgs = [msg for _, msg in sorted(rows, key=lambda r: r[0])]
+    operations, artifacts, legacy_ops = collect_operations(data)
     unknown = {k: n for k, n in sorted(scan["item_types"].items())
                if k not in MESSAGE_ITEMS and k not in EVENT_ITEMS and k not in OPERATION_ITEMS}
     events = {k: scan["item_types"][k] for k in sorted(EVENT_ITEMS) if scan["item_types"].get(k)}
@@ -599,18 +600,391 @@ def build_report(path, data, home, other_files=0):
         "coverage": {"lines": counters["lines"], "bad_json": counters["bad_json"], "shape_errors": counters["shape_errors"],
                      "incomplete_tail": counters["incomplete_tail"], "duplicated_ids": scan["duplicated_ids"],
                      "other_files": other_files, "unknown_items": unknown, "events": events,
-                     "prefix_missing": prefix_missing,
+                     "prefix_missing": prefix_missing, "legacy_operations": legacy_ops,
                      "subagents_included": False},
         "turns": scan["turns"],
         "messages": out_msgs,
-        "operations": [],
-        "artifacts": [],
+        "operations": operations,
+        "artifacts": artifacts,
     }
     return redact_tree(report)
 
 
-# T03 で操作として読む項目（T02 では unknown に数えない）
+# 操作として読む項目
 OPERATION_ITEMS = {"CommandExecution", "FileChange", "McpToolCall", "WebSearch", "ImageView", "Extension"}
+
+
+# --- extract: 操作と成果物 -------------------------------------------------------------------------
+
+# 手元用に残す上限（plan の「機械で取るもの」）
+OUTPUT_HEAD = 2000
+OUTPUT_TAIL = 2000
+DIFF_LIMIT = 20000
+TARGET_LIMIT = 400
+REDACT_MARGIN = 20000  # 切る前に伏せ字をかける余白（鍵の PEM や YAML のブロックより長く取る）
+
+# シェルを包む形（bash -lc "..."、pwsh -Command "..."、cmd /c "..."）。中の文を操作の対象として見せる
+_WRAPPERS = {"bash": ("-c", "-lc"), "zsh": ("-c", "-lc"), "sh": ("-c", "-lc"),
+             "pwsh": ("-command", "-c"), "powershell": ("-command", "-c"), "cmd": ("/c",)}
+# 「該当なし」（終了コード 1 が「見つからなかった」の意味）に分類するコマンドと、確かめたオプション。
+# 引数を取るオプションは値で終わる。ほかのオプションが 1 つでもあれば分類しない
+_SEARCH_OPTIONS = {
+    "rg": ({"-n", "-i", "-S", "-F", "-w", "-l", "-c", "-u", "-uu", "--hidden", "--no-heading", "--line-number",
+            "--ignore-case", "--fixed-strings", "--smart-case", "--files-with-matches", "--count"},
+           {"-e", "-g", "--glob", "-t", "--type", "-C", "-A", "-B", "--regexp"}),
+    "grep": ({"-n", "-i", "-r", "-R", "-F", "-E", "-w", "-l", "-c", "-H", "-h", "-s", "--line-number", "--ignore-case",
+              "--recursive", "--fixed-strings", "--extended-regexp", "--files-with-matches", "--count"},
+             {"-e", "-C", "-A", "-B", "--include", "--exclude", "--regexp"}),
+    "findstr": ({"/s", "/i", "/n", "/l", "/r", "/m", "/p", "/b", "/e", "/x"}, set()),
+}
+_SHELL_META = re.compile(r"[|;&<>`\n]|\$\(")
+# az のサブコマンドの目的
+_AZ_PURPOSE = {
+    ("repos", "pr", "create"): "作成", ("repos", "pr", "update"): "更新", ("repos", "pr", "list"): "参照",
+    ("repos", "pr", "show"): "参照", ("boards", "work-item", "create"): "作成", ("boards", "work-item", "update"): "更新",
+    ("boards", "work-item", "show"): "参照", ("boards", "work-item", "delete"): "削除", ("boards", "query"): "参照",
+    ("pipelines", "run"): "作成", ("pipelines", "list"): "参照", ("pipelines", "show"): "参照",
+    ("pipelines", "runs", "list"): "参照", ("pipelines", "runs", "show"): "参照", ("pipelines", "build", "queue"): "作成",
+    ("pipelines", "build", "list"): "参照", ("pipelines", "build", "show"): "参照",
+}
+# ado.ps1 の write の道と方法の目的（skills/ado/scripts/ado.ps1 の書き込みの形）
+_ADO_WRITE = [
+    (re.compile(r"_apis/git/repositories/[^/]+/pullrequests/?(\?|$)", re.I), "POST", "作成"),
+    (re.compile(r"_apis/git/repositories/[^/]+/pullrequests/\d+/threads", re.I), "POST", "作成"),
+    (re.compile(r"_apis/git/repositories/[^/]+/pullrequests/\d+/?(\?|$)", re.I), "PATCH", "更新"),
+    (re.compile(r"_apis/wit/workitems/\$[^/?]+", re.I), "POST", "作成"),
+    (re.compile(r"_apis/wit/workitems/\d+/comments", re.I), "POST", "作成"),
+    (re.compile(r"_apis/wit/workitems/\d+/?(\?|$)", re.I), "PATCH", "更新"),
+    (re.compile(r"_apis/pipelines/\d+/runs/?(\?|$)", re.I), "POST", "作成"),
+    (re.compile(r"_apis/build/builds/?(\?|$)", re.I), "POST", "作成"),
+]
+# ADO の MCP の tool の名前の動詞（server の名前に ado・azure・devops を含むとき）
+_MCP_VERBS = {"get": "参照", "list": "参照", "search": "参照", "read": "参照", "query": "参照", "show": "参照",
+              "create": "作成", "add": "作成", "run": "作成", "queue": "作成",
+              "update": "更新", "link": "更新", "set": "更新", "vote": "更新", "complete": "更新",
+              "delete": "削除", "remove": "削除"}
+
+
+def _split(script, windows):
+    """1 つのコマンドの文を語に分ける。分けられなければ None。"""
+    import shlex
+    try:
+        return shlex.split(script, posix=not windows)
+    except ValueError:
+        return None
+
+
+def _base(word):
+    return re.split(r"[\\/]", word)[-1].lower().rsplit(".exe", 1)[0]
+
+
+def command_script(command):
+    """記録のコマンド（語の配列）から、見せる文と、それが PowerShell / cmd か。"""
+    if isinstance(command, str):
+        return command, False
+    if not isinstance(command, list) or not all(isinstance(w, str) for w in command):
+        return "", False
+    if len(command) >= 3:
+        name = _base(command[0])
+        flags = _WRAPPERS.get(name)
+        for i in range(1, len(command) - 1):
+            if flags and command[i].lower() in flags:
+                return " ".join(command[i + 1:]) if len(command) > i + 2 else command[i + 1], name in ("pwsh", "powershell", "cmd")
+            if not command[i].startswith("-") and not command[i].startswith("/"):
+                break
+    return " ".join(command), False
+
+
+def _search_no_match(script, windows):
+    """終了コード 1 を「該当なし」と読める形か: パイプや連結の無い 1 つの rg / grep / findstr を、確かめたオプションだけで流した。"""
+    if _SHELL_META.search(script):
+        return False
+    words = _split(script, windows)
+    if not words:
+        return False
+    name = _base(words[0])
+    if name not in _SEARCH_OPTIONS:
+        return False
+    flags, with_value = _SEARCH_OPTIONS[name]
+    i = 1
+    while i < len(words):
+        w = words[i]
+        low = w.lower() if name == "findstr" else w
+        if name == "findstr" and low.startswith("/c:"):
+            i += 1
+            continue
+        if low == "--":
+            break
+        if low in with_value:
+            i += 2
+            continue
+        if "=" in low and low.split("=", 1)[0] in with_value:
+            i += 1
+            continue
+        if low in flags:
+            i += 1
+            continue
+        if name != "findstr" and re.fullmatch(r"-[A-Za-z]{2,}", w) and all("-" + ch in flags for ch in w[1:]):
+            i += 1  # -rn のようにまとめた 1 文字のオプション
+            continue
+        if w.startswith("-") or (name == "findstr" and w.startswith("/")):
+            return False
+        i += 1
+    return True
+
+
+def _az_purpose(words):
+    if not words or _base(words[0]) != "az":
+        return None
+    parts = [w for w in words[1:] if not w.startswith("-")]
+    for n in (3, 2):
+        key = tuple(parts[:n])
+        if key in _AZ_PURPOSE:
+            return {"route": "command", "tool": "az " + " ".join(key), "method": None, "purpose": _AZ_PURPOSE[key]}
+    if parts[:1] and parts[0] in ("repos", "boards", "pipelines", "devops"):
+        return {"route": "command", "tool": "az " + " ".join(parts[:3]), "method": None, "purpose": "不明"}
+    return None
+
+
+def _ado_purpose(words):
+    """ado.ps1 の呼び出し（powershell -File ...ado.ps1 <mode> <path> [-Method ...] [-DryRun]）の目的。"""
+    at = next((i for i, w in enumerate(words) if _base(w) == "ado.ps1" or w.lower().endswith("ado.ps1")), None)
+    if at is None or at + 1 >= len(words):
+        return None
+    mode = words[at + 1].lower()
+    rest = words[at + 2:]
+    path = rest[0] if rest and not rest[0].startswith("-") else ""
+    lower = [w.lower() for w in rest]
+    method = rest[lower.index("-method") + 1].upper() if "-method" in lower and lower.index("-method") + 1 < len(rest) else None
+    info = {"route": "command", "tool": "ado.ps1 " + mode, "method": method, "path": path}
+    if mode in ("get", "query", "preview"):
+        info["purpose"] = "参照"
+    elif mode == "write" and "-dryrun" in lower:
+        info["purpose"] = "参照"  # 承認のハッシュを出すだけで送らない
+    elif mode == "write":
+        info["purpose"] = next((p for rx, m, p in _ADO_WRITE if method == m and rx.search(path)), "不明")
+    else:
+        info["purpose"] = "不明"
+    return info
+
+
+def _mcp_purpose(it):
+    if it.get("read_only_hint") is True:
+        return "参照"
+    server, tool = it.get("server"), it.get("tool")
+    if isinstance(server, str) and isinstance(tool, str) and re.search(r"ado|azure|devops", server, re.I):
+        for word in re.split(r"[_.\-]", tool.lower()):
+            if word in _MCP_VERBS:
+                return _MCP_VERBS[word]
+    return "不明"
+
+
+def _cut(text, head=OUTPUT_HEAD, tail=OUTPUT_TAIL):
+    """伏せ字をかけてから、長い文字列の先頭と末尾を残す。(残した文字列, 切ったか, 元の長さ)
+
+    切ってから伏せ字をかけると、切れ目をまたぐ秘密が半分ずつになって拾えないので、残す部分に REDACT_MARGIN 文字の
+    余白を付けた範囲に伏せ字をかけてから切る。全文にかけないのは、数 MB の出力で遅くなるため（実際の記録の 1 本で 17 秒）。
+    """
+    if not isinstance(text, str):
+        return None, False, 0
+    if len(text) <= head + tail + 2 * REDACT_MARGIN:
+        red = ss.redact(text)
+        if len(red) <= head + tail:
+            return red, False, len(text)
+        start, end = red[:head], (red[-tail:] if tail else "")  # red[-0:] は全文になる
+    else:
+        start = ss.redact(text[:head + REDACT_MARGIN])[:head]
+        end = ss.redact(text[-(tail + REDACT_MARGIN):])[-tail:] if tail else ""
+    return start + "\n…（約 %d 文字を省略）…\n" % (len(text) - head - tail) + end, True, len(text)
+
+
+def _duration_ms(value):
+    if isinstance(value, dict) and isinstance(value.get("secs"), (int, float)):
+        return int(value["secs"] * 1000 + (value.get("nanos") or 0) / 1e6)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    return None
+
+
+def _ms_to_iso(ms):
+    if not isinstance(ms, (int, float)) or isinstance(ms, bool):
+        return None
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _diff_counts(diff):
+    added = removed = 0
+    for row in diff.splitlines():
+        if row.startswith("+") and not row.startswith("+++"):
+            added += 1
+        elif row.startswith("-") and not row.startswith("---"):
+            removed += 1
+    return added, removed
+
+
+def _file_changes(changes):
+    out = []
+    for path, ch in sorted(changes.items()) if isinstance(changes, dict) else []:
+        ch = ch if isinstance(ch, dict) else {}
+        kind = ch.get("type") if ch.get("type") in ("add", "update", "delete") else "unknown"
+        diff = ch.get("unified_diff") if isinstance(ch.get("unified_diff"), str) else None
+        content = ch.get("content") if isinstance(ch.get("content"), str) else None
+        if diff is not None:
+            added, removed = _diff_counts(diff)
+        elif kind == "add" and content is not None:
+            added, removed = len(content.splitlines()), 0
+        else:
+            added = removed = None
+        shown = diff if diff is not None else (content if kind == "add" else None)
+        text, cut, size = _cut(shown, DIFF_LIMIT, 0) if shown is not None and len(shown) > DIFF_LIMIT else (
+            ss.redact(shown) if shown is not None else None, False, len(shown or ""))
+        move = ch.get("move_path") if isinstance(ch.get("move_path"), str) else None
+        out.append({"path": _red(path), "kind": kind, "added": added, "removed": removed, "diff": text,
+                    "diff_cut": cut, "diff_chars": size, "moved_to": _red(move)})
+    return out
+
+
+def _mcp_text(result):
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict) and isinstance(result.get("content"), list):
+        return "\n".join(el["text"] for el in result["content"] if isinstance(el, dict) and isinstance(el.get("text"), str))
+    return None
+
+
+def operation(it, ts, turn_id):
+    """item_completed の操作の項目を、report.json の 1 件にする。操作でなければ None。"""
+    typ = it.get("type")
+    if typ not in OPERATION_ITEMS:
+        return None
+    op = {"id": ss._str(it.get("id")), "type": typ, "ts": ts, "started": _ms_to_iso(it.get("_started_at_ms")),
+          "turn_id": turn_id, "route": None, "target": None, "status": "unknown", "exit_code": None, "duration_ms": None,
+          "purpose": None, "tool": None, "method": None, "output": None, "output_cut": False, "output_chars": 0,
+          "files": [], "machine": True}
+    st = it.get("status") if isinstance(it.get("status"), str) else None
+    if typ == "CommandExecution":
+        script, windows = command_script(it.get("command"))
+        code = it.get("exit_code") if isinstance(it.get("exit_code"), int) and not isinstance(it.get("exit_code"), bool) else None
+        op.update(route="command", target=ss.redact(script[:TARGET_LIMIT]), exit_code=code,
+                  duration_ms=_duration_ms(it.get("duration")))
+        if st == "declined":
+            op["status"] = "declined"
+        elif st == "completed" and code == 0:
+            op["status"] = "ok"
+        elif code == 1 and _search_no_match(script, windows):
+            op["status"] = "no_match"
+        elif st in ("failed", "completed") and code is not None:
+            op["status"] = "failed"
+        elif st == "inProgress" or st == "in_progress":
+            op["status"] = "incomplete"
+        words = _split(script, windows) or []
+        ext = _ado_purpose(words) or _az_purpose(words)
+        if ext:
+            op.update(route="command", tool=_red(ext["tool"]), method=ext["method"], purpose=ext["purpose"], external=True)
+        op["output"], op["output_cut"], op["output_chars"] = _cut(it.get("aggregated_output"))
+    elif typ == "McpToolCall":
+        server, tool = ss._str(it.get("server")) or "?", ss._str(it.get("tool")) or "?"
+        res = it.get("result")
+        error = st == "failed" or (isinstance(res, dict) and res.get("isError") is True)
+        op.update(route="mcp", target=_red("%s.%s" % (server, tool)), tool=_red("%s.%s" % (server, tool)),
+                  purpose=_mcp_purpose(it), status="failed" if error else ("ok" if st == "completed" else "unknown"),
+                  duration_ms=_duration_ms(it.get("duration")), external=True)
+        op["output"], op["output_cut"], op["output_chars"] = _cut(_mcp_text(res))
+    elif typ == "WebSearch":
+        act = it.get("action") if isinstance(it.get("action"), dict) else {}
+        query = ss._str(it.get("query")) or ss._str(act.get("query")) or ss._str(act.get("url")) or ""
+        op.update(route="web", target=ss.redact(query[:TARGET_LIMIT]), tool="web." + (ss._str(act.get("type")) or "?"),
+                  purpose="参照", status="ok", external=True)
+    elif typ == "FileChange":
+        op["files"] = _file_changes(it.get("changes"))
+        op.update(route="file", target=", ".join(f["path"] for f in op["files"])[:TARGET_LIMIT],
+                  status={"completed": "ok", "failed": "failed", "declined": "declined"}.get(st, "unknown"))
+    elif typ == "ImageView":
+        path = ss._str(it.get("path")) or ""
+        op.update(route="image", target=_red(re.split(r"[\\/]", path)[-1]), status="ok", body=False)
+    elif typ == "Extension":
+        op.update(route="extension", target=None, status={"completed": "ok", "failed": "failed"}.get(st, "unknown"))
+    op.setdefault("external", False)
+    return op
+
+
+_PR_URL = re.compile(r"/_git/[^/\s\"']+/pullrequest/(\d+)", re.I)
+_WI_URL = re.compile(r"/_workitems/edit/(\d+)", re.I)
+
+
+def _artifacts_in(text):
+    """MCP の結果とコマンドの出力にはっきり出た PR と Work Item（JSON の形か、ADO の URL）。"""
+    found = []
+    try:
+        data = json.loads(text) if text and text.lstrip()[:1] in "{[" else None
+    except ValueError:
+        data = None
+    for obj in (data if isinstance(data, list) else [data]) if data is not None else []:
+        if not isinstance(obj, dict):
+            continue
+        if isinstance(obj.get("pullRequestId"), int):
+            found.append(("PR", obj["pullRequestId"], ss._str(obj.get("title")), ss._str(obj.get("status"))))
+        fields = obj.get("fields") if isinstance(obj.get("fields"), dict) else None
+        if fields and isinstance(obj.get("id"), int) and "System.WorkItemType" in fields:
+            found.append(("Work Item", obj["id"], ss._str(fields.get("System.Title")), ss._str(fields.get("System.State"))))
+    for rx, kind in ((_PR_URL, "PR"), (_WI_URL, "Work Item")):
+        for m in rx.finditer(text or ""):
+            found.append((kind, int(m.group(1)), None, None))
+    return found
+
+
+def collect_operations(data):
+    """記録の操作を行の順に並べる。同じ ID の項目は、最後のものを使う（作り直された完了の記録）。"""
+    order, ops, raw_outputs = [], {}, {}
+    current = None
+    legacy = collections.Counter()
+    for line_no, raw in ss._byte_lines(data, {"incomplete_tail": 0}):
+        try:
+            item = json.loads(raw.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        if item.get("type") == "turn_context":
+            current = ss._str(payload.get("turn_id")) or current
+        if item.get("type") != "event_msg":
+            continue
+        et = payload.get("type")
+        if et in ("exec_command_end", "patch_apply_end", "mcp_tool_call_end", "web_search_end"):
+            legacy[et] += 1  # 古い形式の操作。今は取り出さず、coverage に数える
+            continue
+        if et != "item_completed" or not isinstance(payload.get("item"), dict):
+            continue
+        it = dict(payload["item"])
+        it["_started_at_ms"] = payload.get("started_at_ms")
+        ts = item.get("timestamp") if isinstance(item.get("timestamp"), str) else None
+        op = operation(it, ts, ss._str(payload.get("turn_id")) or current)
+        if op is None:
+            continue
+        key = op["id"] or "L%d" % line_no
+        op["id"] = key
+        if key not in ops:
+            order.append(key)
+        ops[key] = op
+        if it.get("type") == "McpToolCall":
+            raw_outputs[key] = _mcp_text(it.get("result"))
+        elif it.get("type") == "CommandExecution":
+            raw_outputs[key] = it.get("aggregated_output") if isinstance(it.get("aggregated_output"), str) else None
+    operations = [ops[k] for k in order]
+    artifacts = {}
+    for op in operations:
+        for kind, num, title, status in _artifacts_in(raw_outputs.get(op["id"])):
+            a = artifacts.setdefault((kind, num), {"kind": kind, "id": num, "title": None, "status": None, "seen_at": None,
+                                                   "operations": []})
+            a["title"] = _red(title) or a["title"]
+            a["status"] = _red(status) or a["status"]
+            a["seen_at"] = op["ts"]
+            if op["id"] not in a["operations"]:
+                a["operations"].append(op["id"])
+    return operations, [artifacts[k] for k in sorted(artifacts)], dict(sorted(legacy.items()))
+
+
 
 
 def dumps(obj):
@@ -661,8 +1035,9 @@ def cmd_extract(args):
     report["digest"] = digest(report)
     out = args.out or report_dir(report["session"]["id"])
     write_json(os.path.join(out, "report.json"), report)
-    print("書いた: %s（発言 %d 件、ターン %d 件）" % (os.path.join(out, "report.json"), len(report["messages"]),
-                                                 len(report["turns"])))
+    print("書いた: %s（発言 %d 件、ターン %d 件、操作 %d 件、成果物 %d 件）" % (
+        os.path.join(out, "report.json"), len(report["messages"]), len(report["turns"]), len(report["operations"]),
+        len(report["artifacts"])))
     return 0
 
 

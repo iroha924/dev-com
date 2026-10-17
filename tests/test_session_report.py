@@ -495,6 +495,132 @@ class ExtractTest(_Base):
         self.assertEqual(code, 2)
 
 
+def cmd(script, code, shell=("/bin/zsh", "-lc"), status=None, output="", oid="c1"):
+    return {"type": "CommandExecution", "id": oid, "command": list(shell) + [script], "cwd": "C:\\w", "parsed_cmd": [],
+            "source": "unified_exec_startup", "status": status or ("completed" if code == 0 else "failed"),
+            "aggregated_output": output, "exit_code": code, "duration": {"secs": 38, "nanos": 400000000}}
+
+
+def mcp(tool, server="ado", result=None, status="completed", read_only=None, oid="m1"):
+    it = {"type": "McpToolCall", "id": oid, "server": server, "tool": tool, "arguments": {}, "status": status,
+          "result": result if result is not None else {"content": [{"type": "text", "text": "ok"}]}}
+    if read_only is not None:
+        it["read_only_hint"] = read_only
+    return it
+
+
+class OperationTest(_Base):
+    def op(self, it):
+        return sr.operation(it, "2026-10-14T01:20:00.000Z", "t1")
+
+    def test_command_status(self):
+        cases = [
+            (cmd("python -m pytest -q", 0), "ok"),
+            (cmd('rg "testResultsFiles" -g "*.yml"', 1), "no_match"),
+            (cmd("rg -n -i foo src", 1), "no_match"),
+            (cmd("grep -rn foo .", 1), "no_match"),
+            (cmd('findstr /s /i "foo" *.yml', 1, shell=("cmd.exe", "/c")), "no_match"),
+            (cmd("rg -n foo | head", 1), "failed"),
+            (cmd("rg foo && echo x", 1), "failed"),
+            (cmd("rg --files-without-match foo", 1), "failed"),
+            (cmd("grep foo x", 2), "failed"),
+            (cmd("Select-String -Pattern foo x.txt", 1, shell=("pwsh", "-NoProfile", "-Command")), "failed"),
+            (cmd("python x.py", 1), "failed"),
+            (cmd("git push", None, status="declined"), "declined"),
+        ]
+        for it, want in cases:
+            with self.subTest(script=it["command"][-1]):
+                self.assertEqual(self.op(it)["status"], want)
+        o = self.op(cmd("python -m pytest -q", 0))
+        self.assertEqual((o["route"], o["target"], o["duration_ms"], o["exit_code"]), ("command", "python -m pytest -q", 38400, 0))
+        o = self.op(cmd("Get-ChildItem", 0, shell=("pwsh", "-NoProfile", "-Command")))
+        self.assertEqual(o["target"], "Get-ChildItem")
+
+    def test_external_purpose(self):
+        ado = 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\me\\.agents\\skills\\ado\\scripts\\ado.ps1" '
+        cases = [
+            (cmd(ado + "get _apis/wit/workitems/1287", 0), ("ado.ps1 get", "参照")),
+            (cmd(ado + "query _apis/wit/wiql -BodyFile q.json", 0), ("ado.ps1 query", "参照")),
+            (cmd(ado + "write _apis/git/repositories/ci/pullrequests -Method POST -BodyFile b.json -DryRun", 0), ("ado.ps1 write", "参照")),
+            (cmd(ado + "write _apis/git/repositories/ci/pullrequests -Method POST -BodyFile b.json -Approve abc", 0), ("ado.ps1 write", "作成")),
+            (cmd(ado + "write _apis/wit/workitems/1287 -Method PATCH -BodyFile b.json -Approve abc", 0), ("ado.ps1 write", "更新")),
+            (cmd(ado + "write _apis/wit/workitems/1287 -Method POST -BodyFile b.json -Approve abc", 0), ("ado.ps1 write", "不明")),
+            (cmd(ado + "write _apis/wit/workitems/$Bug -Method POST -BodyFile b.json -Approve abc", 0), ("ado.ps1 write", "作成")),
+            (cmd("az repos pr create --title x", 0), ("az repos pr create", "作成")),
+            (cmd("az pipelines run --name python-test", 1), ("az pipelines run", "作成")),
+            (cmd("az boards iteration team list", 0), ("az boards iteration team", "不明")),
+            (mcp("repo_create_pull_request"), ("ado.repo_create_pull_request", "作成")),
+            (mcp("wit_update_work_item"), ("ado.wit_update_work_item", "更新")),
+            (mcp("wit_get_work_item"), ("ado.wit_get_work_item", "参照")),
+            (mcp("fetch_file", server="github", read_only=True), ("github.fetch_file", "参照")),
+            (mcp("create_issue", server="github"), ("github.create_issue", "不明")),
+        ]
+        for it, (tool, purpose) in cases:
+            with self.subTest(tool=tool, target=str(it.get("command", ""))[-60:]):
+                o = self.op(it)
+                self.assertEqual((o["tool"], o["purpose"], o["external"]), (tool, purpose, True))
+        self.assertEqual(self.op(cmd(ado + "write _apis/wit/workitems/1287 -Method PATCH", 0))["method"], "PATCH")
+        self.assertFalse(self.op(cmd("python x.py", 0))["external"])
+        self.assertEqual(self.op(mcp("x", result={"content": [], "isError": True}))["status"], "failed")
+
+    def test_files_web_and_images(self):
+        o = self.op({"type": "FileChange", "id": "f1", "status": "completed", "changes": {
+            "C:\\w\\b.yml": {"type": "update", "unified_diff": "--- a\n+++ b\n@@\n-old\n+new\n+more\n ctx\n", "move_path": None},
+            "C:\\w\\a.md": {"type": "add", "content": "1\n2\n3\n"},
+            "C:\\w\\c.py": {"type": "delete"}}})
+        self.assertEqual([(f["path"], f["kind"], f["added"], f["removed"]) for f in o["files"]],
+                         [("C:\\w\\a.md", "add", 3, 0), ("C:\\w\\b.yml", "update", 2, 1), ("C:\\w\\c.py", "delete", None, None)])
+        big = self.op({"type": "FileChange", "id": "f2", "status": "completed",
+                       "changes": {"x": {"type": "update", "unified_diff": "+a\n" * 10000}}})["files"][0]
+        self.assertTrue(big["diff_cut"])
+        self.assertEqual((big["added"], big["diff_chars"]), (10000, 30000))
+        self.assertLess(len(big["diff"]), 20100)
+        w = self.op({"type": "WebSearch", "id": "w1", "query": "PublishTestResults default", "action": {"type": "search"}})
+        self.assertEqual((w["route"], w["target"], w["purpose"]), ("web", "PublishTestResults default", "参照"))
+        i = self.op({"type": "ImageView", "id": "i1", "path": "file:///C:/Users/me/shot.png"})
+        self.assertEqual((i["route"], i["target"], i["body"]), ("image", "shot.png", False))
+
+    def test_output_is_cut_and_redacted(self):
+        out = "A" * 3000 + " password=Sup3rS3cretValue9 " + "Z" * 3000
+        o = self.op(cmd("python x.py --password Sup3rS3cretValue9", 0, output=out))
+        self.assertTrue(o["output_cut"])
+        self.assertEqual(o["output_chars"], len(out))
+        self.assertTrue(o["output"].startswith("A" * 2000) and o["output"].endswith("Z" * 2000))
+        self.assertNotIn("Sup3rS3cretValue9", json.dumps(o))
+        # 切れ目（先頭の 2,000 文字の終わり）をまたぐトークンも伏せる
+        tok = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
+        across = self.op(cmd("x", 0, output="A" * 1990 + " " + tok + " " + "Z" * 5000))
+        self.assertNotIn(tok[:9], across["output"])
+        # 長い出力（余白より長い）でも、残す部分の切れ目をまたぐトークンを伏せる
+        long = self.op(cmd("x", 0, output="A" * 1990 + " " + tok + " " + "M" * 100000 + " " + tok + " " + "Z" * 1990))
+        self.assertNotIn(tok[:9], long["output"])
+        self.assertEqual(long["output_chars"], 1990 * 2 + 100000 + 2 * len(tok) + 4)
+        short = self.op(cmd("echo", 0, output="token=Sup3rS3cretValue9"))
+        self.assertNotIn("Sup3rS3cretValue9", json.dumps(short))
+
+    def test_extract_operations_and_artifacts(self):
+        r = Rollout(T1).turn("t1")
+        r.user("u1", "PR を作って")
+        r.item(cmd("python -m pytest -q", 1, oid="c1"))
+        r.item(cmd("python -m pytest -q", 0, oid="c1"))  # 同じ ID の項目は最後のもの
+        pr = {"pullRequestId": 482, "title": "テスト結果を Tests タブに出す", "status": "active"}
+        r.item(mcp("repo_create_pull_request", result={"content": [{"type": "text", "text": json.dumps(pr, ensure_ascii=False)}]}))
+        wi = {"id": 1287, "fields": {"System.WorkItemType": "Bug", "System.Title": "CI のテスト結果が見えない", "System.State": "Active"}}
+        r.item(cmd("ado.ps1 get _apis/wit/workitems/1287", 0, oid="c2", output=json.dumps(wi, ensure_ascii=False)))
+        r.item(cmd("git push", 0, oid="c3", output="remote: https://tfs/x/_git/ci/pullrequest/482"))
+        r.add("event_msg", {"type": "exec_command_end", "call_id": "old"})
+        r.agent("a1", "作りました").end("作りました")
+        self.write(T1, r.text())
+        rep = self.extract(T1)
+        self.assertEqual([(o["id"], o["route"], o["status"]) for o in rep["operations"]],
+                         [("c1", "command", "ok"), ("m1", "mcp", "ok"), ("c2", "command", "ok"), ("c3", "command", "ok")])
+        self.assertEqual([(a["kind"], a["id"], a["title"], a["status"], a["operations"]) for a in rep["artifacts"]],
+                         [("PR", 482, "テスト結果を Tests タブに出す", "active", ["m1", "c3"]),
+                          ("Work Item", 1287, "CI のテスト結果が見えない", "Active", ["c2"])])
+        self.assertEqual(rep["coverage"]["legacy_operations"], {"exec_command_end": 1})
+        self.assertEqual(rep["operations"][0]["turn_id"], "t1")
+
+
 class SearchModuleTest(unittest.TestCase):
     def test_uses_session_search(self):
         # 写さずに import している（伏せ字の規則が 2 つに分かれない）
