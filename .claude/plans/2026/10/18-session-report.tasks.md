@@ -47,13 +47,15 @@ base: main
 
 1 つの会話から、発言・ターン・操作・成果物を report.json に書けるようになる。
 
-- [ ] T02: extract の会話の情報と発言
+- [x] T02: extract の会話の情報と発言
   - 種別: 追加
   - 計画: S2
   - 依存: T01（session-search の import と記録の場所の決め方が要る）
   - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report -k Extract` → OK（session・sources・coverage・turns・messages が作り物の記録どおり、発言 ID が session-search と同じ）
   - コミット: `feat(session-report): 会話の情報と発言を report.json に書く extract を足す`
+  - 結果: `python3 -m unittest tests.test_session_report -k Extract` → 6 件 OK。`python3 -m unittest discover -s tests` → 339 件 OK（skip 24）
+  - 結果: `session_report.py extract <id> --out <一時フォルダ>` → この Mac の実際の記録 2 本（.zst と .jsonl）で終了コード 0、読めない行・知らない形・知らない項目 0 件（中身は読まずに件数だけ見て消した）
 
 - [ ] T03: extract の操作と成果物
   - 種別: 追加
@@ -140,6 +142,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T02 / macOS の一時フォルダは /var → /private/var の symlink で、作業フォルダが一致しなかった / --last の作業フォルダの比べ方を realpath にした
 
 - 2026-10-18 / T12 / T01 の Codex のレビュー（a85337f）の 3 件（F1 文字列の値が出る P1、F2 Windows のテストの file URI P2、F3 UNC の file URI P2）をコードで確かめて受理 / T12 を足して直した
 
