@@ -88,10 +88,12 @@ def build_prompt(mode, q, wrapper, plain):
 
 
 def run_condition(args, mode, q, prompt):
-    """採点を使い回してよい条件（依頼文・正解・モデル・effort・索引・検索の実装）の指紋。"""
+    """採点を使い回してよい条件（依頼文・正解・モデル・effort・索引・写し・専用の環境・検索の実装）の指紋。"""
     import hashlib
     h = hashlib.sha256()
-    for part in (prompt, json.dumps(q.get("gold"), sort_keys=True), mode, args.model, args.effort, os.path.abspath(args.db)):
+    for part in (prompt, json.dumps(q.get("gold"), sort_keys=True), mode, args.model, args.effort, os.path.abspath(args.db),
+                 os.path.abspath(args.plain), os.path.abspath(getattr(args, "snapshot", "") or ""),
+                 os.path.abspath(getattr(args, "data", "") or "")):
         h.update(str(part).encode("utf-8") + b"\x1f")
     with open(SCRIPT, "rb") as f:
         h.update(f.read())

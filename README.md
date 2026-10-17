@@ -287,7 +287,7 @@ flowchart LR
 - RRF の k と重みは、振っても差が問いの数の誤差の範囲だった。いちばん素直な k=60、1 対 1 にする。
 - 並べ直しは、japanese-reranker-xsmall-v2（実際 0.946）、japanese-reranker-base-v2（0.932）、ruri-v3-reranker-310m（0.956〜0.972）を比べ、ruri-v3-reranker-310m にした。並べ直す件数は 10 件（30 件でも精度はほぼ同じで、時間は約 3 倍）。発言からは、問いの言葉を最も多く含む 1,000 文字を渡す（500 文字にすると落ちる）。
 - 長い発言は、先頭 4,000 文字だけを埋め込む。全文を 4,000 文字ずつ埋め込む形も比べたが、並べ直しを入れると同じ値（0.957）で、索引づくりが約 1.7 倍かかった。単語の BM25 は全文を見る。
-- 時間（この Mac、M4 Pro）: 最初の索引づくり（依頼と最終の回答 3,909 件の埋め込み）が約 9 分。検索 1 回は、プロセスの起動とモデルの読み込みを含めて約 5〜6 秒（並べ直しなしなら約 3 秒）。会社の Windows の CPU では測っていない。
+- 時間（この Mac、M4 Pro）: 最初の索引づくり（測った時点の依頼と最終の回答 3,909 件の埋め込み）が約 9 分。検索 1 回は、プロセスの起動とモデルの読み込みを含めて約 5〜6 秒（並べ直しなしなら約 3 秒）。会社の Windows の CPU では測っていない。
 
 #### Codex に実際に探させた評価
 
@@ -323,7 +323,7 @@ python "$HOME\.agents\skills\session-search\scripts\session_search.py" index
 - `setup` は `%LOCALAPPDATA%\hirata-codex\venv` に専用の環境を作る。元にする Python は 3.14 を優先し、無ければ 3.13、3.11 の順に探す（3.14 でないと圧縮された記録を読めないので、そのときは注意を出す）。`--python` で指定したときは、それだけを使う。入れるバージョンは評価で使ったものに固定している（SudachiPy 0.7.0、sudachidict-core 20260723.1、sentence-transformers 6.1.0、transformers 5.18.0、tokenizers 0.23.2、torch 2.14.1、numpy 2.4.6。どれも 2026-10-01 より前の公開）。
 - モデルは 2 つ。埋め込みの `cl-nagoya/ruri-v3-130m`（Apache-2.0、約 500 MB）を `%LOCALAPPDATA%\hirata-codex\models\ruri-v3-130m` に、並べ直しの `cl-nagoya/ruri-v3-reranker-310m`（Apache-2.0、約 1.2 GB）を `%LOCALAPPDATA%\hirata-codex\models\ruri-v3-reranker-310m` に置く。会社のネットワークから Hugging Face に届かないときは、別の PC で `hf download <モデル> --revision <コミット> --local-dir <フォルダ>` で取ってきたフォルダを、そこに置けば使える（コミットは `session_search.py` の `EMBED_REVISION` と `RERANK_REVISION`。Hugging Face の取得には `huggingface.co` のほかに CDN のホストも要る）。
 - `setup` はモデルの取得を毎回流す。取るのは評価に使ったコミットに固定していて、揃っているファイルは取り直さない。途中で止まったときは `setup` を流し直せば続きから埋まる。
-- `index` は、取り込み・単語の区切り・埋め込みを全部済ませる。最初の一度は時間がかかる（この Mac で、依頼と最終の回答 3,909 件に約 9 分）。
+- `index` は、取り込み・単語の区切り・埋め込みを全部済ませる。最初の一度は時間がかかる（この Mac で、測った時点の依頼と最終の回答 3,909 件に約 9 分）。
 - 専用の環境があると、`session_search.py` は自動でその環境の Python で動き直す。
 
 ### Codex のサンドボックスから索引に書けないとき

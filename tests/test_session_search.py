@@ -2256,6 +2256,108 @@ class FourteenthReviewTest(_Base):
             self.assertNotIn("やませみ".encode("utf-8"), f.read())
 
 
+class FifteenthReviewTest(_Base):
+    """11 回目のレビュー（Codex 側）で見つかった欠陥の再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_curl_user_without_space(self):
+        for text in ['curl -u"me:MySecret123" https://x', "curl -ume:MySecret123 --version", "curl --user=me:MySecret123 https://x"]:
+            self.assertNotIn("MySecret123", ss.redact(text), text)
+
+    def test_failed_file_record_rolls_back_the_text(self):
+        self.write(T1, paginated(T1, [("途中で止まる会話 OrphanPrivateText", "答え", None)]))
+        idx = self.idx()
+
+        deny = [True]
+
+        def deny_files(action, table, *_):  # ファイルの行の書き込みだけを止める（ディスクの失敗の代わり）
+            stop = deny[0] and action == sqlite3.SQLITE_INSERT and table == "files"
+            return sqlite3.SQLITE_DENY if stop else sqlite3.SQLITE_OK
+        idx.db.set_authorizer(deny_files)
+        try:
+            with self.assertRaises(sqlite3.DatabaseError):
+                idx.ingest(self.home)
+        finally:
+            deny[0] = False
+        n = idx.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 0)
+
+    def test_forget_removes_text_without_a_file_row(self):
+        idx = self.idx()
+        with idx.db:  # 前のバージョンで途中で止まり、ファイルの行の無い本文
+            idx.db.execute("INSERT INTO messages (codex_home, thread_id, path, line, msg_id, ts, kind, text, norm) "
+                           "VALUES (?, ?, 'gone.jsonl', 1, 'u1', '2026-09-01T01:00:00Z', 'user', 'OrphanPrivateText', 'orphanprivatetext')",
+                           (self.home, T1))
+        idx.forget(self.home, T1)
+        n = idx.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 0)
+
+    def test_agent_eval_reruns_when_the_copy_changes(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        out = os.path.join(self.tmp.name, "ae")
+
+        class Args:
+            pass
+        runs = []
+
+        class Done:
+            returncode = 0
+        saved = ae.subprocess.run
+
+        def fake_run(cmd, **kw):
+            runs.append(1)
+            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as f:
+                json.dump({"found": True, "thread_id": T1, "answer": "a", "quote": "q"}, f)
+            return Done()
+        ae.subprocess.run = fake_run
+        try:
+            for snap in ("/copy/v1", "/copy/v2"):
+                args = Args()
+                args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(out, "x.sqlite"), "m", "low", 10
+                args.snapshot, args.data = snap, os.path.join(out, "data")
+                ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json")
+        finally:
+            ae.subprocess.run = saved
+        self.assertEqual(len(runs), 2)
+
+
+class SixteenthReviewTest(_Base):
+    """11 回目のレビュー（Claude 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def test_quoted_values_of_key_variables(self):
+        for text in ['$env:AZURE_OPENAI_KEY = "3f9a2c7e1b4d48a6b0e5c9d2f7a1e3b8"', "export AZURE_STORAGE_KEY='v1xv'",
+                     '"AZURE_STORAGE_KEY": "v2xv"', 'storage_account_key = "v3xv"', 'FUNCTIONS_KEY: "v4xv"', "SSH_KEY: 'v5xv'"]:
+            self.assertNotRegex(ss.redact(text), r"3f9a2c7e|v\dxv", text)
+
+    def test_on_premises_and_japanese_office_forms(self):
+        for text in ["$pass = 'Winter2026!'", '$pw = "Winter2026!"', '$adminPass = "Winter2026!"', "DB_PASS=Winter2026!",
+                     "SMTP_PASS: Winter2026!", "ID: admin / PW: Winter2026!", "ID：admin／PW：Winter2026!",
+                     'New-Object System.Net.NetworkCredential("svc", "Winter2026!")',
+                     '[System.Net.NetworkCredential]::new("svc","Winter2026!")', 'HttpNtlmAuth("CORP\\\\svc", "Winter2026!")',
+                     'requests.get(url, auth=("svc", "Winter2026!"))', "tf get $/proj /login:CORP\\svc,Winter2026!",
+                     "net use \\\\fs01\\share /user:CORP\\svc Winter2026!"]:
+            self.assertNotIn("Winter2026", ss.redact(text), text)
+        for text in ("bypass: true", "$PassThru = $true", "compass: north", "PASSED: 12",
+                     "net use \\\\fs01\\share /user:CORP\\svc /persistent:yes"):
+            self.assertEqual(ss.redact(text), text)
+
+    def test_yaml_list_item_stops_at_its_sibling_key(self):
+        out = ss.redact("  - password: |\n      alpha\n      bravo\n    next: v")
+        self.assertNotIn("alpha", out)
+        self.assertIn("next: v", out)
+
+    def test_crlf_yaml_block_with_blank_lines(self):
+        out = ss.redact("password: |\r\n  alpha\r\n\r\n  bravo\r\nnext: v")
+        self.assertNotIn("bravo", out)
+        self.assertIn("next: v", out)
+
+
 class SemanticLayerTest(unittest.TestCase):
     """SudachiPy が入っている環境でだけ、単語の BM25 の経路を確かめる。"""
 

@@ -9,7 +9,7 @@
 
 取り込むもの（検索のたびに、変わったファイルだけ）:
   - $CODEX_HOME/sessions/**/rollout-*.jsonl(.zst) と $CODEX_HOME/archived_sessions/ の、ユーザーの発言・途中の回答・最終の回答
-  - $CODEX_HOME/memories/ の Markdown（Codex の memories が書いた要点）
+  - $CODEX_HOME/memories/ の Markdown とテキスト（Codex の memories が書いた要点）
 入れないもの: ツールやコマンドの出力、推論、AGENTS.md などの差し込み。シークレットらしい値は伏せてから入れる。
 
 rollout は公開された仕様ではなく Codex の内部の形式なので、読めなかった行・形の分からない発言は数えて毎回報告する。
@@ -88,6 +88,13 @@ _KEY_NAME = (r"(?:(?:password|passwd|pwd|secret(?!ar)|token(?!iz|s(?![A-Za-z]))|
              r"|(?-i:pat|PAT|Pat)(?:[_0-9]\w*)?(?![A-Za-z]))")
 # 環境変数の名前に含まれる、秘密を表す語。pat と key は前後が英字でないときだけ（PATH・KEYBOARD を外す）
 _SECRET_WORD = r"(?:secret|token|password|passwd|pwd|apikey|(?<![a-z])(?:pat|key)(?![a-z]))"
+# 環境変数の名前（大文字の名前は区切りの語で、小文字の名前は秘密を表す語の後の _key と、secret・token などで見る）
+_ENV_NAMES = [
+    ("", r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:SECRET|TOKEN|PASSWORD|PASSWD|PASS|PW|PWD|KEY|PAT)(?:_[A-Z0-9]+)*"),
+    ("(?i)", r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:secret|token|password|passwd|pat)(?:_[a-z0-9]+)*"),
+    ("(?i)", r"(?:[a-z0-9]+_)*(?:access|account|storage|subscription|private|master|shared|signing|encryption|client|app|api|"
+             r"function|functions|host|service|sas|auth|admin|deploy|ssh)_key(?:_[a-z0-9]+)*"),
+]
 _DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"'     # "..."（\" と `" は閉じる引用符ではない。改行も含める）
 _SQ = r"'(?:[^']|''){1,100000}'(?!')"         # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
 
@@ -155,8 +162,8 @@ _SECRET_PATTERNS = [
     # mysql -pPASSWORD（-p に続けて書く）
     (re.compile(r"(?i)(\bmysql(?:dump)?\b[^\n|;]*?\s-p)([^\s'\"|;-][^\s'\"|;]*)"), r"\1[REDACTED]"),
     # curl -u user:pw / --user user:pw
-    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)\s+[^\s:'\"]*:)([^\s'\"|;]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)\s+([\"'])[^\s:'\"]*:)((?:(?!\2)[^\n])+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)(?:\s+|=)?[^\s:'\"=]*:)([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-u|--user)(?:\s+|=)?([\"'])[^\s:'\"]*:)((?:(?!\2)[^\n])+)"), r"\1[REDACTED]"),
     # -StorageAccountKey X / --account-key X / --sas-token X
     (re.compile(r"(?i)((?:^|\s)--?(?:storageaccountkey|account-key|sas-token|client-secret)(?:\s+|=))(" + _DQ + "|" + _SQ + ")"),
      _keep_quote),
@@ -183,16 +190,27 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
      lambda m: m.group(1) + m.group(2)[:2] + "[REDACTED]" + m.group(2)[-2:]),
     # YAML のブロック: secret: | の次の行から、字下げが続くところまで
-    (re.compile(r"(?im)^(([ \t]*)(?:-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>](?:[-+]?[1-9]?|[1-9][-+])[ \t]*\r?\n)"
-                r"((?:(?:[ \t]*\r?\n)*\2[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
-    # 環境変数の名前: AWS_SECRET_ACCESS_KEY=... / GITHUB_TOKEN: ...（区切りの語が secret・token・password・key・pat）
-    (re.compile(r"\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:SECRET|TOKEN|PASSWORD|PASSWD|KEY|PAT)(?:_[A-Z0-9]+)*[\"']?[ \t]*[:=][ \t]*)"
-                r"(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:secret|token|password|passwd|pat)(?:_[a-z0-9]+)*[\"']?[ \t]*[:=][ \t]*)"
-                r"(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)\b((?:[a-z0-9]+_)*(?:access|account|storage|subscription|private|master|shared|signing|encryption|client|"
-                r"app|api|function|functions|host|service|sas|auth|admin|deploy|ssh)_key(?:_[a-z0-9]+)*[\"']?[ \t]*[:=][ \t]*)"
-                r"(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?im)^(([ \t]*)(-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>](?:[-+]?[1-9]?|[1-9][-+])[ \t]*\r?\n)"
+                r"((?:(?:[ \t]*\r?\n)*\2(?(3)  )[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
+    # 環境変数の名前: AWS_SECRET_ACCESS_KEY=... / GITHUB_TOKEN: ... / DB_PASS=...（区切りの語が secret・token・password・key・pat・pass）。
+    # 引用符付きの値（$env:AZURE_OPENAI_KEY = "..."）も
+    *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote)
+      for flags, name in _ENV_NAMES],
+    *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]")
+      for flags, name in _ENV_NAMES],
+    # PowerShell の変数: $pass = '...' / $pw = "..." / $adminPass = ...
+    (re.compile(r"(?i)(\$\w*(?:pass|pw)\w*[ \t]*=[ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\$\w*(?:pass|pw)\w*[ \t]*=[ \t]*)(?![\"'$(@\[])([^\s;|]+)"), r"\1[REDACTED]"),
+    # 業務の文の ID: admin / PW: X（全角の ：も、NFKC でそろえてから当たる）
+    (re.compile(r"(?<![A-Za-z])((?:PW|PWD|PASS|Pass|pw|pass)[ \t]*[:=][ \t]*)(?![\"'])([^\s、。,，]+)"), r"\1[REDACTED]"),
+    # 資格情報のオブジェクト: NetworkCredential("u", "X") / HttpNtlmAuth("u", "X") / HTTPBasicAuth / auth=("u", "X")
+    (re.compile(r"(?i)((?:NetworkCredential\s*(?:\]::new)?|HttpNtlmAuth|HTTPBasicAuth|HTTPDigestAuth|\bauth\s*=\s*)\s*\(\s*"
+                r"(?:" + _DQ + "|" + _SQ + r")\s*,\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    # TFVC: tf ... /login:DOMAIN\user,X
+    (re.compile(r"(?i)(/login:[^,\s\"']+,)([^\s\"']+)"), r"\1[REDACTED]"),
+    # net use \\host\share /user:DOMAIN\user X（パスワードを後ろに書く順）
+    (re.compile(r"(?i)(\bnet\s+use\b[^\n|;]*?/user:\S+\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\bnet\s+use\b[^\n|;]*?/user:\S+\s+)(?![/\"'*])(\S+)"), r"\1[REDACTED]"),
     # Azure の SAS の署名: ?sv=...&sig=... / SharedAccessSignature=...sig=...
     (re.compile(r"(?i)(\bsig=)([^&;\s\"']+)"), r"\1[REDACTED]"),
     # 接続文字列の Password=...;（空白を含んでよい。; か行末まで）
@@ -1043,14 +1061,17 @@ class Index:
         return report
 
     def _record_file(self, path, home, meta, st, status, counters, counts):
-        meta = meta or {}
         with self.db:
-            self.db.execute(
-                "INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (path, home, meta.get("thread_id"), st.st_size, st.st_mtime_ns, status, meta.get("history_mode"),
-                 meta.get("cli_version"), EXTRACT_VERSION, counts.get("user", 0), counts.get("commentary", 0),
-                 counts.get("final", 0), counts.get("memory", 0), counters.get("bad_json", 0),
-                 counters.get("shape_errors", 0), counters.get("skipped_elements", 0), _now()))
+            self._write_file_row(path, home, meta, st, status, counters, counts)
+
+    def _write_file_row(self, path, home, meta, st, status, counters, counts):
+        meta = meta or {}
+        self.db.execute(
+            "INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (path, home, meta.get("thread_id"), st.st_size, st.st_mtime_ns, status, meta.get("history_mode"),
+             meta.get("cli_version"), EXTRACT_VERSION, counts.get("user", 0), counts.get("commentary", 0),
+             counts.get("final", 0), counts.get("memory", 0), counters.get("bad_json", 0),
+             counters.get("shape_errors", 0), counters.get("skipped_elements", 0), _now()))
 
     def _path_msgs(self, path):
         """そのファイルの発言の多重集合（発言 ID・種類・本文）。同じ文の別の発言も区別して数える。"""
@@ -1126,8 +1147,8 @@ class Index:
                     self._carry(prev, cur.lastrowid)
             for r in left:
                 self._delete_message(r["id"])
+            self._write_file_row(path, home, meta, st, status, counters, counts)
         self._vec_cache = None
-        self._record_file(path, home, meta, st, status, counters, counts)
 
     def _carry(self, old_id, new_id):
         """前の行の単語の索引と埋め込みを、新しい行へ移す。"""
@@ -1226,6 +1247,9 @@ class Index:
                                        (thread_id, home)).fetchall():
                 self._delete_path(row["path"])
                 self.db.execute("UPDATE files SET status = 'forgotten' WHERE path = ?", (row["path"],))
+            for (mid,) in self.db.execute("SELECT id FROM messages WHERE thread_id = ? AND codex_home = ?",
+                                          (thread_id, home)).fetchall():
+                self._delete_message(mid)
             self.db.execute("DELETE FROM threads WHERE thread_id = ? AND codex_home = ?", (thread_id, home))
 
     def rebuild(self):
