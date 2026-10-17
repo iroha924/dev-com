@@ -2467,12 +2467,6 @@ class SeventeenthReviewTest(_Base):
             ae.subprocess.run = saved
         self.assertEqual(len(runs), 2)  # 写しが同じ 2 回目は使い回し、写しが変わった 3 回目は流し直す
 
-    def test_run_eval_with_a_subset_of_methods(self):
-        spec2 = importlib.util.spec_from_file_location("run_eval", os.path.join(ROOT, "evals", "session-search", "run_eval.py"))
-        src = open(spec2.origin, encoding="utf-8").read()
-        self.assertIn("if not all(n in base for n in (e_kw, e_q, e_qk)):", src)
-
-
 class EighteenthReviewTest(_Base):
     """12 回目のレビュー（Claude 側）で見つかった欠陥と、検査の抜けの再現。"""
 
@@ -2577,15 +2571,6 @@ class NineteenthReviewTest(_Base):
         _, msgs, counters = ss.parse_rollout("x", text.encode())
         self.assertEqual((len(msgs), counters["shape_errors"]), (2, 2))
 
-    def test_rerank_eval_keeps_the_tail(self):
-        src = open(os.path.join(ROOT, "evals", "session-search", "rerank_eval.py"), encoding="utf-8").read()
-        self.assertIn("head, tail = rows[:args.k], rows[args.k:]", src)
-        self.assertIn("limit=max(args.k, 100)", src)
-
-    def test_run_eval_stores_an_absolute_home(self):
-        src = open(os.path.join(ROOT, "evals", "session-search", "run_eval.py"), encoding="utf-8").read()
-        self.assertIn('home = os.path.abspath(os.path.join(args.work, "codex_home"))', src)
-
     def test_agent_eval_reruns_when_plain_or_timeout_change(self):
         spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
         ae = importlib.util.module_from_spec(spec2)
@@ -2680,6 +2665,204 @@ class TwentiethReviewTest(_Base):
                           line(ts, "event_msg", {"type": "task_complete", "last_agent_message": "同じ答え"})]) + "\n"
         _, msgs, _ = ss.parse_rollout("x", text.encode())
         self.assertEqual([m["kind"] for m in msgs], ["user", "final"])
+
+
+
+class TwentyFirstReviewTest(_Base):
+    """14 回目のレビュー（Codex 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def _eval_module(self, name):
+        spec2 = importlib.util.spec_from_file_location(name, os.path.join(ROOT, "evals", "session-search", name + ".py"))
+        mod = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(mod)
+        return mod
+
+    def test_forget_during_ingest_does_not_store_the_text(self):
+        path = self.write(T1, paginated(T1, [("読んでいる間に forget される はやぶさ", "答え", None)]))
+        idx = self.idx()
+        meta, messages, counters = ss.parse_rollout(path, ss.read_rollout_bytes(path))
+        with idx.db:  # 別の検索の forget が、読んでいる間に済んだ
+            idx.db.execute("INSERT INTO forgotten VALUES (?, ?, '2026-09-01T00:00:00+00:00')", (self.home, T1))
+        idx._replace(path, self.home, meta, messages, counters, os.stat(path), "ok")
+        n = idx.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        status = idx.db.execute("SELECT status FROM files WHERE path = ?", (path,)).fetchone()[0]
+        idx.close()
+        self.assertEqual((n, status), (0, "forgotten"))
+
+    def test_more_forms_in_pipelines_powershell_python_and_sqlcmd(self):
+        cases = ["variables:\n- name: DB_PASSWORD\n  readonly: true\n  value: hunter22",
+                 "variables:\n- value: hunter22\n  name: DB_PASSWORD",
+                 'ConvertTo-SecureString -String `\n  "hunter22" -AsPlainText -Force',
+                 "$env:AZURE_OPENAI_KEY = @'\nhunter22\n'@", 'password = (\n  "hunter22"\n)', "sqlcmd -S host -U me -Phunter22"]
+        for text in cases:
+            self.assertNotIn("hunter22", ss.redact(text), text)
+        kept = ss.redact("variables:\n- name: DB_PASSWORD\n  value: x1\n- name: config\n  value: keep\n- value: keep2\n  name: other")
+        self.assertIn("value: keep", kept)
+        self.assertIn("value: keep2", kept)
+
+    def test_agent_eval_does_not_reuse_an_old_answer_file(self):
+        ae = self._eval_module("agent_eval")
+        out = os.path.join(self.tmp.name, "ae")
+
+        class Args:
+            pass
+        calls = []
+
+        class Done:
+            returncode = 0
+        saved = ae.subprocess.run
+
+        def fake_run(cmd, **kw):
+            calls.append(1)
+            if len(calls) == 1:  # 1 回目だけ回答を書く
+                with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as f:
+                    json.dump({"found": True, "thread_id": T1, "answer": "a", "quote": "q"}, f)
+            return Done()
+        ae.subprocess.run = fake_run
+        try:
+            results = []
+            for model in ("m1", "m2"):
+                args = Args()
+                args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(out, "x.sqlite"), model, "low", 10
+                results.append(ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json"))
+        finally:
+            ae.subprocess.run = saved
+        self.assertEqual([r["correct"] for r in results], [True, False])
+
+    def test_rerank_eval_fixes_the_time_and_keeps_the_tail(self):
+        re_mod = self._eval_module("rerank_eval")
+        rows = list("abcdefghijkl")
+        self.assertEqual(re_mod.rerank_head(rows, 3, lambda head: [1, 3, 2]), ["b", "c", "a"] + rows[3:])
+        src = open(os.path.join(ROOT, "evals", "session-search", "rerank_eval.py"), encoding="utf-8").read()
+        self.assertIn("ss.NOW = datetime.datetime.fromisoformat(args.now)", src)
+
+    def test_run_eval_mixtures_and_home(self):
+        rv = self._eval_module("run_eval")
+        qs = [{"id": "q1"}]
+        partial = {"bm25-sudachi/kw": {"q1": [1, 2]}, "embed-m/q": {"q1": [2, 1]}}
+        rankings = {}
+        rv.add_mixtures(rankings, partial, ["m"], qs)  # 要る方式がそろっていなくても落ちない
+        self.assertEqual(rankings, {})
+        full = dict(partial, **{"embed-m/kw": {"q1": [1]}, "embed-m/qk": {"q1": [2]}})
+        rv.add_mixtures(rankings, full, ["m"], qs)
+        self.assertIn("3way[bm25-sudachi/kw+embed-m/kw+embed-m/q]", rankings)
+        cwd = os.getcwd()
+        os.chdir(self.tmp.name)
+        try:
+            self.assertEqual(rv.mock_home("work"), os.path.join(os.path.realpath(self.tmp.name), "work", "codex_home"))
+        finally:
+            os.chdir(cwd)
+
+
+class TwentySecondReviewTest(_Base):
+    """14 回目のレビュー（Claude 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_posix_options_and_url_prefixes(self):
+        self.assertNotIn("hunterZ", ss.redact('--password "Qx7\\"hunterZ"'))  # POSIX の \\" は閉じる引用符ではない
+        self.assertIn('next "k"', ss.redact('-Password "C:\\x\\"; next "k"'))  # PowerShell の \\ はふつうの文字
+        for text in ("-https://user:pw9x@host", ".https://user:pw9x@host", "x" * 45 + "postgresql://admin:pw9x@db"):
+            self.assertNotIn("pw9x", ss.redact(text), text)
+
+    def test_python_prefixes_and_powershell_double_quotes(self):
+        for text in ['app.secret_key = b"hunterB"', 'SECRET_KEY = b"hunterB"', 'DB_PASSWORD = r"hunterB"', 'api_token = r"hunterB"',
+                     'token: Optional[str] = r"hunterB"', 'auth=("me", r"hunterB")', '-Password "abc""hunterB"',
+                     'ConvertTo-SecureString "abc""hunterB" -AsPlainText -Force',
+                     '$headers.Add("Authorization", "Basic dXNlcjpodW50ZXIy")']:
+            self.assertNotRegex(ss.redact(text), r"hunterB|dXNlcjpodW50ZXIy", text)
+
+    def test_token_counts_are_kept_but_numeric_secrets_are_not(self):
+        for text in ("total_token_usage: 12345", "TOKEN_COUNT=4096", "max_tokens: 1000"):
+            self.assertEqual(ss.redact(text), text)
+        for text in ("DB_PASSWORD=123456", "api_token=123456", "token: 99887766"):
+            self.assertNotRegex(ss.redact(text), r"123456|99887766", text)
+
+    def test_shape_errors_do_not_count_no_messages_records(self):
+        ts = "2026-09-01T01:00:00Z"
+        self.write(T1, "\n".join([line(ts, "session_meta", {"id": T1}),
+                                  line(ts, "response_item", {"type": "message", "role": "user",
+                                                             "content": [{"type": "input_text", "text": "取り出せない依頼"}]})]) + "\n")
+        self.write(T2, paginated(T2, [("ふつうの会話 かしらだか", "答え", None)]))
+        out = self.search("かしらだか")
+        self.assertFalse([c for c in out["coverage"] if "形の分からない発言" in c], out["coverage"])
+        self.assertTrue([c for c in out["coverage"] if "発言を取り出せなかった記録 1 本" in c], out["coverage"])
+
+    def test_hash_uses_the_key_file(self):
+        import hashlib
+        import hmac
+        self.write(T1, paginated(T1, [("鍵の確かめ いわひばり", "答え", None)]))
+        self.search("いわひばり")
+        idx = self.idx()
+        h = idx.db.execute("SELECT raw_hash FROM messages WHERE kind = 'user'").fetchone()[0]
+        sig = idx.db.execute("SELECT value FROM meta WHERE key = 'redact'").fetchone()[0]
+        idx.close()
+        key = open(self.db + ".key", "rb").read()
+        body = "\x1f".join((sig, "鍵の確かめ いわひばり", "C:\\work\\ci")).encode("utf-8")
+        self.assertEqual(len(key), 32)
+        self.assertEqual(h, hmac.new(key, body, hashlib.sha256).hexdigest())
+        self.assertNotEqual(h, hmac.new(b"", body, hashlib.sha256).hexdigest())
+
+    def test_old_hashes_do_not_remain_in_a_larger_index(self):
+        self.write(T1, paginated(T1, [("古い印 %d %s" % (n, "z" * 300), "答え %d" % n, None) for n in range(100)]))
+        self.search("古い印")
+        idx = self.idx()
+        with idx.db:
+            idx.db.execute("UPDATE messages SET raw_hash = 'feedfacefeedface' || id")
+            idx.db.execute("DELETE FROM meta WHERE key = 'rawhash'")
+        idx.close()
+        sql = []
+        saved = ss.sqlite3.connect
+
+        def connect(*a, **kw):  # 開くときに流れる SQL を記録する
+            con = saved(*a, **kw)
+            con.set_trace_callback(sql.append)
+            return con
+        ss.sqlite3.connect = connect
+        try:
+            idx = self.idx()
+            idx.close()
+        finally:
+            ss.sqlite3.connect = saved
+        self.assertTrue(any(s.strip().upper() == "VACUUM" for s in sql))  # 空き領域に古い印を残さない
+        with open(self.db, "rb") as f:
+            self.assertNotIn(b"feedfacefeedface", f.read())
+
+    def test_readonly_search_hides_orphans_of_forgotten_threads(self):
+        self.write(T1, paginated(T1, [("読み取り専用 ほおあか", "答え", None)]))
+        self.search("ほおあか")
+        idx = self.idx()
+        with idx.db:  # forget の一覧にあるのに、本文が残っている（前のバージョンの孤立した本文）
+            idx.db.execute("INSERT INTO forgotten VALUES (?, ?, '2026-09-01T00:00:00+00:00')", (self.home, T1))
+        idx.close()
+        ro = ss.Index(self.db, readonly=True)
+        res, _, _ = ro.search(self.home, ["ほおあか"], ss.DEFAULT_KINDS)
+        ro.close()
+        self.assertEqual(res, [])
+
+    def test_agent_eval_ignores_the_index_under_data(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        data = os.path.join(self.tmp.name, "data")
+        os.makedirs(data)
+
+        class Args:
+            pass
+        args = Args()
+        args.out, args.plain, args.db, args.model, args.effort, args.timeout = (os.path.join(self.tmp.name, "out"), os.path.join(self.tmp.name, "plain"),
+                                                                                os.path.join(data, "sessions.sqlite"), "m", "low", 10)
+        args.snapshot, args.data = None, data
+        q = {"id": "q1", "question": "?", "gold": [T1]}
+        before = ae.run_condition(args, "search", q, "p")
+        for name in ("sessions.sqlite", "sessions.sqlite.key"):  # 検索を流すと、索引と鍵が書かれる
+            with open(os.path.join(data, name), "w") as f:
+                f.write("x")
+        self.assertEqual(before, ae.run_condition(args, "search", q, "p"))
 
 
 class SemanticLayerTest(unittest.TestCase):

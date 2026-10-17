@@ -101,7 +101,8 @@ def run_condition(args, mode, q, prompt):
         h.update(f.read())
     # 索引のファイルは検索のたびに更新時刻が変わるので入れない。索引は写しと検索の実装から作られる
     for root in (getattr(args, "snapshot", None), getattr(args, "data", None), args.plain):
-        h.update(_tree_stamp(root, skip=args.out).encode("utf-8"))
+        h.update(_tree_stamp(root, skip=[args.out] + [args.db + s for s in ("", ".key", "-journal", "-wal", "-shm")])
+                 .encode("utf-8"))
     return h.hexdigest()
 
 
@@ -113,12 +114,14 @@ def _tree_stamp(root, skip=None):
         st = os.stat(root)
         return "%d:%d" % (st.st_size, st.st_mtime_ns)
     out = []
-    skip = os.path.abspath(skip) if skip else None
+    skips = [os.path.abspath(s) for s in (skip if isinstance(skip, list) else [skip]) if s]
     for d, dirs, files in os.walk(root):
-        if skip and (os.path.abspath(d) == skip or os.path.abspath(d).startswith(skip + os.sep)):
+        if any(os.path.abspath(d) == s or os.path.abspath(d).startswith(s + os.sep) for s in skips):
             dirs[:] = []
             continue
         for f in files:
+            if os.path.abspath(os.path.join(d, f)) in skips:
+                continue
             try:
                 st = os.stat(os.path.join(d, f))
             except OSError:
@@ -145,6 +148,9 @@ def run_one(args, mode, q, wrapper, schema_path):
            "-c", "sandbox_workspace_write.writable_roots=[%s]" % json.dumps(os.path.dirname(args.db)),
            "-c", "mcp_servers.node_repl.enabled=false", "-c", "mcp_servers.computer-use.enabled=false",
            "--output-schema", schema_path, "-o", os.path.join(run_dir, "answer.json"), "-"]
+    for name in ("answer.json", "result.json"):
+        if os.path.exists(os.path.join(run_dir, name)):
+            os.remove(os.path.join(run_dir, name))
     timed_out = False
     with open(os.path.join(run_dir, "events.jsonl"), "w") as ev, open(os.path.join(run_dir, "stderr.txt"), "w") as er:
         try:

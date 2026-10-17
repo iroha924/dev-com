@@ -95,9 +95,21 @@ _ENV_NAMES = [
     ("(?i)", r"(?:[a-z0-9]+_)*(?:access|account|storage|subscription|private|master|shared|signing|encryption|client|app|api|"
              r"function|functions|host|service|sas|auth|admin|deploy|ssh)_key(?:_[a-z0-9]+)*"),
 ]
-_DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"' 
-_DQ_PS = r'"(?:[^"`]|`.){1,100000}"'  # PowerShell の "..."（\ は逃がしの文字ではない。逃がしはバッククォートだけ）    # "..."（\" と `" は閉じる引用符ではない。改行も含める）
+_DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"'  # "..."（\" と `" は閉じる引用符ではない。改行も含める）
+_DQ_PS = r'"(?:[^"`]|`.|""){1,100000}"(?!")'  # PowerShell の "..."（\ は逃がしの文字ではない。逃がしはバッククォートと ""）
+_PFX = r"(?:[rRbBuUfF]{1,2}(?=[\"']))?"  # Python の文字列の頭（r"..."・b"..."・f"..."）
 _SQ = r"'(?:[^']|''){1,100000}'(?!')"         # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
+
+
+_TOKEN_COUNT = re.compile(r"(?i)token(?:s|_?(?:count|usage|limit|budget|length|size|num))|"
+                          r"(?:max|total|num|input|output|prompt|completion|context)_?tokens?")
+
+
+def _keep_token_counts(m):
+    """token の名前（total_token_usage・max_tokens）の、数だけの値は数で、秘密ではないので残す。"""
+    if re.fullmatch(r"\d+", m.group(2)) and _TOKEN_COUNT.search(m.group(1)):
+        return m.group(0)
+    return m.group(1) + "[REDACTED]"
 
 
 def _keep_quote(m):
@@ -113,6 +125,8 @@ _SECRET_PATTERNS = [
     # 逃がしの文字ではないので、バッククォートだけを逃がしと見て、閉じる引用符で止める（次の行まで消さない）
     (re.compile(r"(?i)(\$(?:env:)?\w*(?:" + _KEY_NAME + "|" + _SECRET_WORD + r")\w*[ \t]*=[ \t]*)(\"(?:[^\"`]|`.){1,100000}\")"),
      _keep_quote),
+    # Python の括弧で次の行に書いた値: password = (\n    "X"\n)
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*=[ \t]*\(\s*)(\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*')"), _keep_quote),
     # Python の代入: password = 'abc\'def'（$ の付かない名前は、\' を閉じる引用符と見ない。$ の付く PowerShell は後の規則）
     (re.compile(r"(?i)(?<![\w$])((?:[a-z_]\w*?)?" + _KEY_NAME + r"[ \t]*:?=[ \t]*(?:[rbuf]{1,2}(?=['\"]))?)('(?:[^'\\\n]|\\.)*')"),
      _keep_quote),
@@ -125,10 +139,12 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [REDACTED]"),
     # PowerShell: パイプで渡す '...' | ConvertTo-SecureString、引数の '...'・"..."・引用符なし、-Password などの引数
     (re.compile(r"(?i)(" + _DQ_PS + "|" + _SQ + r")(\s*\)?\s*\|\s*ConvertTo-SecureString)"), r"'[REDACTED]'\2"),
-    (re.compile(r"(?i)(ConvertTo-SecureString\b[^'\"\n|;]*?)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(ConvertTo-SecureString\b(?:[^'\"\n|;`]|`\r?\n|`.)*?)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?\s)(?=[^\s'\"|;-])([^\s|;]+)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(ConvertTo-SecureString\b[^\n|;'\"]*?-String(?:\s+|:))([^\s'\"|;]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(-" + _SECRET_KEYS + r"\s+)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)((?<!-)-" + _SECRET_KEYS + r"\s+)(" + _DQ_PS + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(--(?:password|passwd|pwd|secret|token|pat|api[_-]?key|access[_-]?token|client[_-]?secret|passphrase)"
+                r"(?:\s+|=))(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     # 引用符なしの引数: -Password X / --password X / --token=X / az devops login --token X
     (re.compile(r"(?i)((?:^|\s)--?(?:password|passwd|pwd|secret|token|pat|api[_-]?key|access[_-]?token|client[_-]?secret|"
                 r"personalaccesstoken|securepassword|passphrase)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"), r"\1[REDACTED]"),
@@ -172,7 +188,8 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(\becho\s+)([^\s|'\"]+)(?=\s*\|[^\n]*--password-stdin)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(--password-stdin\b[^\n]*?<<<\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(--password-stdin\b[^\n]*?<<<\s*)([^\s'\"]+)"), r"\1[REDACTED]"),
-    # mysql -pPASSWORD（-p に続けて書く）
+    # sqlcmd -PPASSWORD・mysql -pPASSWORD（-P・-p に続けて書く）
+    (re.compile(r"(\bsqlcmd\b[^\n|;]*?\s-P)([^\s'\"|;-][^\s'\"|;]*)"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(\bmysql(?:dump)?\b[^\n|;]*?\s-p)([^\s'\"|;-][^\s'\"|;]*)"), r"\1[REDACTED]"),
     # curl -u user:pw / --user user:pw
     (re.compile(r"(?i)(\bcurl\b[^\n|;]*?\s(?:-(?!-)[A-Za-z]*u|--user)(?:\s+|=)?[^\s:'\"=]*:)([^\s'\"|;]+)"), r"\1[REDACTED]"),
@@ -200,16 +217,17 @@ _SECRET_PATTERNS = [
      lambda m: re.sub(r"(?i)(\bvalue\s*=\s*([\"']))((?:(?!\2).)*)", r"\1[REDACTED]", m.group(0))),
     (re.compile(r"(?i)(<(password|clearTextPassword|token|apiKey)>)([^<]*)(</\2>)"), r"\1[REDACTED]\4"),
     # PowerShell の here-string: $password = @"...\n"@
-    (re.compile(r"(?i)(" + _KEY_NAME + r"\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
+    (re.compile(r"(?i)((?:" + _KEY_NAME + r"|\$(?:env:)?\w*" + _SECRET_WORD + r"\w*)\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
      lambda m: m.group(1) + m.group(2)[:2] + "[REDACTED]" + m.group(2)[-2:]),
     # YAML のブロック: secret: | の次の行から、字下げが続くところまで
     (re.compile(r"(?im)^(([ \t]*)(-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>](?:[-+]?[1-9]?|[1-9][-+])[ \t]*(?:#[^\n]*)?\r?\n)"
                 r"((?:(?:[ \t]*\r?\n)*\2(?(3)  )[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
     # 環境変数の名前: AWS_SECRET_ACCESS_KEY=... / GITHUB_TOKEN: ... / DB_PASS=...（区切りの語が secret・token・password・key・pat・pass）。
     # 引用符付きの値（$env:AZURE_OPENAI_KEY = "..."）も
-    *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote)
+    *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*" + _PFX + ")(" + _DQ + "|" + _SQ + ")"), _keep_quote)
       for flags, name in _ENV_NAMES],
-    *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]")
+    *[(re.compile(flags + r"\b(" + name + r"[\"']?[ \t]*[:=][ \t]*)(?![\"'])(?![rRbBuUfF]{1,2}[\"'])([^\s\"';,]+)"),
+       _keep_token_counts)
       for flags, name in _ENV_NAMES],
     # Azure Pipelines の変数: - name: DB_PASSWORD / value: X（名前の行の次の value）
     (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*(?:#[^\n]*)?\r?\n([ \t]*)value:[ \t]*"
@@ -219,6 +237,10 @@ _SECRET_PATTERNS = [
                 r"(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[ \t]*(?:#[^\n]*)?\r?\n[ \t]*value:[ \t]*)"
                 r"(?![\"'|>])([^\s#]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?im)(\bname:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?[^\n]*\r?\n(?:[ \t]+(?![ \t]|-|value:)[^\n]*\r?\n){1,5}"
+                r"[ \t]+value:[ \t]*)(" + _DQ + "|" + _SQ + "|(?![\"'|>])[^\s#]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?im)(-[ \t]+value:[ \t]*)(" + _DQ + "|" + _SQ + r"|[^\s#]+)(?=[^\n]*\r?\n(?:[ \t]+(?![ \t]|-|name:)[^\n]*\r?\n){0,5}?"
+                r"[ \t]+name:[ \t]*[\"']?[\w.-]*" + _SECRET_WORD + ")"), r"\1[REDACTED]"),
     # PowerShell の変数: $pass = '...' / $pw = "..." / $adminPass = ...
     (re.compile(r"(?i)(\$\w*(?:pass|pw)\w*[ \t]*=[ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(\$\w*(?:pass|pw)\w*[ \t]*=[ \t]*)(?![\"'$(@\[])([^\s;|]+)"), r"\1[REDACTED]"),
@@ -226,7 +248,7 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?<![A-Za-z])((?:PW|PWD|PASS|Pass|pw|pass)[ \t]*[:=][ \t]*)(?![\"'])([^\s、。,，]+)"), r"\1[REDACTED]"),
     # 資格情報のオブジェクト: NetworkCredential("u", "X") / HttpNtlmAuth("u", "X") / HTTPBasicAuth / auth=("u", "X")
     (re.compile(r"(?i)((?:NetworkCredential\s*(?:\]::new)?|HttpNtlmAuth|HTTPBasicAuth|HTTPDigestAuth|\bauth\s*=\s*)\s*\(\s*"
-                r"(?:" + _DQ + "|" + _SQ + r")\s*,\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+                + _PFX + r"(?:" + _DQ + "|" + _SQ + r")\s*,\s*" + _PFX + ")(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     # TFVC: tf ... /login:DOMAIN\user,X
     (re.compile(r"(?i)(/login:[^,\s\"']+,)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(/login:[^,\s\"']+,)([^\s\"']+)"), r"\1[REDACTED]"),
@@ -242,17 +264,19 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _SECRET_KEYS + r"[\"']?\s*[:=]\s*)(\"\"\"[\s\S]{1,4000}?\"\"\"|'''[\s\S]{1,4000}?''')"),
      lambda m: m.group(1) + m.group(2)[:3] + "[REDACTED]" + m.group(2)[:3]),
     # 型注釈の付いた代入: password: str = "X" / token: Optional[str] = X
-    (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*" + _PFX + ")(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
     # password= / "password": "..." / $password = '...'。引用符があれば閉じるまで伏せ、引用符の種類を保つ
-    (re.compile(r"(?i)(" + _KEY_NAME + r"[\"']?[ \t]*:?[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*[\"']?[ \t]*:?[:=][ \t]*[\"']?)(?![rbuf]{1,2}[\"'])([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[\"']?[ \t]*:?[:=][ \t]*" + _PFX + ")(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*[\"']?[ \t]*:?[:=][ \t]*[\"']?)(?![rbuf]{1,2}[\"'])([^\s\"';,、。]{1,})"),
+     _keep_token_counts),
     # 日本語の書き方: パスワードは X / トークン: X。値が英数字と記号で 6 文字以上のときだけ伏せる
     # （「シークレットは使わず」「パスは C:\...」のような、ふつうの言葉やパスを消さない）
     (re.compile(r"((?:パスワード|トークン|アクセストークン|シークレット)\s*(?:は|を|[:：=])\s*[「『]?)"
                 r"(?=[!-~]*[A-Za-z0-9])([!-~]{6,})(?![!-~])"), r"\1[REDACTED]"),
     # URL に埋め込まれた資格情報（https のほか postgresql:// mongodb+srv:// redis:// なども。user:password@ も PAT@ も）
-    (re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/?#]*@"), r"\1[REDACTED]@"),
+    # （並びの頭からだけ探し始め、その中で長さを区切ったスキームを探す。-https:// も xxxpostgresql:// も拾い、2 乗の時間にしない）
+    (re.compile(r"(?i)(?<![a-z0-9+.-])([a-z0-9+.-]*?[a-z][a-z0-9+.-]{0,30}://)[^\s/?#]*@"), r"\1[REDACTED]@"),
     # Azure DevOps の PAT らしい長い英数字（旧形式は 52 文字の小文字と数字、新形式は 84 文字前後）
     (re.compile(r"(?<![A-Za-z0-9])[a-z2-7]{52}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
     # 書き方の規則に当たらなかった値の網: 20 文字以上の、大文字・小文字・数字が混ざった、でたらめらしい文字列
@@ -1168,6 +1192,11 @@ class Index:
         key = self._hash_key()
         with self.db:  # 1 ファイル 1 トランザクション。失敗したら前の内容が残る。
             tid = meta["thread_id"]
+            if self.db.execute("SELECT 1 FROM forgotten WHERE codex_home = ? AND thread_id = ?", (home, tid)).fetchone():
+                # 読んでいる間に、別の検索の forget が済んだ。本文は入れず、forget した記録として残す
+                self._delete_path(path)
+                self._write_file_row(path, home, meta, st, "forgotten", counters, {})
+                return
             # 同じ会話のファイルがほかにもあるとき（thread/revert は前半を元のファイルに残す）は両方を持ち、
             # 同じ発言は検索と show でまとめる。archive への移動で消えた前の場所の分は、ingest の最後に消す。
             self.db.execute(
@@ -1225,7 +1254,7 @@ class Index:
                 self._key = b""
             if len(self._key) < 32:
                 self._key = os.urandom(32)
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
                 with os.fdopen(fd, "wb") as f:
                     f.write(self._key)
         return self._key
@@ -1520,7 +1549,8 @@ class Index:
             "missing": self._missing_count(home),
             "bad_json": q("SELECT COALESCE(SUM(bad_json),0) FROM files WHERE codex_home=? AND status != 'forgotten'",
                           (home,)).fetchone()[0],
-            "shape_errors": q("SELECT COALESCE(SUM(shape_errors),0) FROM files WHERE codex_home=? AND status != 'forgotten'",
+            "shape_errors": q("SELECT COALESCE(SUM(shape_errors),0) FROM files WHERE codex_home=? "
+                              "AND status NOT IN ('forgotten', 'no_messages')",
                               (home,)).fetchone()[0],
             "last_ingest": q("SELECT MAX(ingested_at) FROM files WHERE codex_home=?", (home,)).fetchone()[0],
         }

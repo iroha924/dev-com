@@ -30,6 +30,13 @@ def threads_of(rows):
     return out
 
 
+def rerank_head(rows, k, score):
+    """本番と同じく、上位 k 件だけを点で並べ直し、その後ろの候補は順のまま残す。"""
+    head, tail = rows[:k], rows[k:]
+    points = score(head) if head else []
+    return [head[i] for i in sorted(range(len(head)), key=lambda i: -points[i])] + tail
+
+
 def report(name, ranked, base):
     ranks = []
     for (q, _, _), rows in zip(base, ranked):
@@ -51,7 +58,10 @@ def main():
     p.add_argument("--k", type=int, default=ss.RERANK_K)
     p.add_argument("--window", type=int, default=ss.RERANK_WINDOW)
     p.add_argument("--mock", action="store_true")
+    p.add_argument("--now", default="2026-10-17T00:00:00+00:00", help="新しさの補正の基準の時刻（run_eval と同じ既定）")
     args = p.parse_args()
+    import datetime
+    ss.NOW = datetime.datetime.fromisoformat(args.now)
     qs = json.load(open(args.queries, encoding="utf-8"))["queries"]
     for q in qs:
         q["gold"] = q["gold"] if isinstance(q["gold"], list) else [q["gold"]]
@@ -74,12 +84,11 @@ def main():
         model = CrossEncoder(path, max_length=512, device="cpu")
         times, ranked = [], []
         for q, terms, rows in base:
-            head, tail = rows[:args.k], rows[args.k:]
-            pairs = [(q["question"], ss.rerank_window(r["text"], terms, args.window)) for r in head]
             start = time.time()
-            scores = model.predict(pairs, batch_size=16, show_progress_bar=False) if pairs else []
+            ranked.append(rerank_head(rows, args.k, lambda head: model.predict(
+                [(q["question"], ss.rerank_window(r["text"], terms, args.window)) for r in head],
+                batch_size=16, show_progress_bar=False)))
             times.append(time.time() - start)
-            ranked.append([head[i] for i in sorted(range(len(head)), key=lambda i: -scores[i])] + tail)
         name = os.path.basename(path.rstrip("/").split("/snapshots/")[0]).replace("models--", "")
         report("%s（並べ直しの時間の中央値 %.2f 秒）" % (name, statistics.median(times) if times else 0), ranked, base)
 

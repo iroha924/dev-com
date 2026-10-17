@@ -185,6 +185,39 @@ def rrf(*lists):
 # --- 本体 ----------------------------------------------------------------------------------------
 
 
+def mock_home(work):
+    """モックの CODEX_HOME。相対の --work でも絶対パスにする（rerank_eval が絶対パスで探すので、索引の home をそろえる）。"""
+    return os.path.abspath(os.path.join(work, "codex_home"))
+
+
+def wrrf(lists, weights, k):
+    scores = collections.defaultdict(float)
+    for lst, w in zip(lists, weights):
+        for rank, item in enumerate(lst[:200]):
+            scores[item] += w / (k + rank + 1)
+    return [m for m, _ in sorted(scores.items(), key=lambda x: -x[1])]
+
+
+def add_mixtures(rankings, base, models, queries):
+    """3 つを混ぜる、重みと k を振る。--methods で一部だけを選んだときは、要る方式がそろった組み合わせだけを作る。"""
+    for model in models:
+        for lex in ("bm25-sudachi/kw",):
+            if lex not in base:
+                continue
+            e_kw, e_q, e_qk = "embed-%s/kw" % model, "embed-%s/q" % model, "embed-%s/qk" % model
+            if not all(n in base for n in (e_kw, e_q, e_qk)):
+                continue
+            for k in (10, 30, 60):
+                for wl, we in ((1, 1), (1, 0.5), (1, 2), (2, 1)):
+                    name = "w[%s+%s] k=%d w=%s/%s" % (lex, e_qk, k, wl, we)
+                    rankings[name] = {q["id"]: wrrf([base[lex][q["id"]], base[e_qk][q["id"]]], [wl, we], k) for q in queries}
+            name = "3way[%s+%s+%s]" % (lex, e_kw, e_q)
+            rankings[name] = {q["id"]: rrf(base[lex][q["id"]], base[e_kw][q["id"]], base[e_q][q["id"]]) for q in queries}
+            if "index-or/kw" in base:
+                name = "3way[%s+index-or/kw+%s]" % (lex, e_qk)
+                rankings[name] = {q["id"]: rrf(base[lex][q["id"]], base["index-or/kw"][q["id"]], base[e_qk][q["id"]]) for q in queries}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", required=True)
@@ -200,7 +233,7 @@ def main():
     if args.codex_home:
         home = os.path.abspath(args.codex_home)
     else:
-        home = os.path.abspath(os.path.join(args.work, "codex_home"))
+        home = mock_home(args.work)
         if not os.path.exists(home):
             make_rollouts.main(args.corpus, home)
     idx = ss.Index(os.path.join(args.work, "index.sqlite"))
@@ -317,28 +350,7 @@ def main():
             name = "hyb[%s+%s]" % (lex, emb)
             rankings[name] = {q["id"]: rrf(base[lex][q["id"]], base[emb][q["id"]]) for q in queries}
     # 3 つを混ぜる、重みと k を振る（2 回目）
-    def wrrf(lists, weights, k):
-        scores = collections.defaultdict(float)
-        for lst, w in zip(lists, weights):
-            for rank, item in enumerate(lst[:200]):
-                scores[item] += w / (k + rank + 1)
-        return [m for m, _ in sorted(scores.items(), key=lambda x: -x[1])]
-    for model in [n for n in embedders]:
-        for lex in ("bm25-sudachi/kw",):
-            if lex not in base:
-                continue
-            e_kw, e_q, e_qk = "embed-%s/kw" % model, "embed-%s/q" % model, "embed-%s/qk" % model
-            if not all(n in base for n in (e_kw, e_q, e_qk)):
-                continue
-            for k in (10, 30, 60):
-                for wl, we in ((1, 1), (1, 0.5), (1, 2), (2, 1)):
-                    name = "w[%s+%s] k=%d w=%s/%s" % (lex, e_qk, k, wl, we)
-                    rankings[name] = {q["id"]: wrrf([base[lex][q["id"]], base[e_qk][q["id"]]], [wl, we], k) for q in queries}
-            name = "3way[%s+%s+%s]" % (lex, e_kw, e_q)
-            rankings[name] = {q["id"]: rrf(base[lex][q["id"]], base[e_kw][q["id"]], base[e_q][q["id"]]) for q in queries}
-            if "index-or/kw" in base:
-                name = "3way[%s+index-or/kw+%s]" % (lex, e_qk)
-                rankings[name] = {q["id"]: rrf(base[lex][q["id"]], base["index-or/kw"][q["id"]], base[e_qk][q["id"]]) for q in queries}
+    add_mixtures(rankings, base, list(embedders), queries)
 
     # 集計
     results = {}
