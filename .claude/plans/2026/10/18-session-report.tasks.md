@@ -131,6 +131,16 @@ base: main
   - コミット: `fix(session-report): 操作の対象を伏せ字の後に切り、目的の分類を確かめた形だけにし、Windows の引用符と差分の行数を直す`
   - 結果: red を直す前のコードで実測 → 9 件 FAIL、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 48 件 OK
 
+- [x] T19: revert の前半のファイルが引き継ぐ位置より短いことを記録する
+  - 種別: 修正
+  - 計画: S2
+  - 依存: T17（直す対象の extract が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k test_short_prefix_file_is_reported` → FAIL（coverage.prefix_missing が false）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): revert の前半のファイルが引き継ぐ位置より短ければ prefix_missing にする`
+  - 結果: red を直す前のコードで実測 → FAIL。直した後 `python3 -m unittest discover -s tests` → 360 件 OK（skip 24）
+
 ## P3: Codex の追記を読ませて確かめる
 
 Codex が読む input を作り、書いた追記の根拠と漏れをスクリプトで確かめ、持ち主が判定を直せるようになる。
@@ -208,6 +218,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T19 / T17 の見直し（a6e7a05、high）は、直した 4 件を確かめ、F1（対象の伏せ字 P1）は T18 で直し済み、F2（前半のファイルが短い P2）だけが新しい件だった。持ち主と決めた終わり方（重い指摘が 0 件で extract を閉じる）に当たるので、extract のレビューはここで閉じる / F2 は T19 で直し、最後の全体の差分のレビュー（A7）で見てもらう
 
 - 2026-10-18 / T18 / T03 のレビュー（11cb6c0）の 5 件（F1 対象の伏せ字 P1、F2 連結したコマンド P2、F3 MCP の目的の推測 P2、F4 Windows の引用符 P2、F5 差分の行数 P2）を再現で確かめて受理 / T18 を足して直した。MCP の目的は read_only_hint と MCP_PURPOSE の表だけで決め、表は空にした。会社の PC の probe で ADO MCP の tool の名前が分かったら、表を埋めるタスクを足す
 

@@ -482,6 +482,7 @@ def effective_record(path, data, home, depth=0):
     if prefix is None:
         return data, sources, True
     prefix_data, prefix_sources, missing = effective_record(prefix_path, prefix[:end], home, depth + 1)
+    missing = missing or len(prefix) < end  # 前半のファイルが、引き継ぐ位置より短い
     prefix_sources[-1].update(size=len(prefix), sha256=hashlib.sha256(prefix).hexdigest())
     if not prefix_data.endswith(b"\n"):
         prefix_data += b"\n"

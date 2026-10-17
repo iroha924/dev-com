@@ -480,6 +480,18 @@ class ExtractTest(_Base):
         self.assertEqual([m["text"] for m in rep["messages"] if m["kind"] == "user"], ["依頼 %d" % n for n in range(12)])
         self.assertFalse(rep["coverage"]["prefix_missing"])
 
+    def test_short_prefix_file_is_reported(self):
+        first = Rollout(T1).turn("t1").user("u1", "前").end("前の答え")
+        prefix = self.write(T1, first.text())
+        cont = Rollout(T1)
+        cont.lines[0] = line(cont.ts(), "session_meta", {"id": T1, "cwd": "C:\\w", "history_base": {
+            "thread_id": T1, "end_ordinal_exclusive": 9, "end_byte_offset": len(first.text().encode("utf-8")) + 500}})
+        cont.turn("t2").user("u2", "後").end("後の答え")
+        newer = self.write(T2, cont.text())
+        os.utime(prefix, (1000, 1000))
+        os.utime(newer, (2000, 2000))
+        self.assertTrue(self.extract(T1)["coverage"]["prefix_missing"])
+
     def test_revert_keeps_the_continuation_metadata(self):
         first = Rollout(T1, cwd="C:\\old", branch="old").turn("t1").user("u1", "前").end("前の答え")
         cut = len(first.text().encode("utf-8"))
