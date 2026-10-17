@@ -62,6 +62,9 @@ def canary_rollout(tid, image_path):
         line(ts, "response_item", {"type": "function_call", "name": "shell", "arguments": c}),
         line(ts, "response_item", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": c}]}),
         line(ts, "event_msg", {"type": "task_complete", "turn_id": turn, "last_agent_message": c}),
+        line(ts, "event_msg", {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 1}, "last_token_usage": c}}),
+        line(ts, "event_msg", {"type": "item_started", "turn_id": turn, "item": {"type": "CommandExecution", "id": "c9",
+                                                                                "command": [c]}}),
         line(ts, "event_msg", {"type": "知らない種類"}),
         line(ts, "event_msg", {"type": "x" * 41}),
     ]) + "\n{broken %s\n" % c
@@ -192,10 +195,11 @@ class ProbeShapeTest(_Base):
             target[path[-1]] = value
             return obj
 
+        number = 86753091234
         leaks = []
         for n, row in enumerate(base):
             for path in paths(row):
-                for value in (CANARY, {CANARY: CANARY}, [CANARY], {"type": "text", CANARY: CANARY}):
+                for value in (CANARY, {CANARY: CANARY}, [CANARY], {"type": "text", CANARY: CANARY}, number, [number]):
                     if isinstance(value, str) and isinstance(path[-1], str) and path[-1] in enum_keys:
                         continue
                     if not isinstance(value, str) and path in structural:
@@ -203,9 +207,27 @@ class ProbeShapeTest(_Base):
                     data = (json.dumps(replaced(row, path, value)) + "\n").encode()
                     c = sr.collections.Counter()
                     sr.probe_file(c, data)
-                    if any(CANARY in a or CANARY in b for a, b in c):
+                    if any(CANARY in a or CANARY in b or str(number) in a + b for a, b in c):
                         leaks.append((n, path, type(value).__name__))
         self.assertEqual(leaks, [])
+
+    def test_broken_file_uri_does_not_print_the_value(self):
+        self.write(T1, "\n".join([
+            line("2026-10-14T01:12:00Z", "session_meta", {"id": T1}),
+            item("2026-10-14T01:12:00Z", "t1", {"type": "ImageView", "id": "i1", "path": "file://%s\uff0fprivate/a.png" % CANARY}),
+        ]) + "\n")
+        code, out, err = self.run_cli("probe")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn(CANARY, out + err)
+        self.assertIn("item.ImageView.path\tfile-uri,invalid\t1", out)
+
+    def test_session_index_values_do_not_appear(self):
+        self.write(T1, canary_rollout(T1, "x"))
+        with open(os.path.join(self.home, "session_index.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"id": CANARY, "thread_name": CANARY, "updated_at": CANARY}) + "\n{broken %s\n" % CANARY)
+        out = self.probe()
+        self.assertNotIn(CANARY, out)
+        self.assertIn("session_index.key\tthread_name\t1", out)
 
     def test_unc_file_uri_keeps_the_server(self):
         seen = []

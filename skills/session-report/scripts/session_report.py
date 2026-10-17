@@ -139,7 +139,10 @@ def _path_state(value):
     path, form = value, "relative"
     if value.startswith("file://"):
         from urllib.parse import unquote, urlparse
-        url = urlparse(value)
+        try:
+            url = urlparse(value)
+        except ValueError:
+            return "file-uri,invalid"  # 例外のメッセージには値が入るので、出さない
         path, form = unquote(url.path), "file-uri"
         if url.netloc and url.netloc.lower() != "localhost":
             path = "//" + url.netloc + path  # file://server/share/a.png は \\server\share\a.png
@@ -297,7 +300,10 @@ def cmd_probe(args):
         if data is None:
             c["files", "zst_unreadable"] += 1
             continue
-        probe_file(c, data)
+        try:
+            probe_file(c, data)
+        except Exception as e:  # 例外のメッセージには記録の値が入りうるので、種類の名前だけを数える
+            c["files", "probe_error." + type(e).__name__] += 1
     index = os.path.join(home, "session_index.jsonl")
     if os.path.isfile(index):
         with open(index, "rb") as f:

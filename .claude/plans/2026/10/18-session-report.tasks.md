@@ -54,6 +54,17 @@ base: main
   - 結果: red を直す前のコードで実測 → FAIL（content の要素・command・duration・exit_code・parsed_cmd・status・changes・result・action・results・source の 18 の位置）。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 29 件 OK
   - 結果: `session_report.py probe` → この Mac の記録で、区分と名前の組が直す前と同じ（diff が空）
 
+- [x] T15: probe の壊れた file URI の例外と、位置ごとのテストの抜けを直す
+  - 種別: 修正
+  - 計画: S1
+  - 依存: T13（直す対象の probe とテストが要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k test_broken_file_uri_does_not_print_the_value` → FAIL（file:// の後ろに全角の文字があると urlparse の例外のメッセージに値が入り、エラー出力に出る）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): probe の例外のメッセージに値を出さず、位置ごとのテストに token_count・item_started・数の値を足す`
+  - 結果: red を直す前のコードで実測 → FAIL。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 36 件 OK
+  - 結果: `python3 -m unittest tests.test_session_report -k test_no_position_leaks_its_value` → token_count の info の値と数の aggregated_output をわざと出すように変えたコードで FAIL（24 か所）を確かめ、コードを戻した
+
 ## P2: 記録から機械で取り出す
 
 1 つの会話から、発言・ターン・操作・成果物を report.json に書けるようになる。
@@ -164,6 +175,9 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T15 / T13 の見直し（799a2e3、high）の 2 件（F1 例外のメッセージに値が出る P2、F2 位置ごとのテストが無い分岐と数の値を見ない P2）を再現で確かめて受理 / T15 を足して直した。1 本の記録で思わぬ例外が出たら、種類の名前だけを数えて先へ進むようにした
+- 2026-10-18 / T13・T14 / 依頼文を作る道具の書き間違い（全角の括弧が変数の名前に続いた）で、最初の見直しの依頼の頭が欠けた。Codex は設定の切り替えの案内だけを返し、レビューしていない / 道具を直し、依頼文の頭が無ければ送らない確かめを足して出し直した
 
 - 2026-10-18 / T14 / T02 のレビュー（02a9f63）の 5 件（F1 伏せ字の抜け P1、F2 revert で古いファイルを選ぶ P1、F3 添付だけの発言 P2、F4 古い形式のターン P2、F5 読めない記録を黙って飛ばす P2）を作り物の記録で確かめて受理。直す途中で、古い形式では parse_rollout の発言が行の順に並ばないことも見つけ、並べ直しを入れた / T14 を足して直した
 
