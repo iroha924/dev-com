@@ -155,6 +155,16 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - 結果: `python3 -m unittest tests.test_session_report -k Input` → 5 件 OK。`python3 -m unittest discover -s tests` → この Mac 365 件 OK（skip 24）、コンテナ 365 件 OK（skip 3）
   - 結果: `session_report.py input --dir <一時フォルダ>` → この Mac の実際の記録（発言 52 件、操作 243 件）で終了コード 0（件数と文字数だけを見て消した）
 
+- [x] T20: 切れ目の語の切れ端・ado.ps1 の引数の読み方と実行の見分け・シェルごとの連結・input の上限を直す
+  - 種別: 修正
+  - 計画: S3, S4
+  - 依存: T18（直す対象の操作の分類が要る）, T04（直す対象の input が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Operation -k Input` → 5 件 FAIL（余白より長い語の切れ端に秘密が残る、-OutFile "-DryRun" を参照と分類、PowerShell の & を連結と見て不明、git rm ado.ps1 get を ADO の操作と分類、持ち主の発言が無いと input が上限を超える）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 切れ目の語の切れ端を捨て、ado.ps1 の引数と実行を正しく読み、連結をシェルごとに見分け、input を上限で区切る`
+  - 結果: red を直す前のコードで実測 → 5 件 FAIL、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 55 件 OK
+
 - [ ] T05: 追記の形と check
   - 種別: 追加
   - 計画: S5
@@ -220,6 +230,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T20 / T18 の見直し（b1a1a4f、high）の 3 件（F1 余白より長い語の切れ端 P2、F2 引用符を外したことで "-DryRun" の値をスイッチと取り違える P2（T18 の直しで入った）、F3 ado.ps1 を実行していない形 P2）を再現で確かめて受理。直す途中で、PowerShell の先頭の & を連結と見る誤りと、T04 の input が上限を超える件（実際の記録で 64,329 文字）も見つけた / T20 を足して直した。語の切れ端は、伏せ字がその語の全体を見ていないときだけ捨てる（空白の無い 1 行の JSON の先頭を消さないため）
 
 - 2026-10-18 / T04 / 発言と操作を記録の順に並べるため、report.json の発言と操作に seq（記録の中の行の順番）を足した。テストの表示の時刻が流す PC の時差に依っていたので、テストでは TZ=Asia/Tokyo に固定した
 

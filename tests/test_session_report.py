@@ -612,6 +612,10 @@ class OperationTest(_Base):
             # 連結したコマンドは、どれか 1 つの目的に決めない
             (cmd(ado + "get _apis/wit/workitems/1; " + ado + "write _apis/wit/workitems/1 -Method PATCH -Approve a", 0), ("ado.ps1 get", "不明")),
             (cmd("az boards query --wiql x && az boards work-item delete --id 1", 0), ("az boards query", "不明")),
+            # 値として渡した "-DryRun" はスイッチではない
+            (cmd('.\\ado.ps1 write _apis/wit/workitems/1 -Method PATCH -BodyFile b.json -OutFile "-DryRun" -Approve abc', 0,
+                 shell=("pwsh", "-NoProfile", "-Command")), ("ado.ps1 write", "更新")),
+            (cmd("& 'C:\\x\\ado.ps1' get _apis/projects", 0, shell=("pwsh", "-NoProfile", "-Command")), ("ado.ps1 get", "参照")),
             # Windows の引用符で囲んだパス
             (cmd('powershell -File "C:\\Program Files\\ado.ps1" write _apis/wit/workitems/1 -Method PATCH -Approve a', 0,
                  shell=("pwsh", "-NoProfile", "-Command")), ("ado.ps1 write", "更新")),
@@ -623,6 +627,8 @@ class OperationTest(_Base):
                 self.assertEqual((o["tool"], o["purpose"], o["external"]), (tool, purpose, True))
         self.assertEqual(self.op(cmd(ado + "write _apis/wit/workitems/1287 -Method PATCH", 0))["method"], "PATCH")
         self.assertFalse(self.op(cmd("python x.py", 0))["external"])
+        # ado.ps1 を実行していないコマンドは、ADO の操作として分類しない
+        self.assertFalse(self.op(cmd("git rm ado.ps1 get", 0))["external"])
         self.assertEqual(self.op(mcp("x", result={"content": [], "isError": True}))["status"], "failed")
 
     def test_files_web_and_images(self):
@@ -666,6 +672,14 @@ class OperationTest(_Base):
         self.assertNotIn("shortsecret", json.dumps(url))
         web = self.op({"type": "WebSearch", "id": "w9", "query": "q " * 195 + " https://user:shortsecret@host/", "action": {}})
         self.assertNotIn("shortsecret", json.dumps(web))
+        # 余白より長い語の途中で切るときは、その語を捨てる
+        # 空白の無い長い出力（1 行の JSON など）は、伏せ字が全体を見ていれば先頭も残す
+        blob = self.op(cmd("x", 0, output="{" + '"k":"v",' * 3000 + "}"))
+        self.assertTrue(blob["output"].startswith('{"k":"v"'))
+        huge = "https://user:shortsecret" + "x" * 21000 + "@host/"
+        self.assertNotIn("shortsecret", json.dumps(self.op(cmd("echo " + huge, 0))))
+        self.assertNotIn("shortsecret", json.dumps(self.op(cmd("x", 0, output="A " * 900 + huge + " Z" * 30000))))
+        self.assertNotIn("shortsecret", json.dumps(self.op(cmd("x", 0, output="A " * 30000 + huge + " Z" * 900))))
         short = self.op(cmd("echo", 0, output="token=Sup3rS3cretValue9"))
         self.assertNotIn("Sup3rS3cretValue9", json.dumps(short))
 
@@ -720,12 +734,19 @@ class InputTest(_Base):
         self.assertNotIn(CANARY, text)  # 推論は入れない
         self.assertIn("持ち主の発言 2 件（この範囲 2 件）", text)
 
-    def test_parts_split_before_owner_messages(self):
+    def test_parts_split_at_entry_boundaries(self):
         entries = [("### [u1] 持ち主\n" + "a" * 50, True), ("- op\n", False), ("### [a1] Codex\n" + "b" * 50, False),
                    ("### [u2] 持ち主\n" + "c" * 50, True), ("### [a2] Codex\n" + "d" * 200, False)]
         parts = sr.split_parts(entries, limit=100)
         self.assertEqual([[e.split("\n")[0] for e in p] for p in parts],
-                         [["### [u1] 持ち主", "- op", "### [a1] Codex"], ["### [u2] 持ち主", "### [a2] Codex"]])
+                         [["### [u1] 持ち主", "- op"], ["### [a1] Codex"], ["### [u2] 持ち主"], ["### [a2] Codex"]])
+
+    def test_parts_keep_the_limit_without_owner_messages(self):
+        entries = [("### [u1] 持ち主\n" + "a" * 10, True)] + [("- op %d\n" % n + "x" * 30, False) for n in range(10)]
+        parts = sr.split_parts(entries, limit=100)
+        self.assertGreater(len(parts), 1)
+        for p in parts:
+            self.assertLessEqual(sum(len(e) for e in p), 100)
 
     def test_later_parts_list_pending_items(self):
         out = self.make()
@@ -737,7 +758,7 @@ class InputTest(_Base):
                 "questions": [{"id": "Q1", "text": "再実行すべき？", "status": "未回答"}, {"id": "Q2", "text": "x", "status": "答えた"}]},
                 f, ensure_ascii=False)
         report = sr.read_json(os.path.join(out, "report.json"))
-        self.assertEqual(len(sr.split_parts(sr.input_entries(report), limit=10)), 2)
+        self.assertGreater(len(sr.split_parts(sr.input_entries(report), limit=10)), 1)
         self.assertEqual(sr.pending_items(sr.read_json(os.path.join(out, "annotations.json"))),
                          ["- R1（一部）: 原因を直す", "- Q1（未回答）: 再実行すべき？"])
         code, _, err = self.run_cli("input", "--dir", out, "--part", "2")

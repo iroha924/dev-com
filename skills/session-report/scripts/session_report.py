@@ -653,7 +653,15 @@ _SEARCH_OPTIONS = {
              {"-e", "-C", "-A", "-B", "--include", "--exclude", "--regexp"}),
     "findstr": ({"/s", "/i", "/n", "/l", "/r", "/m", "/p", "/b", "/e", "/x"}, set()),
 }
-_SHELL_META = re.compile(r"[|;&<>`\n]|\$\(")
+# シェルごとの、コマンドをつなぐ・流し込む記号。PowerShell の先頭の & はプログラムを呼ぶ記号なので外して見る
+_COMPOUND = {"posix": re.compile(r"[|;&<>`\n]|\$\("), "pwsh": re.compile(r"[|;&<>\n]|\$\("),
+             "cmd": re.compile(r"[|&<>\n^]")}
+
+
+def _compound(script, shell):
+    if shell == "pwsh":
+        script = re.sub(r"^\s*&\s", "", script)
+    return bool(_COMPOUND[shell].search(script))
 # az のサブコマンドの目的
 _AZ_PURPOSE = {
     ("repos", "pr", "create"): "作成", ("repos", "pr", "update"): "更新", ("repos", "pr", "list"): "参照",
@@ -679,14 +687,14 @@ _ADO_WRITE = [
 MCP_PURPOSE = {}
 
 
-def _split(script, windows):
+def _split(script, shell):
     """1 つのコマンドの文を語に分ける。分けられなければ None。"""
     import shlex
     try:
-        words = shlex.split(script, posix=not windows)
+        words = shlex.split(script, posix=shell == "posix")
     except ValueError:
         return None
-    if windows:  # posix=False は引用符を語に残す
+    if shell != "posix":  # posix=False は引用符を語に残す
         words = [w[1:-1] if len(w) >= 2 and w[0] == w[-1] and w[0] in "\"'" else w for w in words]
     return words
 
@@ -696,27 +704,28 @@ def _base(word):
 
 
 def command_script(command):
-    """記録のコマンド（語の配列）から、見せる文と、それが PowerShell / cmd か。"""
+    """記録のコマンド（語の配列）から、見せる文と、その文を読むシェル（posix / pwsh / cmd）。"""
     if isinstance(command, str):
-        return command, False
+        return command, "posix"
     if not isinstance(command, list) or not all(isinstance(w, str) for w in command):
-        return "", False
+        return "", "posix"
     if len(command) >= 3:
         name = _base(command[0])
         flags = _WRAPPERS.get(name)
+        shell = "cmd" if name == "cmd" else ("pwsh" if name in ("pwsh", "powershell") else "posix")
         for i in range(1, len(command) - 1):
             if flags and command[i].lower() in flags:
-                return " ".join(command[i + 1:]) if len(command) > i + 2 else command[i + 1], name in ("pwsh", "powershell", "cmd")
+                return (" ".join(command[i + 1:]) if len(command) > i + 2 else command[i + 1]), shell
             if not command[i].startswith("-") and not command[i].startswith("/"):
                 break
-    return " ".join(command), False
+    return " ".join(command), "posix"
 
 
-def _search_no_match(script, windows):
+def _search_no_match(script, shell):
     """終了コード 1 を「該当なし」と読める形か: パイプや連結の無い 1 つの rg / grep / findstr を、確かめたオプションだけで流した。"""
-    if _SHELL_META.search(script):
+    if _compound(script, shell):
         return False
-    words = _split(script, windows)
+    words = _split(script, shell)
     if not words:
         return False
     name = _base(words[0])
@@ -763,20 +772,44 @@ def _az_purpose(words):
     return None
 
 
+# ado.ps1 の、値を取る引数（skills/ado/scripts/ado.ps1 の param）。-DryRun だけがスイッチ
+_ADO_VALUE_PARAMS = {"-method", "-bodyfile", "-contenttype", "-apiversion", "-outfile", "-continuationtoken", "-approve",
+                     "-accept", "-timeoutsec"}
+
+
 def _ado_purpose(words):
-    """ado.ps1 の呼び出し（powershell -File ...ado.ps1 <mode> <path> [-Method ...] [-DryRun]）の目的。"""
-    at = next((i for i, w in enumerate(words) if _base(w) == "ado.ps1"), None)
+    """ado.ps1 の呼び出し（powershell -File ...ado.ps1 <mode> <path> [-Method ...] [-DryRun]）の目的。
+
+    ado.ps1 を実行している形（先頭、-File の後、& や . の後、pwsh / powershell の最初の引数）だけを見る。
+    """
+    at = None
+    for i, w in enumerate(words):
+        if _base(w) != "ado.ps1":
+            continue
+        prev = words[i - 1].lower() if i else ""
+        if i == 0 or prev in ("-file", "&", ".") or (i == 1 and _base(prev) in ("pwsh", "powershell")):
+            at = i
+        break
     if at is None or at + 1 >= len(words):
         return None
     mode = words[at + 1].lower()
     rest = words[at + 2:]
     path = rest[0] if rest and not rest[0].startswith("-") else ""
-    lower = [w.lower() for w in rest]
-    method = rest[lower.index("-method") + 1].upper() if "-method" in lower and lower.index("-method") + 1 < len(rest) else None
+    method, dry_run, i = None, False, 1 if path else 0
+    while i < len(rest):
+        low = rest[i].lower()
+        if low in _ADO_VALUE_PARAMS:
+            if low == "-method" and i + 1 < len(rest):
+                method = rest[i + 1].upper()
+            i += 2
+            continue
+        if low == "-dryrun":
+            dry_run = True
+        i += 1
     info = {"route": "command", "tool": "ado.ps1 " + mode, "method": method, "path": path}
     if mode in ("get", "query", "preview"):
         info["purpose"] = "参照"
-    elif mode == "write" and "-dryrun" in lower:
+    elif mode == "write" and dry_run:
         info["purpose"] = "参照"  # 承認のハッシュを出すだけで送らない
     elif mode == "write":
         info["purpose"] = next((p for rx, m, p in _ADO_WRITE if method == m and rx.search(path)), "不明")
@@ -791,9 +824,35 @@ def _mcp_purpose(it):
     return MCP_PURPOSE.get((it.get("server"), it.get("tool")), "不明")
 
 
+def _head(red, n, whole=True):
+    """伏せ字をかけた red の先頭の n 文字。
+
+    red が全文でなく（whole=False、余白付きの範囲）、切れ目の語（空白を含まない一続きの文字）が範囲の端まで続くなら、
+    伏せ字はその語の全体を見ていないので、語の切れ端を捨てる（余白より長い秘密の切れ端を残さない）。
+    """
+    if len(red) <= n:
+        return red
+    s = red[:n]
+    if not whole and not red[n].isspace() and not re.search(r"\s", red[n:]):
+        s = re.sub(r"\S+\Z", "", s)
+    return s
+
+
+def _tail(red, n, whole=True):
+    """伏せ字をかけた red の末尾の n 文字。語の切れ端の扱いは _head と同じ。"""
+    if n <= 0:
+        return ""
+    if len(red) <= n:
+        return red
+    s = red[-n:]
+    if not whole and not red[-n - 1].isspace() and not re.search(r"\s", red[:-n]):
+        s = re.sub(r"\A\S+", "", s)
+    return s
+
+
 def _short(text):
     """操作の対象（コマンドの文・検索語）を、伏せ字をかけてから TARGET_LIMIT 文字に切る。"""
-    return ss.redact(text[:TARGET_LIMIT + REDACT_MARGIN])[:TARGET_LIMIT]
+    return _head(ss.redact(text[:TARGET_LIMIT + REDACT_MARGIN]), TARGET_LIMIT, whole=len(text) <= TARGET_LIMIT + REDACT_MARGIN)
 
 
 def _cut(text, head=OUTPUT_HEAD, tail=OUTPUT_TAIL):
@@ -808,10 +867,10 @@ def _cut(text, head=OUTPUT_HEAD, tail=OUTPUT_TAIL):
         red = ss.redact(text)
         if len(red) <= head + tail:
             return red, False, len(text)
-        start, end = red[:head], (red[-tail:] if tail else "")  # red[-0:] は全文になる
+        start, end = _head(red, head), _tail(red, tail)
     else:
-        start = ss.redact(text[:head + REDACT_MARGIN])[:head]
-        end = ss.redact(text[-(tail + REDACT_MARGIN):])[-tail:] if tail else ""
+        start = _head(ss.redact(text[:head + REDACT_MARGIN]), head, whole=False)
+        end = _tail(ss.redact(text[-(tail + REDACT_MARGIN):]), tail, whole=False)
     return start + "\n…（約 %d 文字を省略）…\n" % (len(text) - head - tail) + end, True, len(text)
 
 
@@ -888,7 +947,7 @@ def operation(it, ts, turn_id):
           "files": [], "machine": True}
     st = it.get("status") if isinstance(it.get("status"), str) else None
     if typ == "CommandExecution":
-        script, windows = command_script(it.get("command"))
+        script, shell = command_script(it.get("command"))
         code = it.get("exit_code") if isinstance(it.get("exit_code"), int) and not isinstance(it.get("exit_code"), bool) else None
         op.update(route="command", target=_short(script), exit_code=code,
                   duration_ms=_duration_ms(it.get("duration")))
@@ -896,15 +955,15 @@ def operation(it, ts, turn_id):
             op["status"] = "declined"
         elif st == "completed" and code == 0:
             op["status"] = "ok"
-        elif code == 1 and _search_no_match(script, windows):
+        elif code == 1 and _search_no_match(script, shell):
             op["status"] = "no_match"
         elif st in ("failed", "completed") and code is not None:
             op["status"] = "failed"
         elif st == "inProgress" or st == "in_progress":
             op["status"] = "incomplete"
-        words = _split(script, windows) or []
+        words = _split(script, shell) or []
         ext = _ado_purpose(words) or _az_purpose(words)
-        if ext and _SHELL_META.search(script):
+        if ext and _compound(script, shell):
             ext["purpose"] = "不明"  # 連結したコマンドは、どの操作の目的かを 1 つに決めない
         if ext:
             op.update(route="command", tool=_red(ext["tool"]), method=ext["method"], purpose=ext["purpose"], external=True)
@@ -1146,10 +1205,10 @@ def input_entries(report):
 
 
 def split_parts(entries, limit=INPUT_LIMIT):
-    """持ち主の発言の前で区切り、1 つが limit 文字を超えないように分ける（1 件で超えるものはそのまま 1 つ）。"""
+    """発言・操作の切れ目で、1 つが limit 文字を超えないように分ける（1 件で超えるものはそのまま 1 つ）。"""
     parts, cur, size = [], [], 0
     for text, owner in entries:
-        if owner and cur and size + len(text) > limit:
+        if cur and size + len(text) > limit:
             parts.append(cur)
             cur, size = [], 0
         cur.append(text)
