@@ -44,7 +44,7 @@ try:
 except ImportError:  # pragma: no cover - depends on the interpreter
     zstd = None
 
-USER_SKIP_TYPES = {"image", "local_image", "skill", "mention"}
+USER_SKIP_TYPES = {"image", "local_image", "audio", "local_audio", "skill", "mention"}
 KINDS = ("user", "commentary", "final", "memory")
 DEFAULT_KINDS = ("user", "final", "memory")
 SNIPPET = 80
@@ -86,6 +86,8 @@ _SECRET_KEYS = r"(?:password|passwd|pwd|secret|token|api[_-]?key|pat|accountkey|
 # （tokenizer・tokens・secretary）は外す。pat は PAT・pat・Pat の後に _ か数字が続くものだけ（PATH・path・patch・pattern を外す）
 _KEY_NAME = (r"(?:(?:password|passwd|pwd|secret(?!ar)|token(?!iz|s(?![A-Za-z]))|api[_-]?key|accountkey|sharedaccesskey)\w*"
              r"|(?-i:pat|PAT|Pat)(?:[_0-9]\w*)?(?![A-Za-z]))")
+# 環境変数の名前に含まれる、秘密を表す語。pat と key は前後が英字でないときだけ（PATH・KEYBOARD を外す）
+_SECRET_WORD = r"(?:secret|token|password|passwd|pwd|apikey|(?<![a-z])(?:pat|key)(?![a-z]))"
 _DQ = r'"(?:[^"\\`]|[\\`].){1,100000}"'     # "..."（\" と `" は閉じる引用符ではない。改行も含める）
 _SQ = r"'(?:[^']|''){1,100000}'(?!')"         # '...'（PowerShell の '' は閉じる引用符ではない。\ はふつうの文字）
 
@@ -112,8 +114,26 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(-" + _SECRET_KEYS + r"\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     # 引用符なしの引数: -Password X / --password X / --token=X / az devops login --token X
     (re.compile(r"(?i)((?:^|\s)--?(?:password|passwd|pwd|secret|token|pat|api[_-]?key|access[_-]?token|client[_-]?secret|"
-                r"personalaccesstoken|securepassword)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(-(?:personalaccesstoken|securepassword)\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+                r"personalaccesstoken|securepassword|passphrase)(?:\s+|=))(?=[^\s'\"|;-])([^\s'\"|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(-(?:personalaccesstoken|securepassword|passphrase)\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    # 環境変数に入れる書き方: os.environ["X_TOKEN"] = / setx X_PAT v / SetEnvironmentVariable("X_TOKEN", v) / Set-Item Env:X -Value v
+    (re.compile(r"(?i)(environ\[[\"'][^\"'\]\n]*" + _SECRET_WORD + r"[^\"'\]\n]*[\"']\][ \t]*=[ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(environ\[[\"'][^\"'\]\n]*" + _SECRET_WORD + r"[^\"'\]\n]*[\"']\][ \t]*=[ \t]*)(?![\"'])([^\s;,]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bsetx\s+(?:/m\s+)?[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\bsetx\s+(?:/m\s+)?[\"']?[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?\s+)(?![\"'/])(\S+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(SetEnvironmentVariable\(\s*[\"'][^\"'\n]*" + _SECRET_WORD + r"[^\"'\n]*[\"']\s*,\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(SetEnvironmentVariable\(\s*[\"'][^\"'\n]*" + _SECRET_WORD + r"[^\"'\n]*[\"']\s*,\s*)(?![\"'])([^\s,)]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bSet-Item\b[^\n|;]*?Env:\w*" + _SECRET_WORD + r"\w*[^\n|;]*?-Value\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\bSet-Item\b[^\n|;]*?Env:\w*" + _SECRET_WORD + r"\w*[^\n|;]*?-Value\s+)(?![\"'])([^\s|;]+)"), r"\1[REDACTED]"),
+    # az keyvault secret set --value X / az pipelines variable create --value X（ADO のパイプライン変数）
+    (re.compile(r"(?i)(\baz\s+(?:keyvault\s+secret\s+set|pipelines\s+(?:variable-group\s+)?variable\s+(?:create|update))\b"
+                r"[^\n|;]*?--value[ \t=]+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(\baz\s+(?:keyvault\s+secret\s+set|pipelines\s+(?:variable-group\s+)?variable\s+(?:create|update))\b"
+                r"[^\n|;]*?--value[ \t=]+)(?![\"'])([^\s|;]+)"), r"\1[REDACTED]"),
+    # openssl の -passin pass:X / -passout pass:X、ssh-keygen -N X
+    (re.compile(r"(?i)(-pass(?:in|out)\s+pass:)([^\s|;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(\bssh-keygen\b[^\n|;]*?\s-N\s+)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(\bssh-keygen\b[^\n|;]*?\s-N\s+)(?![\"'])([^\s|;]+)"), r"\1[REDACTED]"),
     # 短いオプションでパスワードを渡すコマンド: docker login -p X / sqlcmd -P X / nuget ... -p X / mysql -p X
     (re.compile(r"(?i)(\b(?:docker\s+login|sqlcmd|nuget|dotnet\s+nuget|mysql(?:dump)?|psql)\b[^\n|;]*?\s-[pP]\s*)(" + _DQ + "|" + _SQ + ")"),
      _keep_quote),
@@ -163,10 +183,15 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*=\s*)(@\"[\s\S]*?\"@|@'[\s\S]*?'@)"),
      lambda m: m.group(1) + m.group(2)[:2] + "[REDACTED]" + m.group(2)[-2:]),
     # YAML のブロック: secret: | の次の行から、字下げが続くところまで
-    (re.compile(r"(?im)^(([ \t]*)(?:-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>][-+]?[ \t]*\n)"
-                r"((?:\2[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
+    (re.compile(r"(?im)^(([ \t]*)(?:-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>](?:[-+]?[1-9]?|[1-9][-+])[ \t]*\r?\n)"
+                r"((?:(?:[ \t]*\r?\n)*\2[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
     # 環境変数の名前: AWS_SECRET_ACCESS_KEY=... / GITHUB_TOKEN: ...（区切りの語が secret・token・password・key・pat）
-    (re.compile(r"(?i)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:secret|token|password|passwd|key|pat)(?:_[a-z0-9]+)*[\"']?[ \t]*[:=][ \t]*)"
+    (re.compile(r"\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:SECRET|TOKEN|PASSWORD|PASSWD|KEY|PAT)(?:_[A-Z0-9]+)*[\"']?[ \t]*[:=][ \t]*)"
+                r"(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:secret|token|password|passwd|pat)(?:_[a-z0-9]+)*[\"']?[ \t]*[:=][ \t]*)"
+                r"(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b((?:[a-z0-9]+_)*(?:access|account|storage|subscription|private|master|shared|signing|encryption|client|"
+                r"app|api|function|functions|host|service|sas|auth|admin|deploy|ssh)_key(?:_[a-z0-9]+)*[\"']?[ \t]*[:=][ \t]*)"
                 r"(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
     # Azure の SAS の署名: ?sv=...&sig=... / SharedAccessSignature=...sig=...
     (re.compile(r"(?i)(\bsig=)([^&;\s\"']+)"), r"\1[REDACTED]"),
@@ -180,8 +205,8 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
     # password= / "password": "..." / $password = '...'。引用符があれば閉じるまで伏せ、引用符の種類を保つ
-    (re.compile(r"(?i)(" + _KEY_NAME + r"[\"']?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*[\"']?[ \t]*[:=][ \t]*[\"']?)([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[\"']?[ \t]*:?[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*[\"']?[ \t]*:?[:=][ \t]*[\"']?)([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
     # 日本語の書き方: パスワードは X / トークン: X。値が英数字と記号で 6 文字以上のときだけ伏せる
     # （「シークレットは使わず」「パスは C:\...」のような、ふつうの言葉やパスを消さない）
     (re.compile(r"((?:パスワード|トークン|アクセストークン|シークレット)\s*(?:は|を|[:：=])\s*[「『]?)"
@@ -191,7 +216,7 @@ _SECRET_PATTERNS = [
     # Azure DevOps の PAT らしい長い英数字（旧形式は 52 文字の小文字と数字、新形式は 84 文字前後）
     (re.compile(r"(?<![A-Za-z0-9])[a-z2-7]{52}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
     # 書き方の規則に当たらなかった値の網: 20 文字以上の、大文字・小文字・数字が混ざった、でたらめらしい文字列
-    (re.compile(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/=_-]{20,}(?![A-Za-z0-9+/=_-])"), lambda m: _random_token(m.group(0))),
+    (re.compile(r"(?<![A-Za-z0-9+/=_~.-])[A-Za-z0-9+/=_~.-]{20,}(?<!\.)(?![A-Za-z0-9+/=_~-])"), lambda m: _random_token(m.group(0))),
     # 16 進だけの並び（SHA-384 などのハッシュ）は伏せない
     (re.compile(r"(?<![A-Za-z0-9])(?=[A-Za-z0-9]*[g-zG-Z])[A-Za-z0-9]{76,100}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
 ]
@@ -209,8 +234,8 @@ def _random_token(tok):
     if len(tok) < 32 and not re.search(r"[0-9]", tok):
         return tok
     wordy = 0
-    for part in re.split(r"([-_/]+)", tok):
-        if re.fullmatch(r"[-_/]*", part) or _PLAIN_PART.fullmatch(part):
+    for part in re.split(r"([-_/~.]+)", tok):
+        if re.fullmatch(r"[-_/~.]*", part) or _PLAIN_PART.fullmatch(part):
             wordy += len(part)
         else:
             wordy += sum(len(m.group(0)) for m in _WORDY.finditer(part))
@@ -525,13 +550,13 @@ def parse_rollout(path, data):
                 if it is None:
                     counters["shape_errors"] += 1
                     continue
-                turn_id = payload.get("turn_id") or turn_id
+                turn_id = _str(payload.get("turn_id")) or turn_id
                 if it.get("type") == "UserMessage":
-                    add("user", _texts(it.get("content"), {"text"}, USER_SKIP_TYPES, counters), i, ts, it.get("id"))
+                    add("user", _texts(it.get("content"), {"text"}, USER_SKIP_TYPES, counters), i, ts, _str(it.get("id")))
                 elif it.get("type") == "AgentMessage":
                     # partial_answer は回答の確かな部分（Codex は回答の側に数える）。commentary だけが途中の回答
                     kind = "final" if it.get("phase") in ("final_answer", "partial_answer") else "commentary"
-                    add(kind, _texts(it.get("content"), {"Text", "text"}, set(), counters), i, ts, it.get("id"))
+                    add(kind, _texts(it.get("content"), {"Text", "text"}, set(), counters), i, ts, _str(it.get("id")))
             elif ptype == "user_message":  # Legacy
                 if isinstance(payload.get("message"), str):
                     add("user", payload["message"], i, ts, None)
@@ -549,7 +574,7 @@ def parse_rollout(path, data):
                 if not isinstance(last, str):
                     counters["shape_errors"] += 1
                     continue
-                pending_task_complete.append((payload.get("turn_id") or turn_id, last, i, ts, cwd))
+                pending_task_complete.append((_str(payload.get("turn_id")) or turn_id, last, i, ts, cwd))
 
     # 最終の回答の印（phase=final_answer）が無いターンは、task_complete の last_agent_message を最終の回答にする。
     # turn_id の無い古い記録は全部のターンが None になるので、ターンで済みかを見ず、その行より前の発言だけを見る。
@@ -911,7 +936,7 @@ class Index:
                 report["errors"].append("%s: %s" % (os.path.basename(path), e))
                 continue
             seen.add(path)
-            row = self.db.execute("SELECT size, mtime_ns, status FROM files WHERE path = ?", (path,)).fetchone()
+            row = self.db.execute("SELECT size, mtime_ns, status, thread_id FROM files WHERE path = ?", (path,)).fetchone()
             name_tid = _thread_id_in_name(path)
             if name_tid in forgotten:
                 if not row or row["status"] != "forgotten" or row["size"] != st.st_size:
@@ -933,7 +958,7 @@ class Index:
                 continue
             if data is None:
                 report["zst_unreadable"] += 1
-                self._record_file(path, home, {"thread_id": name_tid}, st, "zst_unreadable", {}, {})
+                self._record_file(path, home, {"thread_id": (row and row["thread_id"]) or name_tid}, st, "zst_unreadable", {}, {})
                 continue
             meta, messages, counters = parse_rollout(path, data)
             try:
@@ -949,7 +974,7 @@ class Index:
                 self._record_file(path, home, meta, st, "forgotten", counters, {})
                 continue
             status = "partial" if counters["shape_errors"] else "ok"
-            if not messages and counters["response_messages"]:
+            if not messages and counters["response_messages"] and not meta["agent"]:
                 status = "no_messages"  # 発言らしい行はあるのに、読み方の分かる形で 1 件も取れなかった
             if status == "partial":
                 report["partial"] += 1  # 分かる部分は取り込み、形の分からない要素の数を出す
@@ -1128,7 +1153,7 @@ class Index:
                     item = json.loads(raw.decode("utf-8", errors="replace"))
                 except ValueError:
                     continue
-                if isinstance(item, dict) and item.get("id") and isinstance(item.get("thread_name"), str):
+                if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("thread_name"), str):
                     names[item["id"]] = redact(item["thread_name"])
         with self.db:
             self.db.executemany("UPDATE threads SET name = ? WHERE thread_id = ? AND codex_home = ?",
@@ -1693,7 +1718,7 @@ def cmd_show(args):
                 pos = max(0, find_original(text, args.around))
                 start = max(0, pos - args.length // 2)
             else:
-                start = args.offset
+                start = args.offset if m["msg_id"] == msg_id else 0
             body = text[start:start + args.length]
             mark = " ← 参照" if m["msg_id"] == msg_id else ""
             print()

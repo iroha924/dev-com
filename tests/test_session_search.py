@@ -90,7 +90,7 @@ class SessionSearchTest(_Base):
         self.assertEqual(meta["thread_id"], T1)
 
     def test_unknown_elements_and_broken_lines_are_counted(self):
-        text = paginated(T1, [("a", "b", [{"type": "audio", "data": "x"}])]) + "{broken\n"
+        text = paginated(T1, [("a", "b", [{"type": "hologram", "data": "x"}])]) + "{broken\n"
         _, _, counters = ss.parse_rollout("x", text.encode())
         self.assertEqual((counters["shape_errors"], counters["bad_json"]), (1, 1))
 
@@ -225,7 +225,7 @@ class ReviewFindingsTest(_Base):
         path = self.write(T1, paginated(T1, [("最初の依頼", "最初の答え", None)]))
         self.assertTrue(self.search("最初の依頼")["results"])
         with open(path, "a", encoding="utf-8", newline="\n") as f:
-            f.write(paginated(T1, [("後から足した依頼 ふくろう", "後の答え", [{"type": "audio", "data": "x"}])]).split("\n", 1)[1])
+            f.write(paginated(T1, [("後から足した依頼 ふくろう", "後の答え", [{"type": "hologram", "data": "x"}])]).split("\n", 1)[1])
         out = self.search("ふくろう")
         self.assertTrue(out["results"])
         self.assertTrue(any("形の分からない" in c for c in out["coverage"]), out["coverage"])
@@ -2064,6 +2064,196 @@ class TwelfthReviewTest(_Base):
         chunks = ss._byte_chunks(text, ss.SUDACHI_MAX_BYTES)
         self.assertEqual("".join(chunks), text)
         self.assertTrue(all(0 < len(c.encode("utf-8")) <= ss.SUDACHI_MAX_BYTES for c in chunks))
+
+
+class ThirteenthReviewTest(_Base):
+    """10 回目のレビュー（Codex 側）で見つかった欠陥の再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_yaml_block_with_blank_lines_and_indent_indicator(self):
+        for text, secret in [("password: |\n  alphaSecret\n\n  bravoSecret\nnext: value", "bravoSecret"),
+                             ("password: |2\n  alphaSecret\nnext: value", "alphaSecret")]:
+            out = ss.redact(text)
+            self.assertNotIn(secret, out, text)
+            self.assertIn("next: value", out)
+
+    def test_ordinary_key_settings_are_kept(self):
+        for text, kept in [("cache_key: build-ubuntu-latest", "build-ubuntu-latest"), ("primary_key: customer_id", "customer_id"),
+                           ("partition_key: /tenantId", "/tenantId")]:
+            self.assertIn(kept, ss.redact(text), text)
+        for text, secret in [("STORAGE_KEY: zz9secret", "zz9secret"), ("storage_key = abcdef9", "abcdef9"),
+                             ("AWS_SECRET_ACCESS_KEY=abc123x", "abc123x")]:
+            self.assertNotIn(secret, ss.redact(text), text)
+
+    def test_unreadable_revert_file_keeps_its_thread_for_forget(self):
+        rid = "77777777-7777-4777-8777-777777777777"  # revert でできたファイルは、名前の ID と中の会話の ID が違う
+        self.write(rid, "x", suffix=".jsonl.zst")
+        saved = ss.zstd
+
+        class Fake:
+            @staticmethod
+            def decompress(_):
+                return paginated(T1, [("revert の会話 かやくぐり", "答え", None)]).encode()
+        try:
+            ss.zstd = Fake
+            idx = self.idx()
+            idx.ingest(self.home)
+            idx.close()
+            ss.zstd = None
+            idx = self.idx()
+            idx.rebuild()
+            idx.ingest(self.home)
+            idx.forget(self.home, T1)
+            idx.rebuild()
+            idx.ingest(self.home)
+            left = idx.db.execute("SELECT COUNT(*) FROM messages WHERE text LIKE '%かやくぐり%'").fetchone()[0]
+            idx.close()
+        finally:
+            ss.zstd = saved
+        self.assertEqual(left, 0)
+
+    def test_agent_eval_reruns_when_the_condition_changes(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        out = os.path.join(self.tmp.name, "ae")
+
+        class Args:
+            pass
+        args = Args()
+        args.out, args.plain, args.db, args.model, args.effort, args.timeout = out, out, os.path.join(out, "x.sqlite"), "m", "low", 10
+        runs = []
+
+        class Done:
+            returncode = 0
+        saved = ae.subprocess.run
+
+        def fake_run(cmd, **kw):
+            runs.append(1)
+            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as f:
+                json.dump({"found": True, "thread_id": T1, "answer": "a", "quote": "q"}, f)
+            return Done()
+        ae.subprocess.run = fake_run
+        try:
+            first = ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json")
+            same = ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T1]}, "wrapper", "schema.json")
+            changed = ae.run_one(args, "search", {"id": "q1", "question": "?", "gold": [T2]}, "wrapper", "schema.json")
+        finally:
+            ae.subprocess.run = saved
+        self.assertEqual((first["correct"], same["correct"], changed["correct"], len(runs)), (True, True, False, 2))
+
+
+class FourteenthReviewTest(_Base):
+    """10 回目のレビュー（Claude 側）で見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_non_string_ids_do_not_stop_ingest(self):
+        ts = "2026-09-01T01:00:00Z"
+        text = "\n".join([line(ts, "session_meta", {"id": T1}),
+                          line(ts, "event_msg", {"type": "item_completed", "turn_id": ["t"], "item": {
+                              "type": "UserMessage", "id": {"x": 1}, "content": [{"type": "text", "text": "形の違う ID うぐいす"}]}}),
+                          line(ts, "event_msg", {"type": "task_complete", "turn_id": {"t": 1}, "last_agent_message": "答え うぐいす"})]) + "\n"
+        self.write(T1, text)
+        with open(os.path.join(self.home, "session_index.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"id": [T1], "thread_name": "x"}) + "\n")
+        self.assertEqual(len(self.search("うぐいす")["results"]), 2)
+
+    def test_entra_style_secrets_are_caught(self):
+        import random
+        import string
+        rnd = random.Random(10)
+        alpha = string.ascii_letters + string.digits + "_~.-"
+        left = 0
+        for _ in range(300):
+            tok = ("".join(rnd.choice(string.ascii_letters + string.digits) for _ in range(3)) + rnd.choice(string.digits) + "Q~"
+                   + "".join(rnd.choice(alpha) for _ in range(34)))
+            out = ss.redact("新しい値 " + tok)
+            if tok in out or any(len(p) >= 8 and p in out for p in tok.replace(".", "~").split("~")):
+                left += 1
+        self.assertLess(left, 15)
+        for name in ("System.Text.Json9.0.1", "MyApp2.azurewebsites.net", "docs/Release2026Notes.v3.md"):
+            self.assertEqual(ss.redact(name), name)
+
+    def test_windows_and_azure_forms(self):
+        cases = ['os.environ["DB_PASSWORD"] = "v1x"', "setx AZURE_DEVOPS_EXT_PAT v2x",
+                 '[System.Environment]::SetEnvironmentVariable("API_TOKEN","v3x")', "Set-Item -Path Env:API_TOKEN -Value v4x",
+                 "az keyvault secret set --vault-name kv --name n --value v5x",
+                 "az pipelines variable create --name n --value v6x --secret true", 'password := "v7x"',
+                 "gpg --batch --passphrase v8x -c f", "openssl pkcs12 -export -passout pass:v9x", "ssh-keygen -t ed25519 -N v0x -f k",
+                 'net user bob "My Secret42" /add']
+        for text in cases:
+            self.assertNotRegex(ss.redact(text), r"v\dx|Secret42", text)
+        for text in ("setx PATH C:\\bin", "setx KEYBOARD jp", "MY_SECRET:\n  keep_this_line"):
+            self.assertIn(text.split()[-1], ss.redact(text), text)
+
+    def test_agent_records_do_not_raise_warnings(self):
+        ts = "2026-09-01T01:00:00Z"
+        only_lines = "\n".join([line(ts, "session_meta", {"id": T1, "agent_role": "worker"}),
+                                line(ts, "response_item", {"type": "message", "role": "assistant",
+                                                           "content": [{"type": "output_text", "text": "途中で終わった"}]})]) + "\n"
+        task = "\n".join([line(ts, "session_meta", {"id": T2, "agent_role": "worker"}),
+                          line(ts, "response_item", {"type": "message", "role": "user",
+                                                     "content": [{"type": "input_text", "text": "親からの指示"}]}),
+                          line(ts, "event_msg", {"type": "task_complete", "last_agent_message": "子の答え"})]) + "\n"
+        self.write(T1, only_lines)
+        self.write(T2, task)
+        out = self.search("子の答え")
+        self.assertFalse([c for c in out["coverage"] if c.startswith("注意")], out["coverage"])
+
+    def test_injected_context_is_not_owner_text(self):
+        ts = "2026-09-01T01:00:00Z"
+        text = "\n".join([line(ts, "session_meta", {"id": T1}),
+                          line(ts, "response_item", {"type": "message", "role": "user", "content": [
+                              {"type": "input_text", "text": "<environment_context>x</environment_context>"},
+                              {"type": "input_text", "text": "# AGENTS.md instructions for C:\\work"}]}),
+                          line(ts, "event_msg", {"type": "task_complete", "last_agent_message": "答え ほおじろ"})]) + "\n"
+        self.write(T1, text)
+        out = self.search("ほおじろ")
+        self.assertFalse([c for c in out["coverage"] if c.startswith("注意")], out["coverage"])
+
+    def test_crlf_yaml_block_is_redacted(self):
+        self.assertNotIn("Xsecret9", ss.redact("token: >-\r\n  Xsecret9\r\nnext: v"))
+
+    def test_offset_applies_only_to_the_reference(self):
+        self.write(T1, paginated(T1, [("前の依頼 しじゅうから", "短い答え", None), ("長い依頼 " + "あ" * 3000 + " しまえなが", "答え", None)]))
+        self.search("しまえなが")
+        code, out = self.run_cli("show", T1 + "/u2", "--offset", "2000", "--context", "1")
+        self.assertEqual(code, 0, out)
+        self.assertIn("短い答え", out)
+
+    def test_audio_elements_are_skipped(self):
+        turn = [("音声つきの依頼 さんこうちょう", "答え", [{"type": "audio", "audio_url": "data:audio/wav;base64,AAAA"},
+                                                    {"type": "local_audio", "path": "C:\\a.wav"}])]
+        self.write(T1, paginated(T1, turn))
+        out = self.search("さんこうちょう")
+        self.assertTrue(out["results"])
+        self.assertFalse([c for c in out["coverage"] if c.startswith("注意")], out["coverage"])
+
+    def test_thread_names_are_redacted(self):
+        self.write(T1, paginated(T1, [("名前に鍵 いかるちどり", "答え", None)]))
+        with open(os.path.join(self.home, "session_index.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"id": T1, "thread_name": "password=NameSecret42"}) + "\n")
+        self.search("いかるちどり")
+        idx = self.idx()
+        name = idx.db.execute("SELECT name FROM threads WHERE thread_id = ?", (T1,)).fetchone()[0]
+        idx.close()
+        self.assertNotIn("NameSecret42", name)
+
+    def test_rebuild_removes_forgotten_text_from_a_larger_index(self):
+        for n in range(60):
+            tid = "8888%04d-8888-4888-8888-888888888888" % n
+            self.write(tid, paginated(tid, [("会話 %d の依頼 %s" % (k, "やませみ" if n == 7 else "かわせみ"), "答え %d" % k, None)
+                                            for k in range(10)]))
+        self.search("かわせみ")
+        code, out = self.run_cli("forget", "88880007-8888-4888-8888-888888888888")
+        self.assertEqual(code, 0, out)
+        self.run_cli("rebuild")
+        with open(self.db, "rb") as f:
+            self.assertNotIn("やませみ".encode("utf-8"), f.read())
 
 
 class SemanticLayerTest(unittest.TestCase):

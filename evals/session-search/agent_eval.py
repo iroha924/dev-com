@@ -87,13 +87,30 @@ def build_prompt(mode, q, wrapper, plain):
     return "\n".join(parts)
 
 
+def run_condition(args, mode, q, prompt):
+    """採点を使い回してよい条件（依頼文・正解・モデル・effort・索引・検索の実装）の指紋。"""
+    import hashlib
+    h = hashlib.sha256()
+    for part in (prompt, json.dumps(q.get("gold"), sort_keys=True), mode, args.model, args.effort, os.path.abspath(args.db)):
+        h.update(str(part).encode("utf-8") + b"\x1f")
+    with open(SCRIPT, "rb") as f:
+        h.update(f.read())
+    return h.hexdigest()
+
+
 def run_one(args, mode, q, wrapper, schema_path):
     run_dir = os.path.join(args.out, mode, q["id"])
     os.makedirs(run_dir, exist_ok=True)
     result_path = os.path.join(run_dir, "result.json")
-    if os.path.exists(result_path):  # やり直すときは、済んだものを飛ばす
-        return json.load(open(result_path, encoding="utf-8"))
     prompt = build_prompt(mode, q, wrapper, args.plain)
+    condition = run_condition(args, mode, q, prompt)
+    if os.path.exists(result_path):  # やり直すときは、同じ条件で済んだものだけを飛ばす
+        try:
+            done = json.load(open(result_path, encoding="utf-8"))
+        except ValueError:
+            done = None
+        if isinstance(done, dict) and done.get("condition") == condition:
+            return done
     cmd = ["codex", "exec", "--ephemeral", "--json", "--skip-git-repo-check", "-C", run_dir,
            "-s", "workspace-write", "-m", args.model, "-c", "model_reasoning_effort=%s" % args.effort,
            "-c", "sandbox_workspace_write.writable_roots=[%s]" % json.dumps(os.path.dirname(args.db)),
@@ -119,7 +136,7 @@ def run_one(args, mode, q, wrapper, schema_path):
         answer = {"found": False, "thread_id": "", "answer": "(返答なし)", "quote": ""}
     gold = q["gold"] if isinstance(q["gold"], list) else [q["gold"]]
     tid = (answer.get("thread_id") or "").strip().lower()
-    result = {"id": q["id"], "type": q.get("type"), "mode": mode, "exit": proc.returncode,
+    result = {"id": q["id"], "type": q.get("type"), "mode": mode, "exit": proc.returncode, "condition": condition,
               "correct": proc.returncode == 0 and bool(answer.get("found")) and any(tid and tid == g.lower() for g in gold),
               "found": bool(answer.get("found")),
               "thread_id": tid, "gold": gold, "commands": commands, "usage": usage, "answer": answer.get("answer", "")}
