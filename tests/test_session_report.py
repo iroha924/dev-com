@@ -338,6 +338,77 @@ class ExtractTest(_Base):
         self.assertEqual(self.extract("--last", cwd=here, env={"CODEX_THREAD_ID": T2})["session"]["id"], T1)
         self.assertEqual(self.extract("--current", env={"CODEX_THREAD_ID": T4})["session"]["id"], T4)
 
+    def test_every_string_is_redacted(self):
+        tok = "ghp_" + "A1b2C3d4E5" * 3 + "f6g7h8"
+        r = Rollout(T1, source=tok)
+        r.lines[0] = line(r.ts(), "session_meta", {"id": T1, "cwd": "C:\\%s" % tok, "originator": tok, "agent_role": tok,
+                                                   "source": tok, "git": {"branch": tok}})
+        r.turn("t1").user("u1", "a").end("b")
+        path = os.path.join(self.home, "sessions", tok, "rollout-2026-10-14T01-00-00-%s.jsonl" % T1)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(r.text())
+        self.assertNotIn(tok, json.dumps(self.extract(T1), ensure_ascii=False))
+
+    def test_thread_id_comes_from_session_meta(self):
+        # revert は同じ会話の続きを、別の rollout ID の名前のファイルに書く（session-search の test_revert_keeps_the_prefix_file_searchable）
+        old = self.write(T1, sample(T1).text())
+        new = self.write(T2, sample(T1).user("u3", "続き").text())
+        os.utime(old, (1000, 1000))
+        os.utime(new, (2000, 2000))
+        rep = self.extract(T1)
+        self.assertEqual(rep["sources"][0]["path"], new)
+        self.assertEqual(rep["coverage"]["other_files"], 1)
+        # 今の会話（CODEX_THREAD_ID=T1）は、どちらのファイルでも --last で選ばない
+        here = os.path.join(self.tmp.name, "repo")
+        os.makedirs(here)
+        for p in (old, new):
+            os.remove(p)
+        a = self.write(T1, sample(T1, cwd=here).text())
+        b = self.write(T2, sample(T1, cwd=here).text())
+        c = self.write(T3, sample(T3, cwd=here).text())
+        for n, p in enumerate((c, a, b)):
+            os.utime(p, (1000 + n, 1000 + n))
+        self.assertEqual(self.extract("--last", cwd=here, env={"CODEX_THREAD_ID": T1})["session"]["id"], T3)
+
+    def test_attachment_only_message_is_kept(self):
+        r = Rollout(T1).turn("t1")
+        r.item({"type": "UserMessage", "id": "u1", "content": [{"type": "local_image", "path": "C:\\a\\only.png"}]})
+        r.agent("a1", "見ました").end("見ました")
+        self.write(T1, r.text())
+        msgs = self.extract(T1)["messages"]
+        self.assertEqual([(m["id"], m["kind"], m["text"]) for m in msgs], [("u1", "user", ""), ("a1", "final", "見ました")])
+        self.assertEqual(msgs[0]["attachments"], [{"kind": "image", "name": "only.png", "body": False}])
+
+    def test_legacy_turns_are_linked_to_messages(self):
+        r = Rollout(T1)
+        for n in (1, 2):
+            r.add("turn_context", {"cwd": "C:\\w", "model": "gpt-6.1-sol"})
+            r.add("event_msg", {"type": "user_message", "message": "依頼 %d" % n})
+            r.add("event_msg", {"type": "task_complete", "last_agent_message": "答え %d" % n})
+        self.write(T1, r.text())
+        rep = self.extract(T1)
+        self.assertEqual([t["id"] for t in rep["turns"]], ["turn-1", "turn-2"])
+        self.assertEqual([(m["text"], m["turn_id"]) for m in rep["messages"]],
+                         [("依頼 1", "turn-1"), ("答え 1", "turn-1"), ("依頼 2", "turn-2"), ("答え 2", "turn-2")])
+
+    def test_last_stops_when_a_newer_record_cannot_be_read(self):
+        here = os.path.join(self.tmp.name, "repo")
+        os.makedirs(here)
+        older = self.write(T1, sample(T1, cwd=here).text())
+        newer = os.path.join(os.path.dirname(older), "rollout-2026-10-14T02-00-00-%s.jsonl.zst" % T2)
+        with open(newer, "wb") as f:
+            f.write(b"not zstd")
+        os.utime(older, (1000, 1000))
+        os.utime(newer, (2000, 2000))
+        real = sr.ss.read_rollout_bytes
+        sr.ss.read_rollout_bytes = lambda p: None if p.endswith(".zst") else real(p)
+        try:
+            with self.assertRaises(sr.UnreadableRecords):
+                sr.find_rollout(self.home, last_cwd=here)
+        finally:
+            sr.ss.read_rollout_bytes = real
+
     def test_missing_thread(self):
         code, _, err = self.run_cli("extract", T1, "--out", self.tmp.name)
         self.assertEqual(code, 1)

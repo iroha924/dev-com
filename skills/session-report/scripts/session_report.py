@@ -12,6 +12,7 @@ probe: 記録の形（行の種類、項目の種類とキー名、件数、有�
 """
 
 import argparse
+import bisect
 import collections
 import datetime
 import hashlib
@@ -344,30 +345,55 @@ def _same_dir(a, b):
     return isinstance(a, str) and os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 
 
+class UnreadableRecords(Exception):
+    """選んだ会話より新しい記録を読めず、正しい会話を選べたか分からない。"""
+
+
 def find_rollout(home, thread_id=None, last_cwd=None, exclude=None):
     """会話の rollout のパスと、同じ会話の別のファイルの数。見つからなければ (None, 0)。
 
-    thread_id を渡せば名前にその ID を持つファイルを、last_cwd を渡せばその作業フォルダで最後に書かれた会話
-    （exclude の会話を除く）を選ぶ。同じ ID のファイルが複数あれば、最後に書かれたものを使う。
+    会話の ID は、記録の最初の session_meta の id（無ければファイル名の ID）。revert は同じ会話の続きを別の名前の
+    ファイルに書くので、ファイル名では選ばない。thread_id を渡せばその会話の、last_cwd を渡せばその作業フォルダで最後に
+    書かれた会話（exclude の会話と子のエージェントを除く）の、最後に書かれたファイルを使う。
+    選んだものより新しい記録を読めなければ UnreadableRecords を投げる（黙って古い会話を選ばない）。
     """
     paths = sorted(ss.rollout_files(home), key=lambda p: (os.path.getmtime(p), p), reverse=True)
-    if thread_id:
-        hits = [p for p in paths if ss._thread_id_in_name(p) == thread_id]
-        return (hits[0], len(hits) - 1) if hits else (None, 0)
+    metas = []
     for p in paths:
-        tid = ss._thread_id_in_name(p)
-        if not tid or tid == exclude:
-            continue
         try:
             data = ss.read_rollout_bytes(p)
         except OSError:
+            data = None
+        metas.append((p, None if data is None else (_first_meta(data) or {})))
+
+    def tid_of(p, meta):
+        return ss._str(meta.get("id")) or ss._thread_id_in_name(p)
+
+    chosen = None
+    for n, (p, meta) in enumerate(metas):
+        if meta is None:
             continue
-        meta = _first_meta(data) if data is not None else None
-        if not meta or (isinstance(meta.get("source"), dict) and "subagent" in meta["source"]):
+        tid = tid_of(p, meta)
+        if thread_id:
+            if tid == thread_id:
+                chosen = (n, tid)
+                break
+            continue
+        if not tid or tid == exclude:
+            continue
+        if isinstance(meta.get("source"), dict) and "subagent" in meta["source"]:
             continue  # 子のエージェントの会話は、持ち主の会話として選ばない
         if _same_dir(meta.get("cwd"), last_cwd):
-            return p, len([q for q in paths if ss._thread_id_in_name(q) == tid]) - 1
-    return None, 0
+            chosen = (n, tid)
+            break
+    limit = chosen[0] if chosen else len(metas)
+    unreadable = [p for p, meta in metas[:limit] if meta is None]
+    if unreadable:
+        raise UnreadableRecords(unreadable)
+    if chosen is None:
+        return None, 0
+    others = sum(1 for p, meta in metas if meta is not None and p != metas[chosen[0]][0] and tid_of(p, meta) == chosen[1])
+    return metas[chosen[0]][0], others
 
 
 def thread_title(home, thread_id):
@@ -410,6 +436,7 @@ def scan_rollout(data):
     """発言以外の、ターン・添付・項目の種類を 1 回読んで集める。"""
     turns = collections.OrderedDict()
     attachments = {}
+    legacy_turns = []  # turn_id の無い turn_context の (行番号, 作った ID)
     item_types = collections.Counter()
     ids = collections.Counter()
     first_ts = last_ts = None
@@ -421,7 +448,7 @@ def scan_rollout(data):
         return turns[tid]
 
     current = None
-    for _, raw in ss._byte_lines(data, {"incomplete_tail": 0}):
+    for line_no, raw in ss._byte_lines(data, {"incomplete_tail": 0}):
         try:
             item = json.loads(raw.decode("utf-8", errors="replace"))
         except ValueError:
@@ -439,6 +466,7 @@ def scan_rollout(data):
             if tid is None:
                 order += 1
                 tid = "turn-%d" % order
+                legacy_turns.append((line_no, tid))
             current = tid
             t = turn(tid)
             t["model"] = ss._str(payload.get("model")) or t["model"]
@@ -463,10 +491,10 @@ def scan_rollout(data):
                 if it.get("type") == "UserMessage" and isinstance(it.get("id"), str):
                     found = _attachments(it.get("content"))
                     if found:
-                        attachments.setdefault(it["id"], found)
+                        attachments.setdefault(it["id"], {"items": found, "line": line_no, "ts": ts, "turn_id": tid})
                 if tid and tid not in turns:
                     turn(tid)["started"] = ts
-    return {"turns": list(turns.values()), "attachments": attachments, "item_types": item_types,
+    return {"turns": list(turns.values()), "attachments": attachments, "item_types": item_types, "legacy_turns": legacy_turns,
             "duplicated_ids": sum(1 for n in ids.values() if n > 1), "first_ts": first_ts, "last_ts": last_ts}
 
 
@@ -483,15 +511,28 @@ def build_report(path, data, home, other_files=0):
     raw_meta = _first_meta(data) or {}
     scan = scan_rollout(data)
     tid = meta["thread_id"]
-    out_msgs, seen = [], set()
-    for m in messages:
+    legacy_lines = [n for n, _ in scan["legacy_turns"]]
+
+    def legacy_turn(line_no):
+        at = bisect.bisect_right(legacy_lines, line_no) - 1
+        return scan["legacy_turns"][at][1] if at >= 0 else None
+
+    rows, seen = [], set()
+    for m in sorted(messages, key=lambda m: (m["line"], m["seq"])):  # parse_rollout は足した最終の回答を末尾に置く
         if m["msg_id"] in seen:
             continue
         seen.add(m["msg_id"])
-        msg = {"id": m["msg_id"], "kind": m["kind"], "ts": m["ts"], "turn_id": m["turn_id"], "text": ss.redact(m["text"])}
+        msg = {"id": m["msg_id"], "kind": m["kind"], "ts": m["ts"], "turn_id": m["turn_id"] or legacy_turn(m["line"]),
+               "text": ss.redact(m["text"])}
         if m["kind"] == "user":
-            msg["attachments"] = scan["attachments"].get(m["msg_id"], [])
-        out_msgs.append(msg)
+            msg["attachments"] = scan["attachments"].get(m["msg_id"], {}).get("items", [])
+        rows.append((m["line"], msg))
+    for mid, att in scan["attachments"].items():
+        if mid not in seen:  # 本文の無い、添付だけの発言（parse_rollout は空の発言を返さない）
+            rows.append((att["line"], {"id": mid, "kind": "user", "ts": att["ts"],
+                                       "turn_id": att["turn_id"] or legacy_turn(att["line"]), "text": "",
+                                       "attachments": att["items"]}))
+    out_msgs = [msg for _, msg in sorted(rows, key=lambda r: r[0])]
     unknown = {k: n for k, n in sorted(scan["item_types"].items())
                if k not in MESSAGE_ITEMS and k not in EVENT_ITEMS and k not in OPERATION_ITEMS}
     events = {k: scan["item_types"][k] for k in sorted(EVENT_ITEMS) if scan["item_types"].get(k)}
@@ -499,10 +540,10 @@ def build_report(path, data, home, other_files=0):
         "schema_version": SCHEMA_VERSION, "extract_version": EXTRACT_VERSION, "redaction_version": ss._RULES_VERSION,
         "tz_offset_minutes": int(datetime.datetime.now().astimezone().utcoffset().total_seconds() // 60),
         "session": {"id": tid, "title": _red(thread_title(home, tid)), "started": scan["first_ts"], "ended": scan["last_ts"],
-                    "cwd": _red(meta["cwd"]), "branch": _red(meta["branch"]), "originator": meta["originator"],
-                    "source": _source_name(raw_meta.get("source")), "cli_version": meta["cli_version"],
-                    "forked_from_id": ss._str(raw_meta.get("forked_from_id")), "agent": meta["agent"]},
-        "sources": [{"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}],
+                    "cwd": _red(meta["cwd"]), "branch": _red(meta["branch"]), "originator": _red(meta["originator"]),
+                    "source": _red(_source_name(raw_meta.get("source"))), "cli_version": _red(meta["cli_version"]),
+                    "forked_from_id": _red(ss._str(raw_meta.get("forked_from_id"))), "agent": _red(meta["agent"])},
+        "sources": [{"path": _red(path), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}],
         "coverage": {"lines": counters["lines"], "bad_json": counters["bad_json"], "shape_errors": counters["shape_errors"],
                      "incomplete_tail": counters["incomplete_tail"], "duplicated_ids": scan["duplicated_ids"],
                      "other_files": other_files, "unknown_items": unknown, "events": events,
@@ -541,15 +582,20 @@ def write_json(path, obj):
 def cmd_extract(args):
     home = ss.codex_home()
     current = os.environ.get("CODEX_THREAD_ID")
-    if args.current:
-        if not current:
-            print("CODEX_THREAD_ID が無い。今の会話の ID が分からないので、ID を渡す", file=sys.stderr)
-            return 1
-        path, others = find_rollout(home, thread_id=current)
-    elif args.last:
-        path, others = find_rollout(home, last_cwd=os.getcwd(), exclude=current)
-    else:
-        path, others = find_rollout(home, thread_id=args.thread_id)
+    if args.current and not current:
+        print("CODEX_THREAD_ID が無い。今の会話の ID が分からないので、ID を渡す", file=sys.stderr)
+        return 1
+    try:
+        if args.current:
+            path, others = find_rollout(home, thread_id=current)
+        elif args.last:
+            path, others = find_rollout(home, last_cwd=os.getcwd(), exclude=current)
+        else:
+            path, others = find_rollout(home, thread_id=args.thread_id)
+    except UnreadableRecords as e:
+        print("読めない記録が %d 本ある（圧縮された記録は Python 3.14 以上の compression.zstd で読む）。正しい会話を選べたか"
+              "分からないので止める: %s" % (len(e.args[0]), e.args[0][0]), file=sys.stderr)
+        return 1
     if path is None:
         print("会話の記録が見つからない（%s）" % (args.thread_id or ("今の会話" if args.current else "この作業フォルダの会話")),
               file=sys.stderr)

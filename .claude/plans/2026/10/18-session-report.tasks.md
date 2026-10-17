@@ -68,6 +68,17 @@ base: main
   - 結果: `python3 -m unittest tests.test_session_report -k Extract` → 6 件 OK。`python3 -m unittest discover -s tests` → 339 件 OK（skip 24）
   - 結果: `session_report.py extract <id> --out <一時フォルダ>` → この Mac の実際の記録 2 本（.zst と .jsonl）で終了コード 0、読めない行・知らない形・知らない項目 0 件（中身は読まずに件数だけ見て消した）
 
+- [x] T14: extract の会話の選び方・伏せ字・添付だけの発言・古い形式のターンを直す
+  - 種別: 修正
+  - 計画: S2
+  - 依存: T02（直す対象の extract が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k Extract` → 5 件失敗（パスと起動元に伏せ字が無い、revert の後で古いファイルを選ぶ、添付だけの発言が消える、古い形式で発言の turn_id が None、新しい記録を読めないとき黙って古い会話を選ぶ）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 会話を session_meta の ID で選び、全部の文字列に伏せ字をかけ、添付だけの発言と古い形式のターンを残す`
+  - 結果: red を直す前のコードで実測 → 4 件 FAIL と 1 件 ERROR（UnreadableRecords が無い）、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 34 件 OK
+  - 結果: `session_report.py extract <id> --out <一時フォルダ>` → この Mac の実際の記録で 1.4 秒、終了コード 0（全部の記録の頭の session_meta を読むのは 1,379 本で 1.4 秒）
+
 - [ ] T03: extract の操作と成果物
   - 種別: 追加
   - 計画: S3
@@ -153,6 +164,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T14 / T02 のレビュー（02a9f63）の 5 件（F1 伏せ字の抜け P1、F2 revert で古いファイルを選ぶ P1、F3 添付だけの発言 P2、F4 古い形式のターン P2、F5 読めない記録を黙って飛ばす P2）を作り物の記録で確かめて受理。直す途中で、古い形式では parse_rollout の発言が行の順に並ばないことも見つけ、並べ直しを入れた / T14 を足して直した
 
 - 2026-10-18 / T13 / T12 の見直し（44e59c6、high）の 2 件（F1 型の違う値の文字列が出る P1、F2 入れ子の dict のキーが出る P1）を作り物の記録で確かめて受理。塞ぐ欄を足す直し方を続けると同じ漏れが出るので、値を出す欄を決める書き方に変え、記録のあらゆる位置の値を目印に置き換えるテストで止める / T13 を足して直した
 
