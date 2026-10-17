@@ -1191,6 +1191,49 @@ class ShareRiskTest(unittest.TestCase):
                 self.assertFalse(sr.share_risk(s))
 
 
+_cspec = importlib.util.spec_from_file_location("compare", os.path.join(ROOT, "evals", "session-report", "compare.py"))
+compare = importlib.util.module_from_spec(_cspec)
+_cspec.loader.exec_module(compare)
+
+
+class CompareTest(unittest.TestCase):
+    def gold(self, name):
+        with open(os.path.join(ROOT, "evals", "session-report", "gold", name + ".json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_gold_against_itself_is_clean(self):
+        for name in ("short", "condition_change", "fail_then_fix", "waiting_approval", "aborted", "long"):
+            with self.subTest(name=name):
+                r = compare.compare(self.gold(name), self.gold(name))
+                self.assertEqual((r["requests_missed"], r["criteria_missed"], r["decisions_missed"], r["done_misjudged"]), ([], [], [], []))
+
+    def test_counts_misses_and_wrong_done(self):
+        gold = self.gold("fail_then_fix")
+        cand = json.loads(json.dumps(gold))
+        cand["requests"][0]["criteria"] = [dict(cand["requests"][0]["criteria"][0]),
+                                           dict(cand["requests"][0]["criteria"][1], status="できた")]  # CI で通るを「できた」に
+        cand["decisions"] = []
+        r = compare.compare(gold, cand)
+        self.assertEqual(r["decisions_missed"], ["D1: タイムアウトを環境変数 RETRY_TIMEOUT で変えられるようにし、既定を 10 秒にする"])
+        self.assertEqual(r["done_misjudged"], ["R1（正解: 一部）", "R1 の条件「CI で通る」（正解: 未確認）"])
+        # 条件を 1 つ落とし、依頼の文を言い換えても、同じ発言の依頼として対応を付ける
+        cand = json.loads(json.dumps(gold))
+        cand["requests"][0]["text"] = "テストが CI で落ちる件"
+        del cand["requests"][0]["criteria"][1]
+        r = compare.compare(gold, cand)
+        self.assertEqual((r["requests_missed"], r["criteria_missed"]), ([], ["R1: CI で通る"]))
+        # 依頼が丸ごと無い
+        cand["requests"] = []
+        r = compare.compare(gold, cand)
+        self.assertEqual((r["requests_missed"], len(r["criteria_missed"])), (["R1"], 2))
+        self.assertIn("依頼 1 のうち取りこぼし 1・条件 2 のうち 2", compare.summary_line("x", r))
+
+    def test_withdrawn_requests_are_not_counted(self):
+        gold = self.gold("condition_change")
+        r = compare.compare(gold, {"requests": [], "decisions": []})
+        self.assertEqual(r["requests_missed"], ["R1"])
+
+
 class FixturesTest(unittest.TestCase):
     def test_gold_annotations_pass_check(self):
         # 作り物の会話 6 本の正解の追記が、会話とずれていない（evals/session-report/fixtures.py）

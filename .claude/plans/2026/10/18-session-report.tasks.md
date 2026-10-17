@@ -298,15 +298,19 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `fix(session-report): 共有用の URL と絶対パスを広く見つけ、追記の文なら書き直させ、記録の文なら丸ごと省く`
   - 結果: red を直す前のコードで実測 → FAIL（share_risk が無い、URL を含む追記でも共有用を書く）。直した後 `python3 -m unittest discover -s tests` → 387 件 OK（skip 24）
 
-- [ ] T11: 追記を正解と比べる道具
+- [x] T11: 追記を正解と比べる道具
   - 種別: 追加
   - 計画: S10
   - 依存: T07（正解の追記が要る）, T04（Codex に渡す input が要る）
   - 変更: `evals/session-report/compare.py`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report -k Compare` → OK（条件と決定の取りこぼしの数、「できた」の誤判定の数を、手で作った追記の組で正しく数える）
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
+  - 結果: `python3 -m unittest tests.test_session_report -k Compare` → 3 件 OK（正解どうしは 0 件、決定の取りこぼし・「できた」の誤判定・条件の取りこぼし・依頼の取りこぼしを手で作った追記で数える、取り下げは数えない）。`python3 -m unittest discover -s tests` → 390 件 OK（skip 24）
+  - 結果: `python3 evals/session-report/compare.py --dir <フォルダ>` → 流していない。Codex に追記を書かせて比べる実行は利用枠を使うので、持ち主に規模を聞いてから
 
 ## 記録
+
+- 2026-10-18 / T11 / 依頼は依頼した持ち主の発言（at）で対応を付け、条件と決定は文の 2 文字ずつの重なり（0.3 以上）で対応を付ける。意味の同じさではないので、数は目安として、取りこぼしと出たものは中身を読んで確かめると compare.py に書いた
 
 - 2026-10-18 / T27 / T27 を T10 より前に置いたままコミットした（tasks の検査の違反を、コマンドの組み方のせいで見落とした）/ T10 の後ろへ移した
 
