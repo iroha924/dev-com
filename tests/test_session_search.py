@@ -1875,6 +1875,89 @@ class TenthReviewTest(_Base):
         self.assertEqual(left, (False, 0))
 
 
+class EleventhReviewTest(_Base):
+    """9 回目のレビューで見つかった欠陥と、検査の抜けの再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_net_catches_standard_base64_with_slashes(self):
+        import random
+        import string
+        rnd = random.Random(11)
+        alpha = string.ascii_letters + string.digits + "+/"
+        left = 0
+        for _ in range(300):
+            tok = "".join(rnd.choice(alpha) for _ in range(40))
+            if any(len(piece) >= 8 and piece in ss.redact("鍵 " + tok) for piece in tok.split("/")):
+                left += 1
+        self.assertLess(left, 15)  # 切れ端も含めて、残るのは 5% 未満
+
+    def test_net_keeps_rollout_names_and_paths(self):
+        for text in ["rollout-2026-09-05T08-58-36-019a3f2e-7c1d-7b2a-9e4f-0123456789ab.jsonl",
+                     "/org/Project2/_apis/git/repositories", "8308618A5BC0DE1F2A3B4C5D6E7F8091a2b3c4d5"]:
+            self.assertEqual(ss.redact(text), text)
+
+    def test_rerank_window_follows_the_original_text(self):
+        for pad in ("ｶﾞ" * 1500, "…" * 600, "㍿" * 400):
+            self.assertIn("目的の語", ss.rerank_window(pad + "目的の語 ここ", ["目的の語"]))
+
+    def test_non_string_metadata_does_not_stop_ingest(self):
+        text = "\n".join([line("2026-09-01T01:00:00Z", "session_meta", {"id": T1, "cwd": {"path": "C:\\x"}, "git": {"branch": 3}}),
+                          line("2026-09-01T01:00:00Z", "turn_context", {"turn_id": 5, "cwd": ["C:\\y"]}),
+                          line("2026-09-01T01:00:00Z", "event_msg", {"type": "user_message", "message": "形の違う会話 ささごい"})]) + "\n"
+        self.write(T1, text)
+        self.assertEqual(len(self.search("ささごい")["results"]), 1)
+
+    def test_assignment_does_not_cross_lines(self):
+        for text, kept in [("secrets:\n  AZURE_CREDENTIALS: ${{ secrets.X }}", "AZURE_CREDENTIALS"),
+                           ("secretKeyRef:\n  name: db-creds", "name:")]:
+            self.assertIn(kept, ss.redact(text), text)
+
+    def test_narrowing_the_rules_really_restores_text(self):
+        self.write(T1, paginated(T1, [("広すぎる規則 ひばり Pipeline.Workspace", "答え", None)]))
+        saved = list(ss._SECRET_PATTERNS)
+        ss._SECRET_PATTERNS.append((ss.re.compile(r"Pipeline\.Workspace"), "[REDACTED]"))
+        try:
+            idx = self.idx()
+            idx.ingest(self.home)
+            idx.close()
+        finally:
+            ss._SECRET_PATTERNS[:] = saved
+        idx = self.idx()  # 規則を狭めた（元に戻した）
+        idx.ingest(self.home)
+        text = idx.db.execute("SELECT text FROM messages WHERE kind = 'user'").fetchone()[0]
+        idx.close()
+        self.assertIn("Pipeline.Workspace", text)
+
+    def test_changed_text_does_not_inherit_embeddings(self):
+        path = self.write(T1, paginated(T1, [("前の本文 かけす", "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+        import array
+
+        def encode(texts):
+            return [type("V", (), {"tobytes": lambda self: array.array("f", [1.0, 0.0]).tobytes()})() for _ in texts]
+        idx.fill_vectors(encode, self.home)
+        with open(path, "w", encoding="utf-8") as f:  # 同じ発言 ID のまま本文が変わる
+            f.write(paginated(T1, [("書き換えた本文 かけす", "答え", None)]))
+        idx.ingest(self.home)
+        user = idx.db.execute("SELECT id FROM messages WHERE kind = 'user'").fetchone()[0]
+        has = idx.db.execute("SELECT COUNT(*) FROM vectors WHERE message_id = ?", (user,)).fetchone()[0]
+        idx.close()
+        self.assertEqual(has, 0)
+
+    def test_old_forgotten_keys_table_is_dropped(self):
+        idx = self.idx()
+        with idx.db:
+            idx.db.execute("CREATE TABLE IF NOT EXISTS forgotten_keys (codex_home TEXT, key TEXT)")
+        idx.close()
+        idx = self.idx()
+        left = idx._has_table("forgotten_keys")
+        idx.close()
+        self.assertFalse(left)
+
+
 class SemanticLayerTest(unittest.TestCase):
     """SudachiPy が入っている環境でだけ、単語の BM25 の経路を確かめる。"""
 

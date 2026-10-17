@@ -165,7 +165,7 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?im)^(([ \t]*)(?:-[ \t]+)?[\w.-]*?" + _KEY_NAME + r"[ \t]*:[ \t]*[|>][-+]?[ \t]*\n)"
                 r"((?:\2[ \t]+\S.*(?:\n|$))+)"), lambda m: m.group(1) + m.group(2) + "  [REDACTED]\n"),
     # 環境変数の名前: AWS_SECRET_ACCESS_KEY=... / GITHUB_TOKEN: ...（区切りの語が secret・token・password・key・pat）
-    (re.compile(r"(?i)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:secret|token|password|passwd|key|pat)(?:_[a-z0-9]+)*[\"']?\s*[:=]\s*)"
+    (re.compile(r"(?i)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:secret|token|password|passwd|key|pat)(?:_[a-z0-9]+)*[\"']?[ \t]*[:=][ \t]*)"
                 r"(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
     # Azure の SAS の署名: ?sv=...&sig=... / SharedAccessSignature=...sig=...
     (re.compile(r"(?i)(\bsig=)([^&;\s\"']+)"), r"\1[REDACTED]"),
@@ -179,8 +179,8 @@ _SECRET_PATTERNS = [
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
     (re.compile(r"(?i)(" + _KEY_NAME + r"\s*:\s*[A-Za-z_][\w.\[\]|, ]{0,40}?\s*=\s*)(?![\"'])([^\s\"';,]+)"), r"\1[REDACTED]"),
     # password= / "password": "..." / $password = '...'。引用符があれば閉じるまで伏せ、引用符の種類を保つ
-    (re.compile(r"(?i)(" + _KEY_NAME + r"[\"']?\s*[:=]\s*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
-    (re.compile(r"(?i)(" + _KEY_NAME + r"\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[\"']?[ \t]*[:=][ \t]*)(" + _DQ + "|" + _SQ + ")"), _keep_quote),
+    (re.compile(r"(?i)(" + _KEY_NAME + r"[ \t]*[\"']?[ \t]*[:=][ \t]*[\"']?)([^\s\"';,、。]{1,})"), r"\1[REDACTED]"),
     # 日本語の書き方: パスワードは X / トークン: X。値が英数字と記号で 6 文字以上のときだけ伏せる
     # （「シークレットは使わず」「パスは C:\...」のような、ふつうの言葉やパスを消さない）
     (re.compile(r"((?:パスワード|トークン|アクセストークン|シークレット)\s*(?:は|を|[:：=])\s*[「『]?)"
@@ -190,7 +190,7 @@ _SECRET_PATTERNS = [
     # Azure DevOps の PAT らしい長い英数字（旧形式は 52 文字の小文字と数字、新形式は 84 文字前後）
     (re.compile(r"(?<![A-Za-z0-9])[a-z2-7]{52}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
     # 書き方の規則に当たらなかった値の網: 20 文字以上の、大文字・小文字・数字が混ざった、でたらめらしい文字列
-    (re.compile(r"(?<![A-Za-z0-9+=_-])[A-Za-z0-9+=_-]{20,}(?![A-Za-z0-9+=_-])"), lambda m: _random_token(m.group(0))),
+    (re.compile(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/=_-]{20,}(?![A-Za-z0-9+/=_-])"), lambda m: _random_token(m.group(0))),
     # 16 進だけの並び（SHA-384 などのハッシュ）は伏せない
     (re.compile(r"(?<![A-Za-z0-9])(?=[A-Za-z0-9]*[g-zG-Z])[A-Za-z0-9]{76,100}(?![A-Za-z0-9])"), "[REDACTED-TOKEN]"),
 ]
@@ -199,19 +199,26 @@ _SECRET_PATTERNS = [
 def _random_token(tok):
     """でたらめな文字列らしければ伏せる。16 進（ハッシュ・UUID）と、単語をつないだ名前は残す。
 
-    名前（AzureDevOpsServer2020・HIRATA_CODEX_DB2）は、3 文字以上の語と数字の並びがほとんどを占める。
-    でたらめな英数字は短い切れ端ばかりになる（24 文字で、単語らしい部分が 55% 未満になるのが 9 割以上）。
+    名前（AzureDevOpsServer2020・HIRATA_CODEX_DB2・rollout-2026-09-05T08-58-36-<UUID>）は、4 文字以上の単語・
+    大文字の略語・3 桁以上の数字・日付や 16 進の区切りがほとんどを占める。でたらめな英数字は短い切れ端ばかりになる
+    （Codex のソースの名前で伏せたのは 117 個中 1 個の base64 だけ、でたらめな 20〜40 文字を残したのは 3%）。
     """
     if re.fullmatch(r"[0-9a-fA-F-]+", tok) or not (re.search(r"[a-z]", tok) and re.search(r"[A-Z]", tok)):
         return tok
     if len(tok) < 32 and not re.search(r"[0-9]", tok):
         return tok
-    wordy = sum(len(m.group(0)) for m in _WORDY.finditer(tok)) / len(tok)
-    return "[REDACTED-TOKEN]" if wordy < RANDOM_WORDY else tok
+    wordy = 0
+    for part in re.split(r"([-_/]+)", tok):
+        if re.fullmatch(r"[-_/]*", part) or _PLAIN_PART.fullmatch(part):
+            wordy += len(part)
+        else:
+            wordy += sum(len(m.group(0)) for m in _WORDY.finditer(part))
+    return "[REDACTED-TOKEN]" if wordy / len(tok) < RANDOM_WORDY else tok
 
 
 _WORDY = re.compile(r"[A-Z]?[a-z]{3,}|[A-Z]{3,}(?![a-z])|[0-9]{3,}")
-RANDOM_WORDY = 0.55
+_PLAIN_PART = re.compile(r"[0-9a-f]+|[0-9A-F]+|[0-9]{1,4}(?:T[0-9]{2})?|[0-9]{1,2}[A-Z]?[0-9]*")  # 16 進・日付の区切り
+RANDOM_WORDY = 0.6
 
 
 def _redact_signature():
@@ -219,7 +226,7 @@ def _redact_signature():
     import hashlib
     # 正規表現と置き換えの文字列だけから作る（関数の中身は Python のバージョンで変わるので使わない）
     src = "\n".join("%s\t%s" % (p.pattern, r if isinstance(r, str) else "fn") for p, r in _SECRET_PATTERNS)
-    src += "\nrandom:%s:%s" % (RANDOM_WORDY, _WORDY.pattern)
+    src += "\nrandom:%s:%s:%s" % (RANDOM_WORDY, _WORDY.pattern, _PLAIN_PART.pattern)
     return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
 
 
@@ -406,6 +413,11 @@ def _texts(content, allowed, skipped_types, counters):
     return "\n".join(parts)
 
 
+def _str(value):
+    """文字列だけを通す（記録の形が変わって数や表が来ても、取り込みを止めない）。"""
+    return value if isinstance(value, str) else None
+
+
 def parse_rollout(path, data):
     """1 本の rollout から (meta, messages, counters) を取り出す。"""
     counters = {"lines": 0, "bad_json": 0, "shape_errors": 0, "skipped_elements": 0, "incomplete_tail": 0,
@@ -468,12 +480,12 @@ def parse_rollout(path, data):
             if meta_seen:
                 continue
             meta_seen = True
-            meta["thread_id"] = payload.get("id") or meta["thread_id"]
-            meta["cwd"] = payload.get("cwd") or meta["cwd"]
+            meta["thread_id"] = _str(payload.get("id")) or meta["thread_id"]
+            meta["cwd"] = _str(payload.get("cwd")) or meta["cwd"]
             cwd = cwd or meta["cwd"]
             git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
-            meta["branch"] = git.get("branch")
-            meta["originator"] = payload.get("originator")
+            meta["branch"] = _str(git.get("branch"))
+            meta["originator"] = _str(payload.get("originator"))
             # source.subagent: review は持ち主が /review で始めた会話なので子に数えない。thread_spawn（spawn_agent の子）、
             # compact、memory_consolidation などは子に数える。
             src = payload.get("source")
@@ -482,17 +494,17 @@ def parse_rollout(path, data):
                 sub_agent = next(iter(sub_agent), "subagent")
             elif sub_agent == "review" or (sub_agent is not None and not isinstance(sub_agent, str)):
                 sub_agent = None if sub_agent == "review" else "subagent"
-            meta["agent"] = (payload.get("agent_role") or payload.get("agent_path") or payload.get("agent_type")
-                             or sub_agent or None)
-            meta["history_mode"] = payload.get("history_mode")
-            meta["cli_version"] = payload.get("cli_version")
+            meta["agent"] = (_str(payload.get("agent_role")) or _str(payload.get("agent_path"))
+                             or _str(payload.get("agent_type")) or sub_agent or None)
+            meta["history_mode"] = _str(payload.get("history_mode"))
+            meta["cli_version"] = _str(payload.get("cli_version"))
             meta.setdefault("started", ts)
         elif typ == "response_item":
             if payload.get("type") == "message" and payload.get("role") in ("user", "assistant"):
                 counters["response_messages"] += 1
         elif typ == "turn_context":
-            turn_id = payload.get("turn_id") or turn_id
-            cwd = payload.get("cwd") or cwd
+            turn_id = _str(payload.get("turn_id")) or turn_id
+            cwd = _str(payload.get("cwd")) or cwd
         elif typ == "event_msg":
             ptype = payload.get("type")
             if ptype == "item_completed":
@@ -652,11 +664,15 @@ def _quiet_model_loading():
 
 
 def rerank_window(text, terms, width=RERANK_WINDOW):
-    """問いの言葉を最も多く含む width 文字の窓（半分ずつずらして探す）。"""
-    norm = normalize(text)
+    """問いの言葉を最も多く含む width 文字の窓（半分ずつずらして探す）。
+
+    正規化で長さが変わる文字（ｶﾞ・…・㍿）があっても、元の文の同じ所を切る（窓ごとに正規化して数える）。
+    """
+    terms = [normalize(t) for t in terms]
     best, best_score = 0, -1
-    for start in range(0, max(1, len(norm) - width // 2), width // 2):
-        score = sum(norm.count(t, start, start + width) for t in terms)
+    for start in range(0, max(1, len(text) - width // 2), width // 2):
+        norm = normalize(text[start:start + width])
+        score = sum(norm.count(t) for t in terms)
         if score > best_score:
             best, best_score = start, score
     return text[best:best + width]
