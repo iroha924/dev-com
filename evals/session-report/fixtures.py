@@ -2,6 +2,7 @@
 
     python evals/session-report/fixtures.py check            # 6 本とも、正解の追記が check を通るか
     python evals/session-report/fixtures.py build <フォルダ>  # 6 本の report.json と正解の追記をフォルダに書く
+    python evals/session-report/fixtures.py week [--twice] [--out フォルダ]  # 6 本を 1 週間として週の材料・確かめ・HTML を通す
     python evals/session-report/fixtures.py render [--twice] [--out フォルダ]  # 6 本の HTML を書く（--twice は 2 回書いて比べる）
 
 会話は持ち主の実際の記録ではなく、ここで組み立てる。正解の追記（gold/<名前>.json）は、会話の全文を読んで書いたもの。
@@ -179,6 +180,70 @@ def build(out):
     return env
 
 
+def build_week(out):
+    """6 本を、会話ごとのレポートの既定の置き場所（HIRATA_CODEX_DATA の下）に作り、週の材料と週の正解の追記を置く。
+    週の期間は 2026-10-14 の 1 日（6 本とも、この日の日本時間に始まる）。返り値は週のフォルダと env。"""
+    home = tempfile.mkdtemp(prefix="session-report-fixtures-")
+    env = dict(os.environ, CODEX_HOME=home, HIRATA_CODEX_DATA=os.path.join(out, "data"), HIRATA_CODEX_REPORT_REEXEC="fixtures",
+               TZ="Asia/Tokyo")
+    day = os.path.join(home, "sessions", "2026", "10", "14")
+    os.makedirs(day)
+    for name, make in SESSIONS.items():
+        r = make()
+        with open(os.path.join(day, "rollout-2026-10-14T00-00-00-%s.jsonl" % r.tid), "w", encoding="utf-8", newline="\n") as f:
+            f.write(r.text())
+        target = os.path.join(out, "data", "session-report", r.tid)
+        code, text = run(["extract", r.tid, "--out", target], env)
+        if code:
+            raise SystemExit("%s: extract が失敗した: %s" % (name, text))
+        with open(os.path.join(target, "report.json"), encoding="utf-8") as f:
+            digest = json.load(f)["digest"]
+        with open(os.path.join(GOLD, name + ".json"), encoding="utf-8") as f:
+            gold = f.read().replace("<digest>", digest)
+        with open(os.path.join(target, "annotations.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(gold)
+        code, text = run(["render", "--dir", target], env)
+        if code:
+            raise SystemExit("%s: render が失敗した: %s" % (name, text))
+    week = os.path.join(out, "week")
+    code, text = run(["week", "--since", "2026-10-14", "--until", "2026-10-14", "--dir", week], env)
+    shutil.rmtree(home, ignore_errors=True)
+    if code:
+        raise SystemExit("week が失敗した: %s" % text)
+    with open(os.path.join(week, "week.json"), encoding="utf-8") as f:
+        digest = json.load(f)["digest"]
+    with open(os.path.join(GOLD, "week.json"), encoding="utf-8") as f:
+        gold = f.read().replace("<digest>", digest)
+    with open(os.path.join(week, "week-annotations.json"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(gold)
+    return week, env
+
+
+def cmd_week(args):
+    out = args.out or tempfile.mkdtemp(prefix="session-report-fixtures-week-")
+    week, env = build_week(out)
+    failed = 0
+    code, text = run(["week-check", "--dir", week], env)
+    print("week-check: %s" % ("違反 0 件" if code == 0 else "違反あり\n" + text))
+    failed += code != 0
+    results = []
+    for _ in range(2 if args.twice else 1):
+        code, text = run(["week-render", "--dir", week], env)
+        if code:
+            print("week-render が失敗した\n" + text)
+            failed += 1
+            break
+        with open(os.path.join(week, "week.html"), "rb") as f:
+            results.append(f.read())
+    if results:
+        same = "" if not args.twice else "、同じバイト列: %s" % ("はい" if results[0] == results[-1] else "いいえ")
+        failed += bool(args.twice and results[0] != results[-1])
+        print("week.html: %s（%d バイト%s）" % (os.path.join(week, "week.html"), len(results[0]), same))
+    if not args.out:
+        shutil.rmtree(out, ignore_errors=True)
+    return 1 if failed else 0
+
+
 def cmd_check(_args):
     out = tempfile.mkdtemp(prefix="session-report-fixtures-out-")
     failed = 0
@@ -234,6 +299,10 @@ def main(argv=None):
     rd.add_argument("--twice", action="store_true")
     rd.add_argument("--out")
     rd.set_defaults(func=cmd_render)
+    wk = sub.add_parser("week")
+    wk.add_argument("--twice", action="store_true")
+    wk.add_argument("--out")
+    wk.set_defaults(func=cmd_week)
     b = sub.add_parser("build")
     b.add_argument("out")
     b.set_defaults(func=cmd_build)

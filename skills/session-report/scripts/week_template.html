@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'none'">
+<!-- session-report の週のテンプレート。session_report.py week-render が、下の id="data" の中の印を週の JSON に置き換える。
+     デザインは会話ごとのレポートと同じ（hir4ta knowledge の色、横線の区切り、角丸なし）。 -->
+<title>Weekly Report</title>
+<style>
+/* 色は hir4ta knowledge のまま。横線だけで区切り、角丸・影・囲みの枠を使わない（naito-otsuka.com の線の作法）。
+   レイアウト: ヘッダーの線 → 題名 → 切り替えの帯 → 全幅の線の上にラベルを乗せたセクションの連なり。 */
+:root {
+  --bg: #ffffff;
+  --ink: #303030;
+  --sub: #616161;
+  --hair: #e3e3e3;
+  --rule: color-mix(in srgb, var(--ink) 38%, transparent);
+  --cream: #f9f5eb;
+  --display: #d6d3cb;
+  --accent: #9c4a22;
+  --ok: #5f6b4c;
+  --warn: #7f520c;
+  --bad: #a2383a;
+  --decor: #b5b5b5;
+  --chip-ink: #ffffff;
+  --font-ja: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Yu Gothic Medium', 'Yu Gothic', Meiryo, system-ui, sans-serif;
+  --font-en: 'Helvetica Neue', 'Segoe UI', Arial, 'Hiragino Kaku Gothic ProN', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --container: 70rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a1a1a; --ink: #f1f1f1; --sub: #b5b5b5; --hair: #303030; --cream: #232323; --display: #3a3a3a;
+    --accent: #cb8159; --ok: #9db07f; --warn: #e2ab55; --bad: #d1706f; --decor: #8a8a8a; --chip-ink: #1a1a1a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1a1a1a; --ink: #f1f1f1; --sub: #b5b5b5; --hair: #303030; --cream: #232323; --display: #3a3a3a;
+  --accent: #cb8159; --ok: #9db07f; --warn: #e2ab55; --bad: #d1706f; --decor: #8a8a8a; --chip-ink: #1a1a1a; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--font-ja); font-size: 14px; line-height: 1.7; letter-spacing: 0.02em; font-feature-settings: 'palt' 1;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
+button, input { font: inherit; color: inherit; letter-spacing: inherit; }
+button:not(:disabled), summary { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tnum { font-variant-numeric: tabular-nums; }
+.en { font-family: var(--font-en); letter-spacing: 0.06em; }
+.mono { font-family: var(--font-mono); letter-spacing: 0; }
+.sub { color: var(--sub); }
+.small { font-size: 12px; }
+.wrap {
+  margin: 0 auto; width: 100%; max-width: var(--container);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* ヘッダー */
+.header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; border-bottom: 1px solid var(--ink); }
+.brand { font-size: 13px; font-weight: 600; letter-spacing: 0.14em; }
+.icon-btn { display: inline-grid; place-items: center; width: 36px; height: 36px; border: 0; background: none; color: var(--sub); }
+.icon-btn:hover { color: var(--ink); }
+.icon-btn svg { width: 16px; height: 16px; }
+
+/* 題名 */
+.hero { display: grid; gap: 14px; padding-block: 40px 28px; }
+.eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-size: 12px; color: var(--sub); }
+.eyebrow > * + *::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--rule); margin: 0 12px; vertical-align: -1px; }
+h1 { margin: 0; font-size: clamp(22px, 3.4vw, 34px); line-height: 1.45; font-weight: 600; letter-spacing: 0.04em; text-wrap: balance; }
+.summary { margin: 4px 0 0; max-width: 46em; font-size: 16px; line-height: 1.95; }
+
+/* 切り替えの帯: 選んだものだけ濃い四角。上下に線 */
+.tabbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.tabbar .wrap { border-bottom: 1px solid var(--hair); }
+.chips { display: flex; gap: 2px 4px; overflow-x: auto; scrollbar-width: none; padding-block: 10px; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border: 0; background: none; font-size: 13px; color: var(--sub); white-space: nowrap; }
+.chip:hover { color: var(--ink); }
+.chip[aria-selected="true"] { background: var(--ink); color: var(--chip-ink); }
+.chip .n { font-family: var(--font-en); font-size: 11px; opacity: 0.75; }
+.subchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.subchips .chip { padding: 3px 10px; font-size: 12px; }
+
+.page { display: grid; gap: 64px; padding-block: 48px 120px; }
+.sec { display: grid; gap: 4px; min-width: 0; }
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 12px 0 16px; border-top: 1px solid var(--ink); }
+.label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.08em; }
+.label::before { content: ""; width: 6px; height: 6px; background: var(--accent); flex: none; }
+.label .en { font-size: 11px; font-weight: 400; color: var(--sub); margin-left: 6px; }
+.meta { display: inline-flex; align-items: center; gap: 10px; font-size: 11px; color: var(--sub); white-space: nowrap; }
+.meta::before { content: ""; width: 36px; border-top: 1px solid var(--sub); }
+
+.sq { width: 6px; height: 6px; flex: none; display: inline-block; background: var(--decor); }
+.ok { --c: var(--ok); } .warn { --c: var(--warn); } .bad { --c: var(--bad); } .accent { --c: var(--accent); } .neutral { --c: var(--decor); } .ink { --c: var(--ink); }
+.sq.ok, .sq.warn, .sq.bad, .sq.accent, .sq.neutral, .sq.ink { background: var(--c); }
+.state { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--c, var(--sub)); }
+.state.neutral { color: var(--sub); }
+.state.ink { color: var(--ink); }
+
+/* 行: 1px の線で区切る。上に小さく時刻と分類、下に本文 */
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows { display: grid; gap: 26px; padding-top: 6px; }
+.rows > li { display: grid; gap: 4px; }
+.rows.lined { gap: 0; padding-top: 0; }
+.rows.lined > li { padding: 10px 0; border-bottom: 1px solid var(--hair); }
+.rows.lined > li:last-child { border-bottom: 0; }
+.row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; font-size: 12px; color: var(--sub); }
+.row-meta > * + *::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--rule); margin: 0 12px; vertical-align: -1px; }
+.ttl { margin: 0; font-size: 15px; line-height: 1.65; letter-spacing: 0.03em; }
+.ttl.big { font-size: 17px; font-weight: 600; }
+.note { margin: 0; color: var(--sub); }
+
+/* 目次の形: 項目 ───── 状態 */
+.criteria { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.criteria li { display: grid; grid-template-columns: 6.5rem 1fr; align-items: baseline; gap: 2px 14px; font-size: 13px; }
+.criteria .basis { grid-column: 2; font-size: 12px; color: var(--sub); }
+
+.quote { position: relative; margin: 8px 0 0; padding-left: 30px; font-size: 14px; }
+.quote::before { content: "\201C"; position: absolute; left: 0; top: -14px; font-family: var(--font-en); font-size: 46px; line-height: 1; color: var(--display); }
+.alt { margin: 0; font-size: 13px; color: var(--sub); }
+.alt b { font-weight: 400; color: var(--ink); margin-right: 8px; }
+.did { font-family: var(--font-en); font-weight: 600; color: var(--accent); }
+
+/* 流れ: 1 分 = 12px。行の名前は左に残し、横に流す */
+.flow { overflow-x: auto; background: var(--cream); padding: 14px 0 6px; }
+.flow-in { position: relative; }
+.lane { display: flex; }
+.lane-name { position: sticky; left: 0; z-index: 2; flex: none; width: 96px; display: flex; align-items: center; padding-left: 16px; font-size: 12px; color: var(--sub); background: var(--cream); }
+.track { position: relative; flex: none; }
+.gridline { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid color-mix(in srgb, var(--ink) 7%, transparent); }
+.band { position: absolute; top: 50%; display: flex; flex-direction: column; gap: 4px; }
+.band .bar { height: 2px; background: var(--c, var(--ink)); }
+.band .t { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c, var(--ink)); transform: translateY(-26px); position: absolute; left: 0; right: 0; }
+.mark { position: absolute; display: flex; gap: 6px; align-items: flex-start; max-width: 214px; }
+.mark .sq { margin-top: 6px; width: 7px; height: 7px; }
+.mark.span-on { flex-direction: column; gap: 2px; }
+.mark .span { height: 2px; background: var(--c); }
+.mark .tx { display: grid; line-height: 1.35; min-width: 0; }
+.mark .tm { font-family: var(--font-en); font-size: 10px; color: var(--sub); letter-spacing: 0.04em; }
+.mark .lb { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.axis { display: flex; }
+
+.axis .track { height: 28px; font-family: var(--font-en); font-size: 11px; color: var(--sub); }
+.axis .tick { position: absolute; top: 7px; transform: translateX(-50%); }
+
+/* 会話 */
+.line-input { width: 100%; max-width: 28rem; height: 38px; padding: 0; border: 0; border-bottom: 1px solid var(--ink); background: none; font-size: 14px; border-radius: 0; }
+.line-input::placeholder { color: var(--decor); }
+.line-input:focus { outline: none; border-bottom-color: var(--accent); }
+.talk { list-style: none; margin: 0; padding: 0; display: grid; gap: 28px; }
+.talk > li { display: grid; gap: 6px; max-width: 78%; }
+.talk > li.me { justify-self: end; text-align: right; }
+.talk > li.ai { justify-self: start; }
+.talk > li.tool { justify-self: center; max-width: none; }
+.talk .who { display: flex; align-items: center; gap: 0; font-size: 12px; color: var(--sub); }
+.talk .me .who { justify-content: flex-end; }
+.talk .who > * + *::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--rule); margin: 0 10px; vertical-align: -1px; }
+.talk .who b { font-weight: 600; color: var(--ink); }
+.talk .ai .who b::before { content: ""; display: inline-block; width: 6px; height: 6px; background: var(--accent); margin-right: 8px; vertical-align: 1px; }
+.talk .me .who b::after { content: ""; display: inline-block; width: 6px; height: 6px; background: var(--ink); margin-left: 8px; vertical-align: 1px; }
+.talk .text { margin: 0; white-space: pre-line; font-size: 15px; line-height: 1.85; text-align: left; }
+.talk .me .text, .talk .ai .text { display: inline-block; padding: 12px 16px; border: 1px solid var(--rule); }
+.talk .me .text { border-color: var(--ink); }
+.talk .tool .text { font-size: 12px; color: var(--sub); letter-spacing: 0.04em; }
+.talk .tool .text::before, .talk .tool .text::after { content: ""; display: inline-block; width: 28px; border-top: 1px solid var(--hair); vertical-align: middle; margin: 0 12px; }
+.chapter { display: flex; align-items: center; justify-content: center; gap: 8px; max-width: none !important; justify-self: stretch; padding-top: 12px; font-size: 12px; color: var(--sub); letter-spacing: 0.12em; }
+.chapter::before, .chapter::after { content: ""; flex: 1; border-top: 1px solid var(--hair); }
+
+/* 成果物と操作 */
+.cols { display: grid; grid-template-columns: 4.5rem 1fr; gap: 4px 16px; align-items: baseline; }
+.files .plus { color: var(--ok); } .files .minus { color: var(--bad); }
+.stack { display: flex; height: 6px; gap: 2px; }
+.stack span { background: var(--c); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 10px; font-size: 12px; color: var(--sub); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.cmd { display: grid; grid-template-columns: 3rem 6rem 1fr auto; gap: 12px; align-items: baseline; font-size: 13px; min-width: 600px; }
+.scroll-x { overflow-x: auto; }
+.twin { display: grid; gap: 64px; }
+
+@media (min-width: 640px) {
+  .wrap { padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); }
+  .talk > li { max-width: 68%; }
+  .cols { grid-template-columns: 6rem 1fr auto; }
+}
+@media (min-width: 1024px) {
+  .twin { grid-template-columns: 1fr 1fr; }
+  .page { padding-block: 56px 140px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<style>
+/* テンプレートで足したもの: 知らせ、出力と差分、パス */
+.notice { display: grid; gap: 4px; padding: 12px 0; border-top: 2px solid var(--warn); color: var(--warn); font-size: 13px; }
+.notice p { margin: 0; }
+pre.out { margin: 6px 0 0; padding: 10px 12px; max-height: 24rem; overflow: auto; background: var(--cream); font-family: var(--font-mono);
+  font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; }
+details > summary { list-style: none; margin-top: 4px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "+ "; font-family: var(--font-mono); }
+details[open] > summary::before { content: "− "; }
+.path { font-size: 13px; word-break: break-word; }
+.stack-wrap { padding: 8px 0 22px; }
+</style>
+<style>
+/* 週のレポートで足すもの */
+.task { display: grid; gap: 6px; padding: 18px 0 20px; border-bottom: 1px solid var(--hair); }
+.task:last-child { border-bottom: 0; }
+.task .wi { font-family: var(--font-en); font-weight: 600; color: var(--accent); }
+.task .one { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.6; letter-spacing: 0.03em; }
+.task .deliv { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; }
+.task .deliv span { display: inline-flex; align-items: center; gap: 6px; }
+.task details > summary { font-size: 12px; color: var(--sub); }
+.task .detail { display: grid; gap: 14px; margin-top: 10px; padding-left: 14px; border-left: 1px solid var(--hair); }
+.task .detail h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--sub); letter-spacing: 0.08em; }
+.task .detail ul { margin: 0; padding-left: 1.2em; font-size: 14px; }
+.points { margin: 4px 0 0; padding-left: 1.3em; font-size: 15px; line-height: 1.8; }
+.cue .task .one { font-size: 24px; }
+.cue .points { font-size: 19px; line-height: 1.9; }
+.cue .task { padding: 28px 0 32px; }
+.toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; font-size: 13px; color: var(--sub); padding: 5px 0; }
+.toggle .box { width: 26px; height: 14px; border: 1px solid var(--ink); position: relative; }
+.toggle .box::after { content: ""; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: var(--ink); }
+.toggle[aria-pressed="true"] { color: var(--ink); }
+.toggle[aria-pressed="true"] .box::after { left: 14px; background: var(--accent); }
+.bar-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.order { font-family: var(--font-en); font-size: 28px; font-weight: 300; color: var(--display); width: 2.2rem; flex: none; }
+.demo { display: flex; gap: 14px; align-items: flex-start; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"/></symbol>
+</svg>
+
+<header class="header"><div class="wrap">
+  <span class="brand en">WEEKLY REPORT</span>
+  <button class="icon-btn" id="theme" aria-label="テーマを切り替える"><svg><use href="#i-moon"/></svg></button>
+</div></header>
+<div class="wrap hero">
+  <div class="eyebrow tnum" id="eyebrow"></div>
+  <h1 id="title"></h1>
+</div>
+<nav class="tabbar" aria-label="イベント"><div class="wrap bar-row"><div class="chips" role="tablist" id="tabs"></div>
+  <button class="toggle" id="cue" aria-pressed="false"><span class="box"></span>カンペ</button></div></nav>
+<main class="wrap page" id="page"></main>
+
+<script type="application/json" id="data">__SESSION_REPORT_DATA__</script>
+<script>
+"use strict";
+// データは session_report.py week-render が下の <script type="application/json" id="data"> に入れる。
+// 記録から来る文字列は、すべて文字のノードとして入れる（HTML として解釈させない）。
+const D = JSON.parse(document.getElementById("data").textContent);
+const $ = (s) => document.querySelector(s);
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : String(v));
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+const TONE = { "できた": "ok", "一部": "warn", "未確認": "neutral", "できていない": "bad", "未解決": "bad", "次に": "warn", "判断待ち": "neutral" };
+const state = (l) => h("span", { class: "state " + (TONE[l] || "neutral") }, h("span", { class: "sq " + (TONE[l] || "neutral") }), l);
+const head = (ja, en, meta) => h("div", { class: "sec-head" }, h("h2", { class: "label" }, ja, h("span", { class: "en" }, en)), meta ? h("span", { class: "meta tnum" }, meta) : null);
+const rowMeta = (...xs) => h("div", { class: "row-meta" }, ...xs.filter(Boolean).map((x) => (x instanceof Node ? x : h("span", {}, x))));
+const empty = (t) => h("p", { class: "note" }, t);
+const ui = { tab: "retro", cue: false };
+
+document.title = D.meta.title + " — Weekly Report";
+$("#eyebrow").append(...[D.meta.period, "会話 " + D.meta.sessions + " 件", "タスク " + D.meta.tasks + " 件"].map((t) => h("span", {}, t)));
+$("#title").append(D.meta.title);
+
+const deliv = (t) => t.deliverables.length ? h("div", { class: "deliv" }, t.deliverables.map((d) => h("span", {}, h("span", { class: "sq ok" }), d.label + "（" + d.status + "）"))) : null;
+const points = (t) => h("ol", { class: "points" }, t.points.map((p) => h("li", {}, p)));
+const list = (title, xs) => xs.length ? h("div", {}, h("h4", {}, title), h("ul", {}, xs.map((x) => h("li", {}, x)))) : null;
+
+function taskCard(t) {
+  return h("div", { class: "task" },
+    rowMeta(h("span", { class: "wi" }, t.work_item), t.title, state(t.state), "会話 " + t.sessions.length + " 件"),
+    h("p", { class: "one" }, t.one), deliv(t), ui.cue ? points(t) : null,
+    h("details", {}, h("summary", {}, ui.cue ? "詳細" : "話すこと・決めたこと・失敗・学び・会話"),
+      h("div", { class: "detail" },
+        ui.cue ? null : h("div", {}, h("h4", {}, "話すこと"), points(t)),
+        list("決めたこと", t.decisions.filter(Boolean)), list("失敗と解消", t.failures), list("学び", t.lessons),
+        h("div", {}, h("h4", {}, "会話"), h("ul", {}, t.sessions.map((s) => h("li", {}, s.href ? h("a", { href: s.href }, s.label) : s.label)))))));
+}
+function missing() {
+  if (!D.missing.length) return null;
+  return h("div", { class: "notice" }, h("p", {}, "会話ごとの追記が無い（または記録が変わった）会話が " + D.missing.length + " 件ある。タスクに入っていないかもしれない:"),
+    D.missing.map((m) => h("p", {}, m.state + "　" + (m.title || m.id))));
+}
+const VIEWS = {
+  retro: () => [missing(),
+    h("section", { class: "sec" }, head("この週のタスク", "TASKS", D.tasks.length + " 件"), D.tasks.length ? D.tasks.map(taskCard) : empty("タスクの記録なし")),
+    h("div", { class: "twin" },
+      h("section", { class: "sec" }, head("学び", "LESSONS", D.lessons.length + " 件"), D.lessons.length ? h("ul", { class: "rows" }, D.lessons.map((x) => h("li", {}, h("p", { class: "ttl" }, x)))) : empty("記録なし")),
+      h("section", { class: "sec" }, head("困ったこと", "TROUBLES", D.troubles.length + " 件"), D.troubles.length ? h("ul", { class: "rows" }, D.troubles.map((x) => h("li", {}, h("p", { class: "ttl" }, x)))) : empty("記録なし")))],
+  review: () => [h("section", { class: "sec" }, head("見せる順", "DEMO ORDER", D.demo.length + " 件"),
+    D.demo.length ? D.demo.map((t, i) => h("div", { class: "task demo" }, h("span", { class: "order" }, String(i + 1).padStart(2, "0")),
+      h("div", {}, rowMeta(h("span", { class: "wi" }, t.work_item), t.title, state(t.state)), h("p", { class: "one" }, t.one), deliv(t), ui.cue ? points(t) : null))) : empty("見せる成果物の記録なし"))],
+  plan: () => [h("section", { class: "sec" }, head("次のスプリントの候補", "CARRY OVER", D.carry.length + " 件"),
+    D.carry.length ? h("ul", { class: "rows" }, D.carry.map((c) => h("li", {}, rowMeta(state(c.kind), c.work_item ? h("span", { class: "wi" }, c.work_item) : null), h("p", { class: "ttl big" }, c.text)))) : empty("持ち越しの記録なし")),
+    h("section", { class: "sec" }, head("終わっていないタスク", "OPEN TASKS", ""), (() => { const xs = D.tasks.filter((t) => t.state !== "できた"); return xs.length ? xs.map(taskCard) : empty("なし"); })())],
+};
+function render() {
+  $("#tabs").replaceChildren(...[["retro", "振り返り"], ["review", "スプリントレビュー"], ["plan", "プランニング"]].map(([id, l]) =>
+    h("button", { class: "chip", role: "tab", "aria-selected": String(ui.tab === id), onclick: () => { ui.tab = id; render(); } }, l)));
+  $("#page").className = "wrap page" + (ui.cue ? " cue" : "");
+  $("#page").replaceChildren(...VIEWS[ui.tab]().flat().filter(Boolean));
+  $("#cue").setAttribute("aria-pressed", String(ui.cue));
+}
+$("#cue").addEventListener("click", () => { ui.cue = !ui.cue; render(); });
+render();
+(() => {
+  const root = document.documentElement;
+  const dark = () => (root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches);
+  const icon = () => $("#theme use").setAttribute("href", dark() ? "#i-sun" : "#i-moon");
+  try { const saved = localStorage.getItem("sr-theme"); if (saved === "dark" || saved === "light") root.dataset.theme = saved; } catch (e) {}
+  icon();
+  $("#theme").addEventListener("click", () => { root.dataset.theme = dark() ? "light" : "dark"; try { localStorage.setItem("sr-theme", root.dataset.theme); } catch (e) {} icon(); });
+})();
+</script>
+</body>
+</html>

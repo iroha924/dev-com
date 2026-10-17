@@ -27,7 +27,7 @@ Python の標準ライブラリと Windows 標準の PowerShell だけで動く�
 | [`code-comments`](docs/notes.md#code-comments) | skill | 自動 | 使わない | コードのコメントを書く・直すとき |
 | [`root-cause`](docs/notes.md#root-cause) | skill | 自動 | 使わない | どのコミットで壊れたかを git bisect で探すとき |
 | [`session-search`](docs/notes.md#会話の検索) | skill | 自動 | 使わない | 「前に〇〇って何て言ってた？」と過去の Codex の会話を探すとき |
-| [`session-report`](docs/notes.md#会話のレポート) | skill | 自動 | 使わない | 1 つの会話を、振り返り用の HTML にするとき |
+| [`session-report`](docs/notes.md#会話のレポート) | skill | 自動 | 使わない | 1 つの会話や 1 週間分を、振り返り・スプリントレビュー・プランニング用の HTML にするとき |
 | [`change-risk-reviewer`](docs/notes.md#change-risk-reviewer) | agent | `pr-review-assist` から | 使わない | 差分を独立した文脈で読むレビュアー |
 | [`incident-evidence-analyst`](docs/notes.md#incident-evidence-analyst) | agent | `incident-report` から | 使わない | 障害のログを大量に読んで整理する |
 | [`design-challenger`](docs/notes.md#design-challenger) | agent | `grill` から | 読む | 要件や設計の叩き台に反論する議論の相手 |
@@ -71,6 +71,7 @@ flowchart LR
 | いつから壊れたか分からないとき | `root-cause` | 「このテストがどのコミットで落ちるようになったか bisect で探して」 |
 | 前に何を決めたか思い出したいとき | `session-search` | 「前に CI の自動の再実行をどうするって決めたっけ？」 |
 | 長い会話を振り返りたいとき | `session-report` | 「このセッションのレポートを作って」 |
+| 振り返り・スプリントレビュー・プランニングの前 | `session-report`（週） | 「今週の振り返りのレポートを作って」。カンペにも使える |
 | 障害の後 | `incident-report` | `$incident-report このログからポストモーテムを書いて` |
 | 金曜のスプリントレビュー・振り返り前 | `sprint-report`（review） | 「今スプリントのまとめと振り返りの材料を出して」 |
 

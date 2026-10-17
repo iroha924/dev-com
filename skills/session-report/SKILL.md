@@ -1,6 +1,6 @@
 ---
 name: session-report
-description: Codex の 1 つの会話を、依頼と成果・決めたこと・残った課題・実際の会話をタブで見られる単体の HTML にする。「このセッションのレポートを作って」「この会話を振り返る HTML」と言われたときに使う。過去の会話の中身を探すだけなら session-search、スプリント全体のまとめは sprint-report。
+description: Codex の 1 つの会話を、依頼と成果・決めたこと・残った課題・実際の会話をタブで見られる単体の HTML にする。1 週間分の会話を Work Item ごとにまとめ、振り返り・スプリントレビュー・プランニングとカンペに使う週のレポートも作る。「このセッションのレポートを作って」「今週の振り返りのレポート」と言われたときに使う。過去の会話の中身を探すだけなら session-search、スプリント全体のまとめは sprint-report。
 metadata:
   short-description: 会話を振り返る HTML を作る
 ---
@@ -79,6 +79,24 @@ REPORT override Q1 <ID> --clear                                  # 訂正を消�
 ```
 
 訂正は overrides.json に保存され、HTML には元の判定と理由も出る。追記を作り直して対象の本文が変わった訂正は使われず、HTML にそう出る。
+
+## 7. 週のレポート（振り返り・スプリントレビュー・プランニング）
+
+```powershell
+REPORT week                                   # 今週の月曜から今日まで
+REPORT week --since 2026-10-12 --until 2026-10-16
+```
+
+期間に始まった会話（子のエージェントの会話は除く）を並べ、`%LOCALAPPDATA%\hirata-codex\session-report\weeks\<期間>\` に week.json と week-input.md を書く。以下の `<期間>` は `--since` と `--until` を同じように渡す。
+
+1. 出力に「未抽出」「追記なし」「記録が変わった」の会話が並んだら、**その件数を持ち主に見せて、会話ごとのレポートを先に作るかを聞く**（1 本ごとに利用枠を使う）。作るなら、それぞれ 1〜4 の手順で annotations.json を作って check を通し、`REPORT week ...` をもう一度流す。作らない会話は、週のレポートの頭に「追記が無い会話」として出る。
+2. week-input.md を読み、同じフォルダの `week-annotations.json` を書く。形は `scripts\week.schema.json`。
+   - タスクは **Work Item ごと**。材料の「Work Item の候補」を見てまとめ、Work Item の無い会話は中身でまとめて work_item を null にする。週の会話（追記のあるもの）は全部、どれかのタスクの sessions に入れる。
+   - one_liner は、人に一言で説明できる形で、何をしてどこまで進んだか（成果物があれば番号も）。points は話すこと 3 点ほど（1〜5 点）。
+   - refs は材料の `[<会話の ID>:<項目の ID>]` をそのまま写す。決定（D）を入れると詳細に出る。deliverables は、その会話の成果物にある PR・Work Item だけ。
+   - carry_over は会話ごとの課題（未解決・次に・判断待ち）から、次のスプリントに持ち越すもの。demo_order はスプリントレビューで見せる順。
+   - `source_digest` は week.json の `digest` をそのまま写す。
+3. `REPORT week-check <期間>` で違反が 0 件になるまで直し、`REPORT week-render <期間>` で week.html を書く。パスを持ち主に伝える。
 
 ## probe
 

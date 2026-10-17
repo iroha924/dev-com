@@ -319,6 +319,8 @@ min_rate_limit_remaining_percent = 40
 
 `session-report` は、Codex の 1 つの会話を、依頼と成果・決めたこと・残った課題・実際の会話をタブで見られる単体の HTML にする。持ち主が自分で振り返るために使う（誰にも共有しない）。
 
+週のレポート（`week`・`week-check`・`week-render`）は、期間の会話ごとのレポートを束ね、Codex が Work Item ごとのタスク（一言・進み具合・話すこと・成果物・詳細）にまとめた週の追記から、振り返り・スプリントレビュー・プランニングの HTML を作る。「カンペ」を入れると、一言と話すことが大きく出る。作り物の 1 週間は `python3 evals/session-report/fixtures.py week --twice` で通る。
+
 ```mermaid
 flowchart LR
     r["Codex の記録<br/>（rollout）"] --> e["extract<br/>機械で取れるもの"]

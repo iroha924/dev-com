@@ -1203,6 +1203,96 @@ class FinalReview2Test(_ReportBase):
         self.assertEqual([o["status"] for o in self.extract(T1)["operations"]], ["incomplete"])
 
 
+class WeekTest(_Base):
+    def setUp(self):
+        super().setUp()
+        self.env["HIRATA_CODEX_DATA"] = os.path.join(self.tmp.name, "data")
+
+    def session(self, tid, start, text="依頼 #1287 の件"):
+        r = Rollout(tid, start=start).turn("t1").user("u1", text).agent("a1", "答え").end("答え")
+        return r
+
+    def make_week(self):
+        self.write(T1, self.session(T1, "2026-10-12T01:00:00Z").text(), day="2026-10-12")
+        self.write(T2, self.session(T2, "2026-10-13T01:00:00Z", "別の依頼").text(), day="2026-10-13")
+        self.write(T3, self.session(T3, "2026-10-20T01:00:00Z").text(), day="2026-10-20")  # 期間の外
+        self.write(T4, Rollout(T4, source={"subagent": {"thread_spawn": {}}}, start="2026-10-12T02:00:00Z").text(), day="2026-10-12")
+        # T1 だけ会話ごとのレポートを作る
+        rdir = os.path.join(self.tmp.name, "data", "session-report", T1)
+        code, out, err = self.run_cli("extract", T1, "--out", rdir)
+        self.assertEqual(code, 0, err)
+        report = sr.read_json(os.path.join(rdir, "report.json"))
+        ev = [{"ref": "u1", "quote": "依頼"}]
+        ann = {"format_version": "1", "source_digest": report["digest"], "summary": {"text": "#1287 を直した", "evidence": ev},
+               "chapters": [], "questions": [], "lessons": [], "command_notes": [], "owner_messages": {"u1": ["R1"]},
+               "requests": [{"id": "R1", "text": "#1287 の件", "at": "u1", "lifecycle": "有効", "evidence": ev,
+                             "criteria": [{"text": "直す", "origin": "持ち主", "status": "できた", "basis": "", "evidence": ev}]}],
+               "decisions": [{"id": "D1", "text": "直し方 A", "at": "a1", "by": "持ち主", "why": "", "alternatives": [], "supersedes": None,
+                              "evidence": [{"ref": "a1", "quote": "答え"}]}],
+               "issues": [{"id": "I1", "kind": "次に", "text": "CI で確かめる", "evidence": ev}]}
+        with open(os.path.join(rdir, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(ann, f, ensure_ascii=False)
+        wdir = os.path.join(self.tmp.name, "week")
+        code, out, err = self.run_cli("week", "--since", "2026-10-12", "--dir", wdir)
+        self.assertEqual(code, 0, err)
+        return wdir, out
+
+    def good(self, week):
+        return {"format_version": "1", "source_digest": week["digest"], "title": "週",
+                "tasks": [{"id": "T1", "work_item": "1287", "title": "#1287", "one_liner": "直した", "state": "できた", "points": ["a", "b", "c"],
+                           "sessions": [T1], "deliverables": [], "refs": [T1 + ":D1"], "failures": [], "lessons": []}],
+                "lessons": [], "troubles": [], "carry_over": [{"kind": "次に", "task": "T1", "text": "CI で確かめる", "ref": T1 + ":I1"}],
+                "demo_order": ["T1"]}
+
+    def test_week_collects_sessions_in_the_period(self):
+        wdir, out = self.make_week()
+        week = sr.read_json(os.path.join(wdir, "week.json"))
+        self.assertEqual([(s["id"], s["state"]) for s in week["sessions"]], [(T1, "追記あり"), (T2, "未抽出")])
+        s1 = week["sessions"][0]
+        self.assertEqual(s1["work_items"], ["1287"])
+        self.assertEqual(s1["items"]["D1"], "決定（持ち主）: 直し方 A")
+        self.assertIn("[%s:R1] 依頼（できた）: #1287 の件" % T1, open(os.path.join(wdir, "week-input.md"), encoding="utf-8").read())
+        self.assertIn("%s: 未抽出" % T2, out)
+
+    def test_week_check(self):
+        wdir, _ = self.make_week()
+        week = sr.read_json(os.path.join(wdir, "week.json"))
+        self.assertEqual(sr.check_week(self.good(week), week), [])
+        cases = [
+            (lambda w: w["tasks"][0].update(sessions=[]), "%s: 週の会話がどのタスクにも入っていない" % T1),
+            (lambda w: w["tasks"][0].update(refs=[T1 + ":D9"]), "T1: refs の %s:D9 が週の材料に無い" % T1),
+            (lambda w: w["tasks"][0].update(deliverables=[{"kind": "PR", "id": "482"}]), "T1: 成果物 PR #482 が"),
+            (lambda w: w["tasks"][0].update(points=[]), "T1: 話すこと（points）は 1〜5 点"),
+            (lambda w: w.update(source_digest="0"), "source_digest:"),
+            (lambda w: w.update(demo_order=["T9"]), "demo_order: タスク T9 が無い"),
+            (lambda w: w["carry_over"][0].update(task="T9"), "carry_over[0]: タスク T9 が無い"),
+        ]
+        for mutate, want in cases:
+            with self.subTest(want=want):
+                w = self.good(week)
+                mutate(w)
+                self.assertTrue(any(e.startswith(want) for e in sr.check_week(w, week)), sr.check_week(w, week))
+
+    def test_week_render(self):
+        wdir, _ = self.make_week()
+        week = sr.read_json(os.path.join(wdir, "week.json"))
+        w = self.good(week)
+        w["title"] = '</script><img src=x onerror="alert(1)">'
+        with open(os.path.join(wdir, "week-annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(w, f, ensure_ascii=False)
+        code, out, err = self.run_cli("week-render", "--dir", wdir)
+        self.assertEqual(code, 0, err)
+        html = open(os.path.join(wdir, "week.html"), encoding="utf-8").read()
+        data = html.split('<script type="application/json" id="data">', 1)[1].split("</script>", 1)[0]
+        self.assertNotIn("<", data)
+        self.assertIn("default-src 'none'", html)
+        self.assertNotIn("innerHTML", html)
+        view = json.loads(data)
+        self.assertEqual(view["tasks"][0]["decisions"], ["決定（持ち主）: 直し方 A"])
+        self.assertEqual(view["carry"][0]["work_item"], "#1287")
+        self.assertEqual([m["id"] for m in view["missing"]], [T2])
+
+
 class FixturesTest(unittest.TestCase):
     def test_gold_annotations_pass_check(self):
         # 作り物の会話 6 本の正解の追記が、会話とずれていない（evals/session-report/fixtures.py）
@@ -1210,6 +1300,13 @@ class FixturesTest(unittest.TestCase):
                            capture_output=True, encoding="utf-8", env=dict(os.environ, TZ="Asia/Tokyo"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(r.stdout.count("違反 0 件"), 6)
+
+    def test_week_fixture(self):
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "evals", "session-report", "fixtures.py"), "week", "--twice"],
+                           capture_output=True, encoding="utf-8", env=dict(os.environ, TZ="Asia/Tokyo"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("week-check: 違反 0 件", r.stdout)
+        self.assertIn("同じバイト列: はい", r.stdout)
 
     def test_same_record_gives_same_html(self):
         r = subprocess.run([sys.executable, os.path.join(ROOT, "evals", "session-report", "fixtures.py"), "render", "--twice"],

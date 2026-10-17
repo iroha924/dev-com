@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "session-report の週の追記（week-annotations.json）",
+  "description": "Codex が week-input.md を読んで書く。会話は week.json の会話の ID、refs は <会話の ID>:<項目の ID>（材料の [ ] の中）。week-check が確かめる。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "source_digest", "title", "tasks", "lessons", "troubles", "carry_over", "demo_order"],
+  "properties": {
+    "format_version": {"enum": ["1"]},
+    "source_digest": {"type": "string", "description": "week.json の digest をそのまま写す"},
+    "title": {"type": "string", "description": "週を一言で（例: CI のテスト結果の可視化を進めた週）"},
+    "tasks": {
+      "type": "array",
+      "description": "Work Item ごとのタスク。Work Item の無い会話は、中身でまとめて work_item を null にする",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "work_item", "title", "one_liner", "state", "points", "sessions", "deliverables", "refs", "failures", "lessons"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^T[0-9]+$"},
+          "work_item": {"type": ["string", "null"], "pattern": "^[0-9]+$", "description": "Work Item の番号（# を付けない）"},
+          "title": {"type": "string"},
+          "one_liner": {"type": "string", "description": "何をして、どこまで進んだかを一言で。成果物があれば入れる"},
+          "state": {"enum": ["できた", "一部", "できていない", "未確認"]},
+          "points": {"type": "array", "items": {"type": "string"}, "description": "人に説明するときに話すこと。1〜5 点（ふつうは 3 点）"},
+          "sessions": {"type": "array", "items": {"type": "string"}, "description": "このタスクの会話の ID"},
+          "deliverables": {
+            "type": "array",
+            "items": {"type": "object", "additionalProperties": false, "required": ["kind", "id"],
+                      "properties": {"kind": {"enum": ["PR", "Work Item"]}, "id": {"type": "string"}}}
+          },
+          "refs": {"type": "array", "items": {"type": "string"}, "description": "根拠にした材料の項目（<会話の ID>:<項目の ID>）。決定（D）は詳細に出る"},
+          "failures": {"type": "array", "items": {"type": "string"}, "description": "失敗と、その解消（解消していなければそう書く）"},
+          "lessons": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "lessons": {"type": "array", "items": {"type": "string"}, "description": "週の学び"},
+    "troubles": {"type": "array", "items": {"type": "string"}, "description": "週に困ったこと（止まった理由、権限、待ち）"},
+    "carry_over": {
+      "type": "array",
+      "description": "次のスプリントへの持ち越し",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["kind", "task", "text", "ref"],
+        "properties": {"kind": {"enum": ["未解決", "次に", "判断待ち"]}, "task": {"type": ["string", "null"]},
+                       "text": {"type": "string"}, "ref": {"type": ["string", "null"]}}
+      }
+    },
+    "demo_order": {"type": "array", "items": {"type": "string"}, "description": "スプリントレビューで見せる順のタスクの ID（成果物のあるもの）"}
+  }
+}
