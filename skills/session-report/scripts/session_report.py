@@ -1719,7 +1719,9 @@ def build_view(report, ann, overrides, stale=False):
     for d in ann["decisions"]:
         ev = d["evidence"][0] if d["evidence"] else None
         ref_ts = (msgs.get(ev["ref"]) or ops.get(ev["ref"]) or {}).get("ts") if ev else None
+        replaced_by = next((x["id"] for x in ann["decisions"] if x["supersedes"] == d["id"]), None)
         decisions.append({"id": d["id"], "text": d["text"], "time": hm(msgs.get(d["at"], {}).get("ts")), "by": d["by"], "why": d["why"],
+                          "replaced_by": replaced_by,
                           "alternatives": d["alternatives"], "quote": ev["quote"] if ev else None, "quote_time": hm(ref_ts) if ev else None})
     questions = [{"id": q["id"], "text": q["text"], "time": hm(msgs.get(q["at"], {}).get("ts")), "status": eff[q["id"]],
                   "answer_time": hm(msgs[q["answer"]]["ts"]) if q["answer"] in msgs else None, "note": q["note"]}
@@ -1771,23 +1773,33 @@ def build_view(report, ann, overrides, stale=False):
             files[key] = {"kind": "画像を開いた", "path": (o.get("target") or "") + "（本体なし）", "plus": "", "minus": "", "diff": None,
                           "diff_cut": False}
         for f in o.get("files", []):
+            if o["status"] != "ok":  # 失敗・拒否された変更は、した変更と数えずに別の行にする
+                key = ("未適用", f["path"])
+                if key not in files:
+                    order.append(key)
+                files[key] = {"kind": "適用されなかった変更", "path": f["path"], "plus": "", "minus": "", "diff": f.get("diff"),
+                              "diff_cut": f.get("diff_cut", False)}
+                continue
             key = ("ファイル", f["path"])
             cur = files.get(key)
             if cur is None:
                 order.append(key)
-                cur = files[key] = {"kind": FILE_KIND[f["kind"]], "path": f["path"], "added": 0, "removed": 0, "diff": None,
+                cur = files[key] = {"kind": FILE_KIND[f["kind"]], "path": f["path"], "added": 0, "removed": 0, "diffs": [],
                                     "diff_cut": False}
             if not (cur["kind"] == "追加" and f["kind"] == "update"):  # 足してから直したファイルは「追加」のまま
                 cur["kind"] = FILE_KIND[f["kind"]]
             cur["added"] += f["added"] or 0
             cur["removed"] += f["removed"] or 0
-            cur["diff"], cur["diff_cut"] = f.get("diff"), f.get("diff_cut", False)
+            if f.get("diff"):
+                cur["diffs"].append(f["diff"])  # 何度も変えたファイルは、全部の回の差分を残す（行数は全部の合計）
+            cur["diff_cut"] = cur["diff_cut"] or f.get("diff_cut", False)
     file_rows = []
     for key in order:
         f = dict(files[key])
         if "added" in f:
             added, removed = f.pop("added"), f.pop("removed")
             f["plus"], f["minus"] = ("+%d" % added if added else ""), ("−%d" % removed if removed else "")
+            f["diff"] = "\n…（次の変更）…\n".join(f.pop("diffs")) or None
         file_rows.append(f)
     commands = []
     for o in report["operations"]:

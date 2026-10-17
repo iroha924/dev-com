@@ -283,7 +283,7 @@ function requestRows(full) {
 function decisionRows(full) {
   if (!D.decisions.length) return empty("決めたことの記録なし");
   return h("ul", { class: "rows" }, D.decisions.map((d) => h("li", {},
-    rowMeta(h("span", { class: "did" }, d.id), d.time, d.by),
+    rowMeta(h("span", { class: "did" }, d.id), d.time, d.by, d.replaced_by ? d.replaced_by + " で置き換え" : null),
     h("p", { class: "ttl" + (full ? " big" : "") }, d.text),
     full && d.why ? h("p", { class: "note" }, d.why) : null,
     full ? h("p", { class: "alt" }, h("b", {}, "採らなかった案"), d.alternatives.length ? d.alternatives.join("、") : "記録なし") : null,

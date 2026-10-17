@@ -1084,6 +1084,33 @@ class RenderTest(_ReportBase):
         self.assertEqual([m[0] for m in view["flow"]["marks"]], ["依頼", "決定", "失敗"])
 
 
+class ViewDetailTest(_Base):
+    def test_files_decisions(self):
+        r = Rollout(T1).turn("t1").user("u1", "直して")
+        diff = lambda a, b: "--- a\n+++ b\n@@\n-%s\n+%s\n" % (a, b)
+        r.item({"type": "FileChange", "id": "f1", "status": "completed", "changes": {"C:\\w\\a.py": {"type": "update", "unified_diff": diff("x", "y")}}})
+        r.item({"type": "FileChange", "id": "f2", "status": "completed", "changes": {"C:\\w\\a.py": {"type": "update", "unified_diff": diff("y", "z")}}})
+        r.item({"type": "FileChange", "id": "f3", "status": "declined", "changes": {"C:\\w\\b.py": {"type": "update", "unified_diff": diff("p", "q")}}})
+        r.agent("a1", "方針 A にします。やはり方針 B にします。").end("x")
+        self.write(T1, r.text())
+        report = self.extract(T1)
+        ev = [{"ref": "a1", "quote": "方針"}]
+        ann = {"format_version": "1", "source_digest": report["digest"], "summary": {"text": "s", "evidence": ev}, "chapters": [],
+               "requests": [], "questions": [], "lessons": [], "issues": [], "command_notes": [], "owner_messages": {"u1": ["了承のみ"]},
+               "decisions": [{"id": "D1", "text": "方針 A", "at": "a1", "by": "保留", "why": "", "alternatives": [], "supersedes": None, "evidence": ev},
+                             {"id": "D2", "text": "方針 B", "at": "a1", "by": "Codex の提案のまま", "why": "", "alternatives": [],
+                              "supersedes": "D1", "evidence": ev}]}
+        self.assertEqual(sr.check_annotations(ann, report), [])
+        view = sr.build_view(report, ann, {})
+        files = {f["path"]: f for f in view["ops"]["files"]}
+        self.assertEqual((files["C:\\w\\a.py"]["plus"], files["C:\\w\\a.py"]["minus"]), ("+2", "−2"))
+        self.assertIn("+y", files["C:\\w\\a.py"]["diff"])
+        self.assertIn("+z", files["C:\\w\\a.py"]["diff"])
+        self.assertEqual((files["C:\\w\\b.py"]["kind"], files["C:\\w\\b.py"]["plus"]), ("適用されなかった変更", ""))
+        d1 = next(d for d in view["decisions"] if d["id"] == "D1")
+        self.assertEqual(d1["replaced_by"], "D2")
+
+
 class ShareTest(_Base):
     def test_share_html_leaves_out_details(self):
         r = Rollout(T1, cwd="C:\\work\\CANARYCWD\\ci-pipelines").turn("t1")

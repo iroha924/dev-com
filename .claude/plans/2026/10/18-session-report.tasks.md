@@ -265,6 +265,16 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `feat(session-report): 要点と根拠の抜粋だけの共有用の render を足す`
   - 結果: `python3 -m unittest tests.test_session_report -k Share` → OK（会話の本文・コマンド・出力・差分・絶対パス・URL・作業フォルダの目印が report-share.html に無い、頭に共有の可否の知らせ）。`python3 evals/session-report/fixtures.py render --twice` → 手元用と共有用の 12 本とも「同じバイト列: はい」。`python3 -m unittest discover -s tests` → 384 件 OK（skip 24）
 
+- [x] T26: 適用されなかったファイルの変更・何度も変えたファイルの差分・置き換えた決定を表示で区別する
+  - 種別: 修正
+  - 計画: S7
+  - 依存: T08（直す対象の build_view とテンプレートが要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `skills/session-report/scripts/template.html`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k ViewDetail` → FAIL（同じファイルの前の回の差分が消える。続く確かめで、拒否された変更を数える件と置き換えた決定の件も見る）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): 適用されなかった変更を数えず、何度も変えたファイルの差分を全部残し、置き換えた決定を示す`
+  - 結果: red を直す前のコードで実測 → FAIL。直した後 `python3 -m unittest discover -s tests` → 386 件 OK（skip 24）
+
 ## P5: 使える形にまとめる
 
 Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を比べる道具がそろう。
@@ -287,6 +297,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T26 / T08 のレビュー（62cd864、high）の 3 件（F1 失敗・拒否された変更を数える P2、F2 同じファイルの差分が最後の 1 回だけ P2、F3 置き換えた決定を区別しない P2）を再現で確かめて受理 / T26 を足して直した。HTML・スクリプトとして解釈される経路と外への読み込みの経路は、レビューでは見つからなかった
 
 - 2026-10-18 / T10 / README の一覧に skill の書き忘れが出ないように、test_layout に「skills/ の全部の skill が README の一覧の表にある」テストを足した（次に同じ書き忘れを止める機械の検査）
 
