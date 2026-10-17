@@ -1174,6 +1174,14 @@ class FinalReview2Test(_ReportBase):
         ann["summary"]["text"] = "使う " + self.TOK
         self.assertNotIn(self.TOK, sr.render_html(sr.build_share_view(report, ann, {})))
 
+    def test_assignment_argument_is_redacted_as_a_whole(self):
+        r = Rollout(T1).turn("t1").user("u1", "流して")
+        r.item(dict(cmd("x", 0), command=["env", "DB_PASSWORD=alpha reviewphrase omega", "python", "task.py"])).end("x")
+        self.write(T1, r.text())
+        report = self.extract(T1)
+        self.assertNotIn("reviewphrase", json.dumps(report, ensure_ascii=False))
+        self.assertIn("task.py", report["operations"][0]["target"])
+
     def test_quotes_inside_arguments_are_escaped_when_joined(self):
         # つなぎ直した 1 行で値の境目が崩れると、その後の伏せ字が値を読み違える
         self.assertEqual(sr._redacted_words(["echo", 'a " b', "c\\d"]), 'echo "a \\" b" c\\d')

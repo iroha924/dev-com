@@ -748,10 +748,15 @@ def _redacted_words(words):
         return "[REDACTED]"  # 伏せ字で JSON の形が崩れたら、並びごと出さない
     def shown(w):
         w = str(w)
-        if " " in w or '"' in w or not w:  # 値の中の引用符を逃がし、つないだ 1 行で値の境目が崩れないようにする
-            return '"%s"' % w.replace('"', '\\"')
-        return w
-    return " ".join(shown(w) for w in red)
+        if not (" " in w or '"' in w or not w):
+            return w
+        # 値の中の引用符を逃がし、つないだ 1 行で値の境目が崩れないようにする。NAME=値 は NAME="値" にして、
+        # シェルの文と同じ規則で値の全体が伏せ字にかかるようにする
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", w, re.S)
+        if m:
+            return '%s="%s"' % (m.group(1), m.group(2).replace('"', '\\"'))
+        return '"%s"' % w.replace('"', '\\"')
+    return ss.redact(" ".join(shown(w) for w in red))
 
 
 def _search_no_match(script, shell):
