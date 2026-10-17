@@ -34,7 +34,8 @@ def report(name, ranked, base):
     ranks = []
     for (q, _, _), rows in zip(base, ranked):
         gold = set(q["gold"])
-        ranks.append(next((i for i, t in enumerate(threads_of(rows), 1) if t in gold), None))
+        rank = next((i for i, t in enumerate(threads_of(rows), 1) if t in gold), None)
+        ranks.append(rank if rank and rank <= 10 else None)  # run_eval と同じく MRR@10
     n = len(ranks)
     print("%-48s MRR %.3f  R@1 %.3f  R@5 %.3f" % (
         name, sum(1.0 / r for r in ranks if r) / n, sum(1 for r in ranks if r == 1) / n,

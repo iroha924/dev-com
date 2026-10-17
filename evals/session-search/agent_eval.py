@@ -120,7 +120,7 @@ def run_one(args, mode, q, wrapper, schema_path):
     gold = q["gold"] if isinstance(q["gold"], list) else [q["gold"]]
     tid = (answer.get("thread_id") or "").strip().lower()
     result = {"id": q["id"], "type": q.get("type"), "mode": mode, "exit": proc.returncode,
-              "correct": any(tid and tid == g.lower() for g in gold), "found": bool(answer.get("found")),
+              "correct": proc.returncode == 0 and any(tid and tid == g.lower() for g in gold), "found": bool(answer.get("found")),
               "thread_id": tid, "gold": gold, "commands": commands, "usage": usage, "answer": answer.get("answer", "")}
     json.dump(result, open(result_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     return result

@@ -11,6 +11,7 @@ question は人が言う自然な文、keywords は Codex が検索に打つ語�
 
 import argparse
 import collections
+import datetime
 import json
 import math
 import os
@@ -183,7 +184,10 @@ def main():
     ap.add_argument("--methods", default="")
     ap.add_argument("--out")
     ap.add_argument("--codex-home", help="モックの代わりに、実際の CODEX_HOME を使う（gold は実際の thread_id）")
+    ap.add_argument("--now", default="2026-10-17T00:00:00+00:00",
+                    help="新しさの補正の基準の時刻（流す日で数字が変わらないように固定する。README の数字はこの値）")
     args = ap.parse_args()
+    ss.NOW = datetime.datetime.fromisoformat(args.now)
     if args.codex_home:
         home = os.path.abspath(args.codex_home)
     else:
