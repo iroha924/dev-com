@@ -18,6 +18,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import shlex
 import subprocess
 import sys
 
@@ -69,8 +70,9 @@ type が session_meta の行の payload.id が thread_id。持ち主の依頼は
 def wrapper_script(out_dir, snapshot, db, data):
     path = os.path.join(out_dir, "session-search-tool")
     with open(path, "w", encoding="utf-8") as f:
+        q = shlex.quote
         f.write("#!/bin/sh\nexec env CODEX_HOME=%s HIRATA_CODEX_SEARCH_DB=%s HIRATA_CODEX_DATA=%s HF_HUB_OFFLINE=1 "
-                "OMP_NUM_THREADS=2 python3 %s \"$@\"\n" % (snapshot, db, data, SCRIPT))
+                "OMP_NUM_THREADS=2 python3 %s \"$@\"\n" % (q(snapshot), q(db), q(data), q(SCRIPT)))
     os.chmod(path, 0o755)
     return path
 
@@ -128,14 +130,16 @@ def summarize(results):
     by_mode = {}
     for r in results:
         by_mode.setdefault(r["mode"], []).append(r)
-    print("%-8s %5s %8s %8s %10s %10s %8s" % ("mode", "n", "正解率", "見つけた", "入力(平均)", "出力(平均)", "コマンド"))
+    # output_tokens に推論の分が含まれるかは exec の JSON の定義で確かめていないので、足さずに別の列で出す
+    print("%-8s %5s %8s %8s %10s %10s %10s %8s %6s" % ("mode", "n", "正解率", "見つけた", "入力(平均)", "出力(平均)",
+                                                    "推論(平均)", "コマンド", "失敗"))
     for mode, rs in by_mode.items():
         n = len(rs)
-        print("%-8s %5d %8.3f %8.3f %10.0f %10.0f %8.1f" % (
+        print("%-8s %5d %8.3f %8.3f %10.0f %10.0f %10.0f %8.1f %6d" % (
             mode, n, sum(r["correct"] for r in rs) / n, sum(r["found"] for r in rs) / n,
-            sum(r["usage"]["input_tokens"] for r in rs) / n,
-            sum(r["usage"]["output_tokens"] + r["usage"]["reasoning_output_tokens"] for r in rs) / n,
-            sum(r["commands"] for r in rs) / n))
+            sum(r["usage"]["input_tokens"] for r in rs) / n, sum(r["usage"]["output_tokens"] for r in rs) / n,
+            sum(r["usage"]["reasoning_output_tokens"] for r in rs) / n, sum(r["commands"] for r in rs) / n,
+            sum(1 for r in rs if r.get("error") or r.get("exit") not in (0,))))
 
 
 def main():
@@ -168,9 +172,13 @@ def main():
             m, qid = futures[fut]
             try:
                 r = fut.result()
-            except Exception as e:  # 1 件の失敗で全体を止めない
+            except Exception as e:  # 1 件の失敗で全体を止めない。時間切れも失敗も「外れ」として分母に入れる
                 print("失敗: %s %s %s" % (m, qid, e), file=sys.stderr)
-                continue
+                q = next(x for x in queries if x["id"] == qid)
+                r = {"id": qid, "type": q.get("type"), "mode": m, "exit": None, "correct": False, "found": False,
+                     "thread_id": "", "gold": q["gold"], "commands": 0, "error": str(e),
+                     "usage": {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "reasoning_output_tokens": 0},
+                     "answer": ""}
             results.append(r)
             print("%s %-6s %s %s" % (len(results), m, qid, "✓" if r["correct"] else "✗"), flush=True)
     json.dump(results, open(os.path.join(args.out, "results.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)

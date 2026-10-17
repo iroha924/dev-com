@@ -684,7 +684,7 @@ class ReviewFindingsTest(_Base):
         idx = self.idx()
         saved = ss.memory_files
         try:
-            ss.memory_files = lambda home: [os.path.join(home, "memories", "gone.md")]
+            ss.memory_files = lambda home, failed=None: [os.path.join(home, "memories", "gone.md")]
             idx.ingest(self.home)
         finally:
             ss.memory_files = saved
@@ -998,6 +998,57 @@ class FourthReviewTest(_Base):
         self.assertIn("目的の言葉", ss.rerank_window(text, ["目的の言葉"]))
         self.assertLessEqual(len(ss.rerank_window(text, ["目的の言葉"])), ss.RERANK_WINDOW)
 
+    def test_phrase_list_lifts_the_exact_phrase_in_word_mode(self):
+        # 単語の BM25 だけなら、言葉を逆の順で含む短い T1 が上に来る。語句の並びが、そのまま含む長い T2 を上げる
+        self.write(T1, paginated(T1, [("timeout idle", "答え", None)]))
+        self.write(T2, paginated(T2, [("ログを見ると idle timeout が 60 秒で切れていて その前後に 別の 処理 も 動いて いた", "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+
+        class FakeSem:
+            def tokenizer(self):
+                return lambda text: ss.normalize(text).split()
+
+            def embedder(self):
+                return None
+
+            def reranker(self):
+                return None
+        idx.fill_words(FakeSem().tokenizer(), self.home)
+        res, _, _ = idx.search(self.home, ss.parse_query(["idle timeout"]), ss.DEFAULT_KINDS, sem=FakeSem())
+        idx.close()
+        self.assertEqual(res[0][1]["thread_id"], T2)
+
+    def test_model_that_fails_to_load_is_reported(self):
+        class Broken:
+            _emb_error = "OSError: broken"
+            _rerank_error = None
+        saved = ss.model_ready
+        ss.model_ready = lambda kind="embed": kind == "embed"
+        try:
+            idx = self.idx()
+            lines = ss.coverage_lines(idx, self.home, None, None, Broken())
+            idx.close()
+        finally:
+            ss.model_ready = saved
+        self.assertTrue(any("埋め込みのモデルを読み込めなかった" in x for x in lines), lines)
+
+    def test_compressed_copy_is_not_counted_as_missing(self):
+        path = self.write(T1, paginated(T1, [("あとり", "答え", None)]))
+        self.search("あとり")
+        os.remove(path)
+        with open(path + ".zst", "wb") as f:
+            f.write(b"z")
+        saved = ss.zstd
+        idx = self.idx()
+        try:
+            ss.zstd = None
+            idx.ingest(self.home)
+        finally:
+            ss.zstd = saved
+        self.assertEqual(idx.coverage(self.home)["missing"], 0)
+        idx.close()
+
     def test_legacy_refs_differ_between_rollout_files(self):
         def legacy(ts):
             return "\n".join([line(ts, "session_meta", {"id": T1}),
@@ -1006,6 +1057,250 @@ class FourthReviewTest(_Base):
         self.write("66666666-6666-4666-8666-666666666666", legacy("2026-09-05T01:00:00Z"))
         refs = [r["ref"] for r in self.search("ちどり")["results"]]
         self.assertEqual(len(set(refs)), 2, refs)
+
+
+class FifthReviewTest(_Base):
+    """5 回目のレビュー（全体）で見つかった欠陥の再現。"""
+
+    def idx(self):
+        return ss.Index(self.db)
+
+    def test_more_secret_shapes(self):
+        cases = [
+            ("postgresql://admin:Sup3rSECRET@db.example/app", "Sup3rSECRET"),
+            ("mongodb+srv://user:pw1234@cluster0/x", "pw1234"),
+            ("redis://:redisPw99@cache:6379", "redisPw99"),
+            ("Endpoint=sb://x/;SharedAccessKeyName=k;SharedAccessSignature=sv=1&sig=SECRETsig123", "SECRETsig123"),
+            ("https://acct.blob.core.windows.net/c?sv=2024&sig=SECRETsig456&se=x", "SECRETsig456"),
+            ("ConvertTo-SecureString -AsPlainText -Force psSECRET5", "psSECRET5"),
+            ("Invoke-Sqlcmd -Password paramSecret42", "paramSecret42"),
+            ("tool --password dashSecret42", "dashSecret42"),
+            ("az devops login --token azTok42xyz", "azTok42xyz"),
+            ("tool --pat patValue42", "patValue42"),
+            ("AWS_SECRET_ACCESS_KEY=awsSecret42", "awsSecret42"),
+            ("ｐａｓｓｗｏｒｄ＝ｈｕｎｔｅｒ２２", "ｈｕｎｔｅｒ２２"),
+            ('$password = @"\nhereSecret42\n"@', "hereSecret42"),
+            ("Authorization: Basic dTpw", "dTpw"),
+            ("secret: |\n  yamlSecret42\n  more\nnext: 1", "yamlSecret42"),
+            ("パスワードを Kanji3Secret42 に変えた", "Kanji3Secret42"),
+        ]
+        for text, secret in cases:
+            out = ss.redact(text)
+            self.assertNotIn(secret, out, text)
+            self.assertNotIn(ss.normalize(secret), ss.normalize(out), text)
+
+    def test_display_redacts_old_rows_too(self):
+        self.write(T1, paginated(T1, [("ひたき ReadonlySecret42", "答え", None)]))
+        self.search("ひたき")
+        idx = self.idx()
+        leaked = "パスワードは ReadonlySecret42 です ひたき"
+        with idx.db:
+            idx.db.execute("UPDATE messages SET text = ?, norm = ? WHERE kind = 'user'", (leaked, ss.normalize(leaked)))
+            idx.db.execute("UPDATE threads SET name = ?, cwd = ?", ("パスワードは UpgradeSecret42 です", "パスワードは UpgradeSecret42 です"))
+        idx.close()
+        out = json.dumps(self.search("ひたき"), ensure_ascii=False)
+        self.assertNotIn("ReadonlySecret42", out)
+        self.assertNotIn("UpgradeSecret42", out)
+        code, shown = self.run_cli("show", "%s/u1" % T1)
+        self.assertNotIn("ReadonlySecret42", shown)
+        self.assertNotIn("UpgradeSecret42", shown)
+
+    def test_forget_accepts_ref_case_and_spaces_and_rejects_unknown(self):
+        self.write(T1, paginated(T1, [("しじゅうから", "答え", None)]))
+        self.search("しじゅうから")
+        self.assertEqual(self.run_cli("forget", "  %s/u1 " % T1.upper())[0], 0)
+        self.assertFalse(self.search("しじゅうから")["results"])
+        code, out = self.run_cli("forget", "99999999-9999-4999-8999-999999999999")
+        self.assertNotEqual(code, 0)
+        self.assertIn("索引に無い", out)
+
+    def test_forget_hides_copies_in_a_copied_fork(self):
+        parent = paginated(T1, [("親の依頼 よしきり", "親の答え", None)])
+        own = line("2026-09-02T01:00:00Z", "session_meta", {"id": T2, "forked_from_id": T1})
+        child = own + "\n" + parent + paginated(T2, [("子の依頼 よしきり", "子の答え", None)]).split("\n", 1)[1]
+        self.write(T1, parent)
+        self.write(T2, child)
+        self.search("よしきり")
+        self.run_cli("forget", T1)
+        texts = [r["snippet"] if "snippet" in r else "" for r in self.search("--all-kinds", "よしきり")["results"]]
+        joined = json.dumps(self.search("--all-kinds", "よしきり"), ensure_ascii=False)
+        self.assertNotIn("親の依頼", joined)
+        self.assertIn("子の依頼", joined)
+        code, shown = self.run_cli("show", "%s/u1" % T2)
+        self.assertNotIn("親の依頼", shown)
+
+    def test_partial_answer_counts_as_an_answer(self):
+        text = paginated(T1, [("依頼 つばくろ", None, None)])
+        text += line("2026-09-01T01:00:00Z", "event_msg", {"type": "item_completed", "turn_id": "%s-t1" % T1, "item": {
+            "type": "AgentMessage", "id": "p1", "phase": "partial_answer", "content": [{"type": "Text", "text": "部分の答え ほおあか"}]}}) + "\n"
+        _, msgs, _ = ss.parse_rollout("x", text.encode())
+        self.assertIn(("final", "部分の答え ほおあか"), [(m["kind"], m["text"]) for m in msgs])
+
+    def test_file_without_messages_is_reported(self):
+        text = line("2026-09-01T01:00:00Z", "session_meta", {"id": T1}) + "\n" + line(
+            "2026-09-01T01:00:00Z", "response_item", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "x"}]}) + "\n"
+        self.write(T1, text)
+        out = self.search("なにか")
+        self.assertTrue(any("発言を取り出せなかった" in c for c in out["coverage"]), out["coverage"])
+
+    def test_unreadable_memories_folder_keeps_content(self):
+        os.makedirs(os.path.join(self.home, "memories"))
+        with open(os.path.join(self.home, "memories", "m.md"), "w", encoding="utf-8") as f:
+            f.write("# 要点\n\nかけす\n")
+        self.search("かけす")
+        idx = self.idx()
+        real_walk = os.walk
+
+        def broken_walk(top, *a, **k):
+            if top.endswith("memories"):
+                if k.get("onerror"):
+                    k["onerror"](PermissionError(top))
+                return iter(())
+            return real_walk(top, *a, **k)
+        ss.os.walk = broken_walk
+        try:
+            report = idx.ingest(self.home)
+        finally:
+            ss.os.walk = real_walk
+        n = idx.db.execute("SELECT COUNT(*) FROM messages WHERE kind = 'memory'").fetchone()[0]
+        idx.close()
+        self.assertEqual(n, 1)
+        self.assertTrue(report["errors"])
+
+    def test_words_index_gaps_fall_back_to_trigram(self):
+        self.write(T1, paginated(T1, [("みどり 二つ目", "答え", None)]))
+        idx = self.idx()
+        idx.ingest(self.home)
+
+        class FakeSem:
+            def tokenizer(self):
+                return lambda text: ["緑" if w == "みどり" else w for w in ss.normalize(text).split()]
+
+            def embedder(self):
+                return None
+
+            def reranker(self):
+                return None
+        res, _, _ = idx.search(self.home, ["みどり"], ss.DEFAULT_KINDS, sem=FakeSem())  # 単語の索引はまだ空
+        self.assertTrue(res)
+        idx.fill_words(lambda text: (_ for _ in ()).throw(RuntimeError("boom")), self.home)
+        self.assertEqual(idx.db.execute("SELECT COUNT(*) FROM word_done").fetchone()[0], 0)  # 失敗は済みにしない
+        idx.fill_words(FakeSem().tokenizer(), self.home)
+        res, _, _ = idx.search(self.home, ["みどり"], ss.DEFAULT_KINDS, sem=FakeSem())  # 正規化で当たらない言葉も、文字どおりで当たる
+        self.assertTrue(res)
+        idx.close()
+
+    def test_show_orders_by_time_not_string(self):
+        rows = [line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})]
+        for turn, (uts, fts) in enumerate((("2026-09-01T01:00:00.900Z", "2026-09-01T01:00:01Z"), ("2026-09-01T01:00:01.100Z", "2026-09-01T01:00:02Z")), 1):
+            tid = "t%d" % turn
+            rows.append(line(uts, "event_msg", {"type": "item_completed", "turn_id": tid, "item": {"type": "UserMessage", "id": "u%d" % turn, "content": [{"type": "text", "text": "依頼%d まひわ" % turn}]}}))
+            rows.append(line(fts, "event_msg", {"type": "item_completed", "turn_id": tid, "item": {"type": "AgentMessage", "id": "f%d" % turn, "phase": "final_answer", "content": [{"type": "Text", "text": "答え%d" % turn}]}}))
+        self.write(T1, "\n".join(rows) + "\n")
+        code, out = self.run_cli("show", "%s/f1" % T1, "--context", "0")
+        body = out.split("\n", 1)[1]  # 1 行目の見出し（最初の依頼が名前の代わりに出る）を除く
+        self.assertIn("依頼1", body)
+        self.assertNotIn("依頼2", body)
+
+    def test_unreadable_session_index_does_not_crash(self):
+        self.write(T1, paginated(T1, [("もず", "答え", None)]))
+        os.makedirs(os.path.join(self.home, "session_index.jsonl"))  # 開けない（フォルダ）
+        out = self.search("もず")
+        self.assertTrue(out["results"])
+
+    def test_relative_db_path(self):
+        cwd = os.getcwd()
+        os.chdir(self.tmp.name)
+        try:
+            ss.Index("rel.sqlite").close()
+        finally:
+            os.chdir(cwd)
+
+    def test_agent_eval_wrapper_quotes_paths(self):
+        spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))
+        ae = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(ae)
+        d = os.path.join(self.tmp.name, "with space")
+        os.makedirs(d)
+        w = ae.wrapper_script(d, os.path.join(d, "snap shot"), os.path.join(d, "db x.sqlite"), os.path.join(d, "da ta"))
+        body = open(w, encoding="utf-8").read()
+        self.assertIn("'%s'" % os.path.join(d, "snap shot"), body)
+
+    def test_no_rerank_flag_reaches_the_search(self):
+        seen = {}
+
+        class FakeSem:
+            def tokenizer(self):
+                return None
+
+            def embedder(self):
+                return None
+
+            def reranker(self):
+                def score(pairs):
+                    seen["query"] = pairs[0][0]
+                    return [0.0] * len(pairs)
+                return score
+        for tid in (T1, T2):
+            self.write(tid, paginated(tid, [("こがら %s" % tid[:1], "答え", None)]))
+        import contextlib
+        import io
+        saved_sem, saved_env = ss.Semantic, dict(os.environ)
+        os.environ.update(self.env)
+        ss.Semantic = FakeSem
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                ss.main(["search", "--budget", "0", "--question", "こがらの話", "こがら"])
+            self.assertEqual(seen.get("query"), "こがらの話")  # 並べ直しに問いの文が渡る
+            seen.clear()
+            with contextlib.redirect_stdout(io.StringIO()):
+                ss.main(["search", "--budget", "0", "--no-rerank", "こがら"])
+            self.assertEqual(seen, {})
+        finally:
+            ss.Semantic = saved_sem
+            os.environ.clear()
+            os.environ.update(saved_env)
+
+    def test_forgotten_thread_is_not_ingested_again(self):
+        path = self.write(T1, paginated(T1, [("わすれる ひよ", "答え", None)]))
+        self.search("ひよ")
+        self.run_cli("forget", T1)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(paginated(T1, [("追記 ひよ", "答え", None)]).split("\n", 1)[1])
+        self.search("ひよ")
+        idx = self.idx()
+        self.assertEqual(idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (T1,)).fetchone()[0], 0)
+        idx.close()
+
+    def test_old_vectors_table_is_rebuilt(self):
+        import sqlite3
+        idx = self.idx()
+        idx.close()
+        con = sqlite3.connect(self.db)
+        con.execute("DROP TABLE vectors")
+        con.execute("CREATE TABLE vectors (message_id INTEGER PRIMARY KEY, model TEXT, vec BLOB)")
+        con.execute("UPDATE meta SET value = '2' WHERE key = 'schema'")
+        con.commit()
+        con.close()
+        idx = self.idx()
+        cols = [r[1] for r in idx.db.execute("PRAGMA table_info(vectors)")]
+        idx.close()
+        self.assertIn("chunk", cols)
+
+    def test_rebuild_leaves_no_trace_in_the_file(self):
+        self.write(T1, paginated(T1, [("qzxjvwkpunique の話", "答え", None)]))
+        self.search("qzxjvwkpunique")
+        self.run_cli("forget", T1)
+        self.run_cli("rebuild")
+        with open(self.db, "rb") as f:
+            self.assertNotIn("qzxjvwkpunique".encode(), f.read())
+
+    def test_forgotten_bad_lines_do_not_stay_in_the_notice(self):
+        self.write(T1, paginated(T1, [("わる つぐみ", "答え", None)]) + "{broken\n")
+        self.search("つぐみ")
+        self.run_cli("forget", T1)
+        out = self.search("なにか")
+        self.assertFalse(any("壊れた行" in c for c in out["coverage"]), out["coverage"])
 
 
 class SemanticLayerTest(unittest.TestCase):

@@ -221,19 +221,28 @@ def main():
             return ss.parse_query([q["question"]])
         run("index-or/%s" % form, lambda q: method_index(idx, home, terms_of(q), "or"))
 
-    # 本番の検索そのもの（session_search.py の search。setup の環境とモデルがあれば単語の BM25 + 埋め込み）
+    # 本番の検索そのもの（session_search.py の search）。README の表の各行はこの 3 つ
+    #   product          既定の方式（単語の BM25 + 埋め込み + 並べ直し。setup の環境とモデルが要る）
+    #   product-norerank 並べ直しを外したもの
+    #   product-trigram  専用の環境が無いときの方式（標準ライブラリだけ）
     sem = ss.Semantic()
-    def product(q):
-        terms = ss.parse_query(q["keywords"])
-        results, _, mode = idx.search(home, terms, ss.DEFAULT_KINDS, question=q["question"], limit=1000, sem=sem)
-        product.mode = mode
-        return [r["id"] for _, r in results]
-    if not wanted or "product" in wanted:
+
+    def product_with(semantic, rerank):
+        def f(q):
+            terms = ss.parse_query(q["keywords"])
+            results, _, mode = idx.search(home, terms, ss.DEFAULT_KINDS, question=q["question"], limit=1000,
+                                          sem=semantic, rerank=rerank)
+            f.mode = mode
+            return [r["id"] for _, r in results]
+        return f
+    if not wanted or any(w.startswith("product") for w in wanted):
         idx.fill_words(sem.tokenizer(), home)
         idx.fill_vectors(sem.embedder(), home)
-    run("product", product)
-    if "product" in rankings:
-        print("  product の方式: %s" % getattr(product, "mode", "?"))
+    for name, fn in (("product", product_with(sem, True)), ("product-norerank", product_with(sem, False)),
+                     ("product-trigram", product_with(None, False))):
+        run(name, fn)
+        if name in rankings:
+            print("  %s の方式: %s" % (name, getattr(fn, "mode", "?")))
 
     tokenizers = {}
     bm25s = {}
