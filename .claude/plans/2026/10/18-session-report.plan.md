@@ -129,7 +129,7 @@ approved_at: 2026-10-18
 - A2: `python3 evals/session-report/fixtures.py render --twice` → 作り物の会話 6 本の全部で「同じバイト列: はい」と出て、終了コード 0
 - A3: `python3 -m unittest tests.test_session_report -k Share` → OK（会話の全文・コマンド・差分・絶対パス・URL に入れた目印の文字列が report-share.html に無い）
 - A4: `python3 skills/session-report/scripts/session_report.py probe` → この Mac の記録で終了コード 0。出力の全行が「キー名・型・件数」の形（`python3 -m unittest tests.test_session_report -k ProbeShape` が同じ形の検査を作り物の記録で持つ）
-- A5: `python3 evals/session-report/fixtures.py render` → できた HTML を Chrome で開き、幅 375px と 1280px、ライトとダークで、6 タブの切り替え・流れの横スクロール・会話の絞り込みが動き、コンソールにエラーが 0 件
+- A5: `python3 evals/session-report/fixtures.py render` → できた HTML を Chrome で開き、幅 1280px（13 インチのノート PC が最小）、ライトとダークで、6 タブの切り替え・流れの横スクロール・会話の絞り込みが動き、コンソールにエラーが 0 件
 - A6: `python3 -m unittest tests.test_session_report -k Check` → OK（引用が本文に無い・ref が無い・持ち主の発言の扱いが無い・digest が違う、の 4 つで check が終了コード 1 と該当の項目 ID を出す）
 - A7: `git diff b324e62..HEAD` → `codex` スキルの新しい会話でレビューさせ、重い指摘が 0 件
 
@@ -146,3 +146,4 @@ approved_at: 2026-10-18
 なし
 
 ## 変更履歴
+- 2026-10-18 / A5 の幅を「375px と 1280px」から「1280px」にした / 持ち主の指示（見るのは 13 インチのノート PC が最小で、それより小さい幅では見ない）/ 持ち主の指示なので Go の取り直しは要らない
