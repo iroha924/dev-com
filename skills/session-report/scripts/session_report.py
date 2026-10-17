@@ -63,40 +63,53 @@ def maybe_reexec(paths, argv):
 
 # --- probe ---------------------------------------------------------------------------------------
 
-# 出してよい名前の形。記録の値のうち、種類を表すもの（type・phase・status・MCP の server と tool の名前など）だけを
-# この形のときに出す。合わない値（日本語、空白、長いもの）は (other) にまとめる。
+# probe が値を出すのは、種類を表す欄（type・phase・status・MCP の server と tool の名前・版など）の文字列だけで、
+# それも英数字 40 文字までの形のときだけ。ほかの欄は、値ではなく型（(str)・(list)・number など）か、長さ・件数・有無の区分を出す。
+# Codex の構造（item・payload・session_meta・turn_context・info）のキー名は出す。入れ子の dict のキー名は KNOWN_KEYS の名前だけ出す。
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,39}$")
 _ROLLOUT_DATE = re.compile(r"rollout-(\d{4}-\d{2}-\d{2})T")
+# 入れ子の値のキー名のうち、Codex か MCP の型で決まっているもの（duration、FileChange の変更、MCP の結果、session_meta の source）
+KNOWN_KEYS = {"secs", "nanos", "type", "content", "unified_diff", "move_path", "kind", "isError", "structuredContent",
+              "_meta", "subagent"}
 
 
-def _name(value):
-    if isinstance(value, str):
-        return value if _SAFE_NAME.match(value) else "(other)"
+def _kind(value):
+    """値の型だけ。"""
     if value is None:
         return "(none)"
-    return "(%s)" % type(value).__name__
-
-
-def _keys(obj):
-    return [_name(k) for k in obj] if isinstance(obj, dict) else []
-
-
-def _shape(value, enum=False):
-    """dict ならキー名の並び、数なら number。文字列は、種類の値の欄（enum=True）だけ _name を通し、ほかは (str)。"""
-    if isinstance(value, dict):
-        return "{%s}" % "+".join(sorted(_keys(value)))
     if isinstance(value, bool):
         return "(bool)"
     if isinstance(value, (int, float)):
         return "number"
-    if isinstance(value, str) and not enum:
-        return "(str)"
-    return _name(value)
+    return "(%s)" % type(value).__name__
+
+
+def _enum(value):
+    """種類を表す欄の値。決まった形の文字列だけを出す。"""
+    if isinstance(value, str):
+        return value if _SAFE_NAME.match(value) else "(other)"
+    return _kind(value)
+
+
+def _keys(obj):
+    """Codex の構造のキー名。"""
+    return [_enum(k) for k in obj] if isinstance(obj, dict) else []
+
+
+def _shape(value):
+    """入れ子の値の形。dict なら KNOWN_KEYS の名前の並び（ほかのキーは (other)）、ほかは型。"""
+    if isinstance(value, dict):
+        return "{%s}" % "+".join(sorted({k if k in KNOWN_KEYS else "(other)" for k in value}))
+    return _kind(value)
+
+
+def _enum_or_shape(value):
+    return _shape(value) if isinstance(value, dict) else _enum(value)
 
 
 def _length(text):
     if not isinstance(text, str):
-        return _name(text)
+        return _kind(text)
     n = len(text)
     for limit, label in ((0, "len=0"), (2000, "len<=2k"), (20000, "len<=20k"), (200000, "len<=200k")):
         if n <= limit:
@@ -111,10 +124,17 @@ def _count(n):
     return "n>100"
 
 
+def _sized(value):
+    """list か dict なら件数の区分、ほかは型。"""
+    return _count(len(value)) if isinstance(value, (list, dict)) else _kind(value)
+
+
 def _path_state(value):
     """パスの形と、今そのファイルがあるか。パスそのものは出さない。"""
-    if not isinstance(value, str) or not value:
-        return _name(value)
+    if not isinstance(value, str):
+        return _kind(value)
+    if not value:
+        return "len=0"
     path, form = value, "relative"
     if value.startswith("file://"):
         from urllib.parse import unquote, urlparse
@@ -131,26 +151,33 @@ def _path_state(value):
 
 def _image_url(value):
     if not isinstance(value, str):
-        return _name(value)
+        return _kind(value)
     for prefix in ("data:", "https:", "http:", "file:"):
         if value.startswith(prefix):
             return prefix.rstrip(":")
     return "(other)"
 
 
+def _types(values):
+    """list の各要素の type（dict でなければ型）。"""
+    for v in values if isinstance(values, list) else []:
+        yield _enum(v.get("type")) if isinstance(v, dict) else _kind(v)
+
+
 def probe_item(c, it):
-    t = _name(it.get("type"))
+    t = _enum(it.get("type"))
     c["item.type", t] += 1
     for k in _keys(it):
         c["item.%s.key" % t, k] += 1
     if "status" in it:
-        st = it["status"]
-        c["item.%s.status" % t, _shape(st, enum=True)] += 1
+        c["item.%s.status" % t, _enum_or_shape(it["status"])] += 1
     if t == "AgentMessage":
-        c["item.AgentMessage.phase", _name(it.get("phase"))] += 1
+        c["item.AgentMessage.phase", _enum(it.get("phase"))] += 1
     elif t == "UserMessage":
-        for el in it.get("content") if isinstance(it.get("content"), list) else []:
-            et = _name(el.get("type")) if isinstance(el, dict) else _name(el)
+        content = it.get("content")
+        if not isinstance(content, list):
+            c["item.UserMessage.content", _kind(content)] += 1
+        for el, et in zip(content if isinstance(content, list) else [], _types(content)):
             c["item.UserMessage.content.type", et] += 1
             if isinstance(el, dict) and et == "local_image":
                 c["item.UserMessage.local_image.path", _path_state(el.get("path"))] += 1
@@ -158,29 +185,33 @@ def probe_item(c, it):
                 c["item.UserMessage.image.url", _image_url(el.get("image_url"))] += 1
     elif t == "CommandExecution":
         cmd = it.get("command")
-        c["item.CommandExecution.command", "list,%s" % _count(len(cmd)) if isinstance(cmd, list) else _shape(cmd)] += 1
-        for pc in it.get("parsed_cmd") if isinstance(it.get("parsed_cmd"), list) else []:
-            c["item.CommandExecution.parsed_cmd.type", _name(pc.get("type")) if isinstance(pc, dict) else _name(pc)] += 1
+        c["item.CommandExecution.command", "list,%s" % _count(len(cmd)) if isinstance(cmd, list) else _kind(cmd)] += 1
+        if not isinstance(it.get("parsed_cmd"), list):
+            c["item.CommandExecution.parsed_cmd", _kind(it.get("parsed_cmd"))] += 1
+        for pt in _types(it.get("parsed_cmd")):
+            c["item.CommandExecution.parsed_cmd.type", pt] += 1
         code = it.get("exit_code")
-        c["item.CommandExecution.exit_code", str(code) if code in (0, 1) else ("other" if isinstance(code, int) else _name(code))] += 1
+        is_int = isinstance(code, int) and not isinstance(code, bool)
+        c["item.CommandExecution.exit_code", str(code) if is_int and code in (0, 1) else ("other" if is_int else _kind(code))] += 1
         c["item.CommandExecution.aggregated_output", _length(it.get("aggregated_output"))] += 1
         c["item.CommandExecution.duration", _shape(it.get("duration"))] += 1
-        c["item.CommandExecution.source", _name(it.get("source"))] += 1
+        c["item.CommandExecution.source", _enum_or_shape(it.get("source"))] += 1
     elif t == "FileChange":
         changes = it.get("changes")
-        c["item.FileChange.changes", _count(len(changes)) if isinstance(changes, dict) else _name(changes)] += 1
+        c["item.FileChange.changes", _sized(changes)] += 1
         for ch in changes.values() if isinstance(changes, dict) else []:
             c["item.FileChange.change.shape", _shape(ch)] += 1
             if isinstance(ch, dict) and "type" in ch:
-                c["item.FileChange.change.type", _name(ch.get("type"))] += 1
+                c["item.FileChange.change.type", _enum(ch.get("type"))] += 1
     elif t == "McpToolCall":
-        c["item.McpToolCall.server", _name(it.get("server"))] += 1
-        c["item.McpToolCall.tool", _name(it.get("tool"))] += 1
+        c["item.McpToolCall.server", _enum(it.get("server"))] += 1
+        c["item.McpToolCall.tool", _enum(it.get("tool"))] += 1
         c["item.McpToolCall.result", _shape(it.get("result"))] += 1
     elif t == "WebSearch":
         act = it.get("action")
-        c["item.WebSearch.action.type", _name(act.get("type")) if isinstance(act, dict) else _name(act)] += 1
-        c["item.WebSearch.results", _count(len(it["results"])) if isinstance(it.get("results"), list) else _name(it.get("results"))] += 1
+        c["item.WebSearch.action.type", _enum(act.get("type")) if isinstance(act, dict) else _kind(act)] += 1
+        res = it.get("results")
+        c["item.WebSearch.results", _count(len(res)) if isinstance(res, list) else _kind(res)] += 1
     elif t == "ImageView":
         c["item.ImageView.path", _path_state(it.get("path"))] += 1
 
@@ -200,11 +231,11 @@ def probe_file(c, data):
             c["lines", "bad_json"] += 1
             continue
         c["lines", "read"] += 1
-        typ = _name(item.get("type"))
+        typ = _enum(item.get("type"))
         c["line.type", typ] += 1
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         if typ == "event_msg":
-            et = _name(payload.get("type"))
+            et = _enum(payload.get("type"))
             c["event_msg.type", et] += 1
             for k in _keys(payload):
                 c["event_msg.%s.key" % et, k] += 1
@@ -220,23 +251,23 @@ def probe_file(c, data):
                     else:
                         c["ids.item_completed", "missing"] += 1
                 else:
-                    c["item_started.type", _name(it.get("type"))] += 1
+                    c["item_started.type", _enum(it.get("type"))] += 1
         elif typ == "response_item":
-            rt = _name(payload.get("type"))
+            rt = _enum(payload.get("type"))
             c["response_item.type", rt] += 1
             if rt == "message":
-                c["response_item.message.role", _name(payload.get("role"))] += 1
+                c["response_item.message.role", _enum(payload.get("role"))] += 1
             elif rt in ("function_call", "custom_tool_call", "local_shell_call"):
-                c["response_item.%s.name" % rt, _name(payload.get("name"))] += 1
+                c["response_item.%s.name" % rt, _enum(payload.get("name"))] += 1
         elif typ in ("session_meta", "turn_context"):
             for k in _keys(payload):
                 c["%s.key" % typ, k] += 1
             if typ == "session_meta":
-                c["session_meta.originator", _name(payload.get("originator"))] += 1
-                c["session_meta.cli_version", _name(payload.get("cli_version"))] += 1
-                c["session_meta.source", _shape(payload.get("source"), enum=True)] += 1
+                c["session_meta.originator", _enum(payload.get("originator"))] += 1
+                c["session_meta.cli_version", _enum(payload.get("cli_version"))] += 1
+                c["session_meta.source", _enum_or_shape(payload.get("source"))] += 1
             else:
-                c["turn_context.effort", _name(payload.get("effort"))] += 1
+                c["turn_context.effort", _enum(payload.get("effort"))] += 1
     c["ids.item_completed", "duplicated"] += sum(1 for n in seen_ids.values() if n > 1)
     c["ids.item_completed", "unique"] += len(seen_ids)
     if counters["incomplete_tail"]:

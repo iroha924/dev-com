@@ -167,6 +167,46 @@ class ProbeShapeTest(_Base):
         ]) + "\n")
         self.assertNotIn(CANARY, self.probe())
 
+    def test_no_position_leaks_its_value(self):
+        # 記録のどの位置の値を目印に置き換えても、種類の値の欄（ENUM_KEYS）に文字列を入れたとき以外は、出力に目印が出ない。
+        # Codex の構造そのもの（payload・item・info）は dict のまま残し、その中の値と、入れ子の dict・list を置き換える
+        enum_keys = {"type", "phase", "status", "server", "tool", "cli_version", "originator", "effort", "name", "role", "source"}
+        structural = {("payload",), ("payload", "item"), ("payload", "info")}
+        base = [json.loads(x) for x in canary_rollout(T1, "x").splitlines() if x.startswith("{") and not x.startswith("{broken")]
+
+        def paths(obj, prefix=()):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    yield prefix + (k,)
+                    yield from paths(v, prefix + (k,))
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    yield prefix + (i,)
+                    yield from paths(v, prefix + (i,))
+
+        def replaced(obj, path, value):
+            obj = json.loads(json.dumps(obj))
+            target = obj
+            for k in path[:-1]:
+                target = target[k]
+            target[path[-1]] = value
+            return obj
+
+        leaks = []
+        for n, row in enumerate(base):
+            for path in paths(row):
+                for value in (CANARY, {CANARY: CANARY}, [CANARY], {"type": "text", CANARY: CANARY}):
+                    if isinstance(value, str) and isinstance(path[-1], str) and path[-1] in enum_keys:
+                        continue
+                    if not isinstance(value, str) and path in structural:
+                        continue
+                    data = (json.dumps(replaced(row, path, value)) + "\n").encode()
+                    c = sr.collections.Counter()
+                    sr.probe_file(c, data)
+                    if any(CANARY in a or CANARY in b for a, b in c):
+                        leaks.append((n, path, type(value).__name__))
+        self.assertEqual(leaks, [])
+
     def test_unc_file_uri_keeps_the_server(self):
         seen = []
         real = os.path.exists

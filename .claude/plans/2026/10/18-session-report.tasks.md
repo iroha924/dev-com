@@ -43,6 +43,17 @@ base: main
   - 結果: red を直す前のコードで実測 → 2 件 FAIL（目印 CANARYzq7 が item.CommandExecution.command などに出た、確かめる先が /share/a.png）。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 22 件 OK
   - 結果: `python3 -m unittest tests.test_session_report -k test_counts` → この Mac では直す前も後も OK。Windows でテストの file URI が壊れる指摘（F2）はこの Mac では再現できず、テストを pathlib.Path(...).as_uri() に変えた（Windows では未検証）
 
+- [x] T13: probe が値を出す欄を、種類を表す欄だけに絞る
+  - 種別: 修正
+  - 計画: S1
+  - 依存: T12（直す対象の probe が要る）
+  - 変更: `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
+  - red: `python3 -m unittest tests.test_session_report -k test_no_position_leaks_its_value` → FAIL（記録の 18 の位置で、値を目印に置き換えると出力に出る）
+  - 完了条件: `python3 -m unittest tests.test_session_report tests.test_layout` → OK
+  - コミット: `fix(session-report): probe が値を出すのを種類を表す欄だけにし、どの位置の値も出ないことをテストで確かめる`
+  - 結果: red を直す前のコードで実測 → FAIL（content の要素・command・duration・exit_code・parsed_cmd・status・changes・result・action・results・source の 18 の位置）。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 29 件 OK
+  - 結果: `session_report.py probe` → この Mac の記録で、区分と名前の組が直す前と同じ（diff が空）
+
 ## P2: 記録から機械で取り出す
 
 1 つの会話から、発言・ターン・操作・成果物を report.json に書けるようになる。
@@ -142,6 +153,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T13 / T12 の見直し（44e59c6、high）の 2 件（F1 型の違う値の文字列が出る P1、F2 入れ子の dict のキーが出る P1）を作り物の記録で確かめて受理。塞ぐ欄を足す直し方を続けると同じ漏れが出るので、値を出す欄を決める書き方に変え、記録のあらゆる位置の値を目印に置き換えるテストで止める / T13 を足して直した
 
 - 2026-10-18 / T02 / macOS の一時フォルダは /var → /private/var の symlink で、作業フォルダが一致しなかった / --last の作業フォルダの比べ方を realpath にした
 
