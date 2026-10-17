@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "session-report の追記（annotations.json）",
+  "description": "Codex が会話を読んで書き足す項目。根拠（evidence）の ref は report.json の発言か操作の ID、quote はその本文にある文字列。check が確かめる。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "source_digest", "summary", "requests", "questions", "decisions", "lessons", "issues",
+               "command_notes", "chapters", "owner_messages"],
+  "properties": {
+    "format_version": {"enum": ["1"]},
+    "source_digest": {"type": "string", "description": "report.json の digest をそのまま写す"},
+    "summary": {
+      "type": "object", "additionalProperties": false, "required": ["text", "evidence"],
+      "properties": {"text": {"type": "string"}, "evidence": {"$ref": "#/$defs/evidence"}}
+    },
+    "chapters": {
+      "type": "array", "description": "持ち主の発言が 40 件を超える会話だけ。ほかは []",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "title", "from", "to"],
+        "properties": {"id": {"type": "string", "pattern": "^C[0-9]+$"}, "title": {"type": "string"},
+                       "from": {"type": "string"}, "to": {"type": "string"}}
+      }
+    },
+    "requests": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "text", "at", "lifecycle", "criteria", "evidence"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^R[0-9]+$"},
+          "text": {"type": "string"},
+          "at": {"type": "string", "description": "依頼した持ち主の発言の ID"},
+          "lifecycle": {"enum": ["有効", "取り下げ"]},
+          "criteria": {
+            "type": "array",
+            "items": {
+              "type": "object", "additionalProperties": false, "required": ["text", "origin", "status", "basis", "evidence"],
+              "properties": {
+                "text": {"type": "string"},
+                "origin": {"enum": ["持ち主", "Codex"], "description": "持ち主が言った条件か、Codex が補った条件か"},
+                "status": {"enum": ["できた", "一部", "できていない", "未確認"]},
+                "basis": {"type": "string", "description": "根拠の種類（例: CI の結果あり、最終の回答での報告のみ、記録なし）"},
+                "evidence": {"$ref": "#/$defs/evidence"}
+              }
+            }
+          },
+          "evidence": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "text", "at", "status", "answer", "note", "evidence"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^Q[0-9]+$"},
+          "text": {"type": "string"},
+          "at": {"type": "string", "description": "問うた持ち主の発言の ID"},
+          "status": {"enum": ["答えた", "一部回答", "未回答"]},
+          "answer": {"type": ["string", "null"], "description": "答えた Codex の発言の ID"},
+          "note": {"type": "string"},
+          "evidence": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "text", "at", "by", "why", "alternatives", "supersedes", "evidence"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^D[0-9]+$"},
+          "text": {"type": "string"},
+          "at": {"type": "string", "description": "決まった発言の ID"},
+          "by": {"enum": ["持ち主", "Codex の提案を持ち主が承認", "Codex の提案のまま", "保留"]},
+          "why": {"type": "string"},
+          "alternatives": {"type": "array", "items": {"type": "string"}, "description": "採らなかった案。記録に無ければ []"},
+          "supersedes": {"type": ["string", "null"], "description": "置き換えた決定の ID"},
+          "evidence": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "lessons": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "text", "evidence"],
+        "properties": {"id": {"type": "string", "pattern": "^L[0-9]+$"}, "text": {"type": "string"},
+                       "evidence": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "kind", "text", "evidence"],
+        "properties": {"id": {"type": "string", "pattern": "^I[0-9]+$"}, "kind": {"enum": ["未解決", "次に", "判断待ち"]},
+                       "text": {"type": "string"}, "evidence": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "command_notes": {
+      "type": "array", "description": "失敗した操作と、それを解消した操作",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "failed", "resolved_by", "text"],
+        "properties": {"id": {"type": "string", "pattern": "^N[0-9]+$"}, "failed": {"type": "string"},
+                       "resolved_by": {"type": ["string", "null"]}, "text": {"type": "string"}}
+      }
+    },
+    "owner_messages": {
+      "type": "object",
+      "description": "持ち主の発言の ID ごとに、対応する項目の ID か、訂正・了承のみ・資料提供のどれか（1 つ以上）",
+      "additionalProperties": {"type": "array", "items": {"type": "string"}}
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["ref", "quote"],
+        "properties": {"ref": {"type": "string", "description": "発言か操作の ID"},
+                       "quote": {"type": "string", "description": "ref の本文にある文字列（200 文字まで）"}}
+      }
+    }
+  }
+}

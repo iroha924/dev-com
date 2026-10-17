@@ -782,6 +782,116 @@ class InputTest(_Base):
         self.assertEqual((code, "操作が無い: nope" in err), (1, True))
 
 
+def good_annotations(report):
+    ev = lambda ref, quote: [{"ref": ref, "quote": quote}]
+    return {
+        "format_version": "1", "source_digest": report["digest"],
+        "summary": {"text": "置き場所のずれを直した", "evidence": ev("a1", "置き場所がずれていました")},
+        "chapters": [],
+        "requests": [{"id": "R1", "text": "Tests タブに出す", "at": "u1", "lifecycle": "有効", "evidence": ev("u1", "Tests タブに何も出ない"),
+                      "criteria": [{"text": "原因が分かる", "origin": "持ち主", "status": "できた", "basis": "回答で説明",
+                                    "evidence": ev("a1", "ずれていました")},
+                                   {"text": "CI で確かめる", "origin": "Codex", "status": "未確認", "basis": "記録なし", "evidence": []}]},
+                     {"id": "R2", "text": "PR を作る", "at": "u2", "lifecycle": "有効", "evidence": ev("u2", "PR を作って"),
+                      "criteria": [{"text": "PR がある", "origin": "持ち主", "status": "できた", "basis": "最終の回答での報告のみ",
+                                    "evidence": ev("a2", "作りました")}]}],
+        "questions": [],
+        "decisions": [{"id": "D1", "text": "置き場所をそろえる", "at": "a1", "by": "Codex の提案のまま", "why": "既定の探し場所",
+                       "alternatives": [], "supersedes": None, "evidence": ev("a1", "置き場所")}],
+        "lessons": [{"id": "L1", "text": "置き場所を先に見る", "evidence": ev("c2", "FAILED tests/test_retry.py")}],
+        "issues": [{"id": "I1", "kind": "未解決", "text": "test_retry が落ちる", "evidence": ev("c2", "AssertionError")}],
+        "command_notes": [{"id": "N1", "failed": "c2", "resolved_by": None, "text": "未解決"}],
+        "owner_messages": {"u1": ["R1"], "u2": ["R2"]},
+    }
+
+
+class CheckTest(InputTest):
+    def write_ann(self, out, ann):
+        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(ann, f, ensure_ascii=False)
+
+    def check(self, mutate=None):
+        out = self.make()
+        report = sr.read_json(os.path.join(out, "report.json"))
+        ann = good_annotations(report)
+        if mutate:
+            mutate(ann)
+        self.write_ann(out, ann)
+        code, stdout, err = self.run_cli("check", "--dir", out)
+        return code, stdout
+
+    def test_good_annotations_pass(self):
+        code, stdout = self.check()
+        self.assertEqual(code, 0, stdout)
+        self.assertIn("通った: 依頼 2", stdout)
+
+    def test_required_failures(self):
+        def quote(a):
+            a["decisions"][0]["evidence"][0]["quote"] = "本文に無い引用"
+
+        def ref(a):
+            a["lessons"][0]["evidence"][0]["ref"] = "c99"
+
+        def owner(a):
+            del a["owner_messages"]["u2"]
+
+        def digest(a):
+            a["source_digest"] = "0" * 64
+        cases = [(quote, "D1: 引用が a1 の本文に無い"), (ref, "L1: 根拠の ref c99 が report.json に無い"),
+                 (owner, "u2: 持ち主の発言の扱いが owner_messages に無い"), (digest, "source_digest: report.json の digest")]
+        for mutate, want in cases:
+            with self.subTest(want=want):
+                code, stdout = self.check(mutate)
+                self.assertEqual(code, 1)
+                self.assertIn(want, stdout)
+
+    def test_other_failures(self):
+        def dup(a):
+            a["lessons"].append(dict(a["lessons"][0]))
+
+        def schema(a):
+            a["requests"][0]["lifecycle"] = "途中"
+            a["issues"][0]["extra"] = 1
+
+        def answer(a):
+            a["questions"].append({"id": "Q1", "text": "?", "at": "u1", "status": "答えた", "answer": None, "note": "",
+                                   "evidence": [{"ref": "u1", "quote": "Tests"}]})
+
+        def at(a):
+            a["requests"][0]["at"] = "a1"
+
+        def label(a):
+            a["owner_messages"]["u1"] = ["R9"]
+            a["owner_messages"]["a1"] = ["了承のみ"]
+
+        def criteria(a):
+            a["requests"][1]["criteria"][0]["evidence"] = []
+
+        def squash(a):
+            a["summary"]["evidence"][0]["quote"] = "置き場所が  \n ずれていました"  # 空白の有無は問わない
+        cases = [(dup, ["L1: ID が重複"]), (schema, ["requests[0].lifecycle: 値が", "issues[0]: 知らないキー extra"]),
+                 (answer, ["Q1: 答えた発言（answer）が無い"]), (at, ["R1: at の a1 が持ち主の発言に無い"]),
+                 (label, ["u1: owner_messages の R9", "a1: owner_messages のキーが持ち主の発言に無い"]),
+                 (criteria, ["R2.criteria[0]: 根拠（evidence）が無い"])]
+        for mutate, wants in cases:
+            with self.subTest(wants=wants):
+                code, stdout = self.check(mutate)
+                self.assertEqual(code, 1)
+                for want in wants:
+                    self.assertIn(want, stdout)
+        self.assertEqual(self.check(squash)[0], 0)
+
+    def test_broken_or_missing_file(self):
+        out = self.make()
+        code, _, err = self.run_cli("check", "--dir", out)
+        self.assertEqual(code, 1)
+        self.assertIn("annotations.json が無い", err)
+        with open(os.path.join(out, "annotations.json"), "w", encoding="utf-8") as f:
+            f.write("{broken")
+        code, _, err = self.run_cli("check", "--dir", out)
+        self.assertIn("JSON として読めない", err)
+
+
 class SearchModuleTest(unittest.TestCase):
     def test_uses_session_search(self):
         # 写さずに import している（伏せ字の規則が 2 つに分かれない）

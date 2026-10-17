@@ -4,6 +4,7 @@
     python session_report.py extract <thread_id> | --last | --current [--out DIR]
     python session_report.py input [<thread_id> | --dir DIR] [--part N]
     python session_report.py show-op <操作の ID> [<thread_id> | --dir DIR]
+    python session_report.py check [<thread_id> | --dir DIR]
 
 probe: 記録の形（行の種類、項目の種類とキー名、件数、有無）だけを数えて出す。本文・コマンド・出力・パス・引数・検索語・
 差分は出さない。出す値は、Codex のコードと設定が決める種類の値（type・phase・status・MCP の server と tool の名前・版）で、
@@ -1287,6 +1288,165 @@ def cmd_show_op(args):
     return 0
 
 
+# --- check: 追記の根拠と漏れを確かめる ---------------------------------------------------------------
+
+SCHEMA_PATH = os.path.join(HERE, "annotations.schema.json")
+QUOTE_LIMIT = 200
+OWNER_LABELS = {"訂正", "了承のみ", "資料提供"}
+ITEM_LISTS = ("requests", "questions", "decisions", "lessons", "issues", "command_notes", "chapters")
+_JSON_TYPES = {"string": str, "array": list, "object": dict, "null": type(None)}
+
+
+def schema_errors(value, schema, root, where="annotations"):
+    """annotations.schema.json で使う範囲（type・enum・required・properties・additionalProperties・items・pattern・$ref）
+    だけを確かめる。標準ライブラリだけで動かすため、JSON Schema のほかの語は使わない。"""
+    if "$ref" in schema:
+        schema = root["$defs"][schema["$ref"].rsplit("/", 1)[-1]]
+    errors = []
+    if "enum" in schema and value not in schema["enum"]:
+        return ["%s: 値が %s のどれでもない。決まった値を書く" % (where, "・".join(schema["enum"]))]
+    if "type" in schema:
+        types = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
+        if not any(isinstance(value, _JSON_TYPES[t]) for t in types):
+            return ["%s: 形が %s ではない。%s で書く" % (where, "か".join(types), "か".join(types))]
+    if isinstance(value, str) and "pattern" in schema and not re.search(schema["pattern"], value):
+        errors.append("%s: %s の形ではない（%s）" % (where, schema["pattern"], value))
+    if isinstance(value, dict):
+        props = schema.get("properties", {})
+        for key in schema.get("required", []):
+            if key not in value:
+                errors.append("%s: %s が無い。足す" % (where, key))
+        for key, v in value.items():
+            if key in props:
+                errors += schema_errors(v, props[key], root, "%s.%s" % (where, key))
+            elif schema.get("additionalProperties") is False:
+                errors.append("%s: 知らないキー %s がある。消す" % (where, key))
+            elif isinstance(schema.get("additionalProperties"), dict):
+                errors += schema_errors(v, schema["additionalProperties"], root, "%s[%s]" % (where, key))
+    if isinstance(value, list) and "items" in schema:
+        for n, v in enumerate(value):
+            errors += schema_errors(v, schema["items"], root, "%s[%d]" % (where, n))
+    return errors
+
+
+def _squash(text):
+    """引用の照合のため、空白をすべて除く（改行や詰めた空白の違い、日本語の本文に無い空白を問わない）。"""
+    return "".join((text or "").split())
+
+
+def ref_texts(report):
+    """根拠に使える ID ごとの本文（発言は本文、操作は対象・出力・差分・パス）。"""
+    texts = {m["id"]: m["text"] for m in report["messages"]}
+    for op in report["operations"]:
+        parts = [op.get("target"), op.get("output")] + [x for f in op.get("files", []) for x in (f.get("path"), f.get("diff"))]
+        texts[op["id"]] = "\n".join(p for p in parts if p)
+    return texts
+
+
+def check_annotations(ann, report):
+    """違反の一覧（"<項目 ID>: <何が違う>。<どう直す>"）。空なら通る。"""
+    with open(SCHEMA_PATH, encoding="utf-8") as f:
+        schema = json.load(f)
+    errors = schema_errors(ann, schema, schema)
+    if errors:
+        return errors  # 形が違うと、下の検査が読み違える
+    if ann["source_digest"] != report.get("digest"):
+        errors.append("source_digest: report.json の digest（%s）と違う。記録が変わったので、追記を作り直すか、"
+                      "古いまま出すなら render --stale-ok を使う" % report.get("digest"))
+    texts = ref_texts(report)
+    owner_ids = [m["id"] for m in report["messages"] if m["kind"] == "user"]
+    message_ids = {m["id"] for m in report["messages"]}
+    op_ids = {op["id"] for op in report["operations"]}
+    seen = set()
+    for name in ITEM_LISTS:
+        for it in ann[name]:
+            if it["id"] in seen:
+                errors.append("%s: ID が重複している。別の番号にする" % it["id"])
+            seen.add(it["id"])
+
+    def evidence(item_id, evs, required=True):
+        if required and not evs:
+            errors.append("%s: 根拠（evidence）が無い。発言か操作の ID と引用を 1 つ以上書く" % item_id)
+        for ev in evs:
+            if ev["ref"] not in texts:
+                errors.append("%s: 根拠の ref %s が report.json に無い。発言か操作の ID を書く" % (item_id, ev["ref"]))
+            elif not ev["quote"].strip() or len(ev["quote"]) > QUOTE_LIMIT:
+                errors.append("%s: %s の引用が空か %d 文字を超える。本文から短く写す" % (item_id, ev["ref"], QUOTE_LIMIT))
+            elif _squash(ev["quote"]) not in _squash(texts[ev["ref"]]):
+                errors.append("%s: 引用が %s の本文に無い。本文からそのまま写す（空白の有無は問わない）" % (item_id, ev["ref"]))
+
+    def message(item_id, field, ref, owner=False):
+        if ref is None:
+            return
+        pool = set(owner_ids) if owner else message_ids
+        if ref not in pool:
+            errors.append("%s: %s の %s が%s発言に無い。%s発言の ID を書く" % (
+                item_id, field, ref, "持ち主の" if owner else "", "持ち主の" if owner else ""))
+
+    evidence("summary", ann["summary"]["evidence"])
+    for r in ann["requests"]:
+        message(r["id"], "at", r["at"], owner=True)
+        evidence(r["id"], r["evidence"])
+        for n, c in enumerate(r["criteria"]):
+            evidence("%s.criteria[%d]" % (r["id"], n), c["evidence"], required=c["status"] != "未確認")
+    for q in ann["questions"]:
+        message(q["id"], "at", q["at"], owner=True)
+        message(q["id"], "answer", q["answer"])
+        if q["status"] != "未回答" and q["answer"] is None:
+            errors.append("%s: 答えた発言（answer）が無い。答えの発言の ID を書くか、状態を未回答にする" % q["id"])
+        evidence(q["id"], q["evidence"])
+    decision_ids = {d["id"] for d in ann["decisions"]}
+    for d in ann["decisions"]:
+        message(d["id"], "at", d["at"])
+        if d["supersedes"] is not None and d["supersedes"] not in decision_ids:
+            errors.append("%s: 置き換えた決定 %s が無い。決定の ID を書くか null にする" % (d["id"], d["supersedes"]))
+        evidence(d["id"], d["evidence"])
+    for x in ann["lessons"] + ann["issues"]:
+        evidence(x["id"], x["evidence"])
+    for c in ann["chapters"]:
+        message(c["id"], "from", c["from"])
+        message(c["id"], "to", c["to"])
+    for n in ann["command_notes"]:
+        for field in ("failed", "resolved_by"):
+            if n[field] is not None and n[field] not in op_ids:
+                errors.append("%s: %s の %s が操作に無い。操作の ID を書く" % (n["id"], field, n[field]))
+    for mid in owner_ids:
+        values = ann["owner_messages"].get(mid)
+        if not values:
+            errors.append("%s: 持ち主の発言の扱いが owner_messages に無い。対応する項目の ID か、訂正・了承のみ・資料提供を書く" % mid)
+            continue
+        for v in values:
+            if v not in seen and v not in OWNER_LABELS:
+                errors.append("%s: owner_messages の %s が項目にも決まった扱いにも無い" % (mid, v))
+    for mid in ann["owner_messages"]:
+        if mid not in owner_ids:
+            errors.append("%s: owner_messages のキーが持ち主の発言に無い。持ち主の発言の ID だけを書く" % mid)
+    return errors
+
+
+def cmd_check(args):
+    out = resolve_dir(args)
+    report = read_json(os.path.join(out, "report.json"))
+    path = os.path.join(out, "annotations.json")
+    if not os.path.isfile(path):
+        print("annotations.json が無い: %s" % path, file=sys.stderr)
+        return 1
+    try:
+        ann = read_json(path)
+    except ValueError as e:
+        print("annotations.json が JSON として読めない: %s" % e, file=sys.stderr)
+        return 1
+    errors = check_annotations(ann, report)
+    for e in errors:
+        print(e)
+    if errors:
+        print("違反 %d 件" % len(errors), file=sys.stderr)
+        return 1
+    print("通った: 依頼 %d・質問 %d・決定 %d・学び %d・課題 %d" % tuple(len(ann[k]) for k in
+                                                          ("requests", "questions", "decisions", "lessons", "issues")))
+    return 0
+
+
 # --- 入口 -----------------------------------------------------------------------------------------
 
 
@@ -1316,6 +1476,7 @@ def build_parser():
     ex.add_argument("--out", help="書き出すフォルダ（既定は %%LOCALAPPDATA%%\\hirata-codex\\session-report\\<thread_id>）")
     ex.set_defaults(func=cmd_extract)
     for name, func, text in (("input", cmd_input, "Codex に読ませる input-<n>.md を書く"),
+                             ("check", cmd_check, "annotations.json の形・根拠・持ち主の発言の漏れを確かめる"),
                              ("show-op", cmd_show_op, "操作の出力と差分を出す（手元用の上限の範囲）")):
         sp = sub.add_parser(name, help=text)
         if name == "show-op":

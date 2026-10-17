@@ -165,13 +165,14 @@ Codex が読む input を作り、書いた追記の根拠と漏れをスクリ�
   - コミット: `fix(session-report): 切れ目の語の切れ端を捨て、ado.ps1 の引数と実行を正しく読み、連結をシェルごとに見分け、input を上限で区切る`
   - 結果: red を直す前のコードで実測 → 5 件 FAIL、理由は意図どおり。直した後 `python3 -m unittest tests.test_session_report tests.test_layout` → 55 件 OK
 
-- [ ] T05: 追記の形と check
+- [x] T05: 追記の形と check
   - 種別: 追加
   - 計画: S5
   - 依存: T03（根拠の ref に操作の ID が要る）
   - 変更: `skills/session-report/scripts/annotations.schema.json`, `skills/session-report/scripts/session_report.py`, `tests/test_session_report.py`
   - 完了条件: `python3 -m unittest tests.test_session_report -k Check` → OK（引用が本文に無い・ref が無い・持ち主の発言の扱いが無い・digest が違う、で終了コード 1 と項目 ID。依頼の状態の集め方の 4 通り）
   - コミット: `feat(session-report): 追記の形を決め、根拠と漏れを確かめる check を足す`
+  - 結果: `python3 -m unittest tests.test_session_report -k Check` → 4 件 OK（引用・ref・持ち主の発言・digest の 4 つで終了コード 1 と項目 ID、ほかに重複 ID・形・答えの発言・at・owner_messages の値とキー・条件の根拠）。依頼の状態の集め方の 4 通りは T04 の test_request_status。`python3 -m unittest discover -s tests` → 376 件 OK（skip 24）
 
 - [ ] T06: override
   - 種別: 追加
@@ -230,6 +231,8 @@ Codex が SKILL.md の手順だけでレポートを作れ、追記の精度を�
   - コミット: `test(session-report): Codex の追記を正解と比べる道具を足す`
 
 ## 記録
+
+- 2026-10-18 / T05 / 引用の照合で空白を 1 つに詰めると、日本語の本文に無い空白を引用に入れたときに一致しない。空白をすべて除いて比べることにした。スキーマの検査は、annotations.schema.json で使う語（type・enum・required・properties・additionalProperties・items・pattern・$ref）だけを標準ライブラリで確かめる
 
 - 2026-10-18 / T20 / T18 の見直し（b1a1a4f、high）の 3 件（F1 余白より長い語の切れ端 P2、F2 引用符を外したことで "-DryRun" の値をスイッチと取り違える P2（T18 の直しで入った）、F3 ado.ps1 を実行していない形 P2）を再現で確かめて受理。直す途中で、PowerShell の先頭の & を連結と見る誤りと、T04 の input が上限を超える件（実際の記録で 64,329 文字）も見つけた / T20 を足して直した。語の切れ端は、伏せ字がその語の全体を見ていないときだけ捨てる（空白の無い 1 行の JSON の先頭を消さないため）
 
