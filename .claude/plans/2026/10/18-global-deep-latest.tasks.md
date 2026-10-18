@@ -22,13 +22,15 @@ base: main
 
 会社の PC の Codex で `$deep-latest` が使えるようになる。dev-codex の tasks を終えてから始める（写す元）。
 
-- [ ] T01: `skills/deep-latest/` を写して会社向けに変え、テストと一覧に足す
+- [x] T01: `skills/deep-latest/` を写して会社向けに変え、テストと一覧に足す
   - 種別: 追加
   - 計画: S1, S2
   - 依存: なし
   - 変更: `skills/deep-latest/`、`tests/test_scripts.py`、`tests/test_layout.py`、`README.md`
   - 完了条件: `python3 -m unittest discover -s tests` → OK。`diff ~/Projects/dev-codex/skills/deep-latest/scripts/fetch_updates.py skills/deep-latest/scripts/fetch_updates.py` → 差分なし
   - コミット: `feat(deep-latest): 実行したリポジトリの Codex の設定を公式アップデートと突き合わせる skill を足す`
+  - 結果: `python3 -m unittest discover -s tests` → Ran 425 tests OK (skipped=24。PowerShell が無い Mac のため)
+  - 結果: `diff ~/Projects/dev-codex/skills/deep-latest/scripts/fetch_updates.py skills/deep-latest/scripts/fetch_updates.py` → 差分なし
 
 - [ ] T02: docs/notes.md に deep-latest の節を足し、README の skill の数を直す
   - 種別: 追加

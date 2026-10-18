@@ -28,6 +28,7 @@ Python の標準ライブラリと Windows 標準の PowerShell だけで動く�
 | [`root-cause`](docs/notes.md#root-cause) | skill | 自動 | 使わない | どのコミットで壊れたかを git bisect で探すとき |
 | [`session-search`](docs/notes.md#会話の検索) | skill | 自動 | 使わない | 「前に〇〇って何て言ってた？」と過去の Codex の会話を探すとき |
 | [`session-report`](docs/notes.md#会話のレポート) | skill | 自動 | 使わない | 1 つの会話や 1 週間分を、振り返り・スプリントレビュー・プランニング用の HTML にするとき |
+| [`deep-latest`](docs/notes.md#deep-latest) | skill | 手動 | 頼めば PR を作る | Codex の公式アップデートで、実行したリポジトリの Codex の設定に直すものが無いかを探すとき |
 | [`change-risk-reviewer`](docs/notes.md#change-risk-reviewer) | agent | `pr-review-assist` から | 使わない | 差分を独立した文脈で読むレビュアー |
 | [`incident-evidence-analyst`](docs/notes.md#incident-evidence-analyst) | agent | `incident-report` から | 使わない | 障害のログを大量に読んで整理する |
 | [`design-challenger`](docs/notes.md#design-challenger) | agent | `grill` から | 読む | 要件や設計の叩き台に反論する議論の相手 |
