@@ -1024,13 +1024,20 @@ class RenderTest(_ReportBase):
     def test_html_is_self_contained(self):
         code, text, html = self.render()
         self.assertEqual(code, 0, text)
+        vendor = sr.vendor_js()
+        self.assertIn(vendor, html)
+        self.assertNotRegex(vendor, r"(?i)</script|<!--")
+        html = html.replace(vendor, "")  # 以下は、テンプレートとデータの部分を見る
         self.assertIn("Content-Security-Policy", html)
         self.assertIn("default-src 'none'", html)
         self.assertNotRegex(html, r"(?i)(src|href)\s*=\s*[\"']?(https?:|//)")
         self.assertNotRegex(html, r"(?i)url\(\s*[\"']?(https?:|//)")
         self.assertNotRegex(html, r"(?i)@import|<link\b|<iframe\b|<img\b")
         self.assertNotIn("__SESSION_REPORT_DATA__", html)
-        self.assertNotIn("innerHTML", html)  # 記録の文字列は文字のノードとして入れる
+        # 記録の文字列は文字のノードとして入れる。HTML として入れるのは、会話の本文の Markdown を DOMPurify に通したものだけ
+        self.assertEqual(html.count("innerHTML"), 1)
+        self.assertIn("el.innerHTML = window.DOMPurify.sanitize(MD.render(text)", html)
+        self.assertIn("window.markdownit({ html: false", html)
 
     def test_record_text_is_escaped(self):
         nasty = '</script><img src=x onerror="alert(1)">& \u2028'
@@ -1045,7 +1052,7 @@ class RenderTest(_ReportBase):
         self.assertNotIn("&", data)
         self.assertNotIn("\u2028", data)
         self.assertIn(nasty, json.loads(data)["summary"])
-        self.assertEqual(html.count("</script>"), 2)
+        self.assertEqual(html.count("</script>"), 3)  # ライブラリ・データ・本体
 
     def test_check_failure_writes_nothing(self):
         def mutate(a):

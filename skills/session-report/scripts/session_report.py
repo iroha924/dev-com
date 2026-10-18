@@ -1891,12 +1891,31 @@ def embed_json(view):
     return text
 
 
+VENDOR_MARK = "__SESSION_REPORT_VENDOR__"
+# 会話の本文の Markdown を描くライブラリ（vendor/ に置く。npm のレジストリの tarball を sha512 で照らして取り出した。2026-10-18）
+#   markdown-it 14.3.2（MIT）、DOMPurify 3.4.16（MPL-2.0 か Apache-2.0）、highlight.js 11.12.0（BSD-3-Clause）
+VENDOR_FILES = ("markdown-it.min.js", "purify.min.js", "highlight.min.js")
+
+
+def vendor_js():
+    """HTML の <script> に埋め込むライブラリ。<!-- は意味の変わらない <\\!-- にする（script の中の読み方の決まりで、
+    <!-- の後の <script で HTML の読み手が script の終わりを見失うことがあるため）。"""
+    parts = []
+    for name in VENDOR_FILES:
+        with open(os.path.join(HERE, "vendor", name), encoding="utf-8") as f:
+            parts.append(f.read().replace("<!--", "<\\!--"))
+    js = "\n;\n".join(parts)
+    if re.search(r"(?i)</script", js):
+        raise SystemExit("vendor のライブラリに </script がある。埋め込めない")
+    return js
+
+
 def render_html(view):
     with open(TEMPLATE_PATH, encoding="utf-8") as f:
         template = f.read()
-    if template.count(DATA_MARK) != 1:
-        raise SystemExit("template.html の %s が 1 つではない" % DATA_MARK)
-    return template.replace(DATA_MARK, embed_json(view))
+    if template.count(DATA_MARK) != 1 or template.count(VENDOR_MARK) != 1:
+        raise SystemExit("template.html の %s か %s が 1 つではない" % (DATA_MARK, VENDOR_MARK))
+    return template.replace(VENDOR_MARK, vendor_js()).replace(DATA_MARK, embed_json(view))
 
 
 def cmd_render(args):

@@ -163,6 +163,31 @@ h1 { margin: 0; font-size: clamp(22px, 3.4vw, 34px); line-height: 1.45; font-wei
 .talk .ai .who b::before { content: ""; display: inline-block; width: 6px; height: 6px; background: var(--accent); margin-right: 8px; vertical-align: 1px; }
 .talk .me .who b::after { content: ""; display: inline-block; width: 6px; height: 6px; background: var(--ink); margin-left: 8px; vertical-align: 1px; }
 .talk .text { margin: 0; white-space: pre-line; font-size: 15px; line-height: 1.85; text-align: left; }
+.talk .text.md { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
+/* 会話の本文の Markdown（markdown-it で描く）。囲みは使わず、地の色と細い線だけ */
+.md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 10px; }
+.md h1, .md h2, .md h3, .md h4 { margin: 14px 0 6px; font-size: 15px; font-weight: 600; letter-spacing: 0.04em; }
+.md h1 { font-size: 17px; } .md h2 { font-size: 16px; }
+.md ul, .md ol { margin: 0 0 10px; padding-left: 1.4em; } .md li { margin: 2px 0; }
+.md a { color: var(--accent); text-underline-offset: 3px; }
+.md strong { font-weight: 600; }
+.md code { font-family: var(--font-mono); font-size: 0.88em; background: var(--cream); padding: 1px 5px; letter-spacing: 0; }
+.md pre { margin: 6px 0 12px; padding: 12px 14px; background: var(--cream); overflow-x: auto; line-height: 1.6; }
+.md pre code { padding: 0; background: none; font-size: 12.5px; white-space: pre; }
+.md .lang { display: block; margin: -4px 0 6px; font-family: var(--font-en); font-size: 10px; letter-spacing: 0.1em; color: var(--sub); text-transform: uppercase; }
+.md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 6px 0 12px; font-size: 13px; }
+.md th, .md td { padding: 6px 12px 6px 0; border-bottom: 1px solid var(--hair); text-align: left; vertical-align: top; }
+.md th { font-weight: 600; border-bottom-color: var(--ink); }
+.md blockquote { margin: 6px 0 10px; padding: 8px 14px; background: var(--cream); color: var(--sub); }
+.md hr { border: 0; border-top: 1px solid var(--hair); margin: 12px 0; }
+/* highlight.js の色（デザインの色に合わせる） */
+.hljs-comment, .hljs-quote { color: var(--sub); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-literal { color: var(--accent); }
+.hljs-string, .hljs-regexp, .hljs-addition { color: var(--ok); }
+.hljs-number, .hljs-variable, .hljs-template-variable, .hljs-attr, .hljs-attribute { color: var(--warn); }
+.hljs-title, .hljs-section, .hljs-name, .hljs-type, .hljs-deletion { color: var(--bad); }
+.hljs-meta, .hljs-symbol, .hljs-bullet { color: var(--sub); }
 .talk .me .text, .talk .ai .text { display: inline-block; padding: 12px 16px; border: 1px solid var(--rule); }
 .talk .me .text { border-color: var(--ink); }
 .talk .tool .text { font-size: 12px; color: var(--sub); letter-spacing: 0.04em; }
@@ -228,6 +253,7 @@ details[open] > summary::before { content: "− "; }
 <main class="wrap page" id="page"></main>
 
 <script type="application/json" id="data">__SESSION_REPORT_DATA__</script>
+<script>__SESSION_REPORT_VENDOR__</script>
 <script>
 "use strict";
 // データは session_report.py render が下の <script type="application/json" id="data"> に入れる。
@@ -325,6 +351,27 @@ function coverage() {
   return sec("記録の範囲", "COVERAGE", D.coverage.length + " 件", h("ul", { class: "rows" }, D.coverage.map((c) => h("li", {}, h("p", { class: "note" }, c)))));
 }
 
+// 会話の本文は Markdown として描く。markdown-it は本文の中の HTML を通さず（html: false）、危ないリンクを止める。
+// さらに DOMPurify で、出来上がった HTML から危ないものを取り除いてから入れる。
+const MD = window.markdownit({ html: false, linkify: true, breaks: true, typographer: false,
+  highlight: (code, lang) => {
+    let body;
+    try {
+      body = lang && window.hljs.getLanguage(lang) ? window.hljs.highlight(code, { language: lang, ignoreIllegals: true }).value
+        : (code.length < 20000 ? window.hljs.highlightAuto(code).value : MD.utils.escapeHtml(code));
+    } catch (e) { body = MD.utils.escapeHtml(code); }
+    return '<pre><span class="lang">' + MD.utils.escapeHtml(lang || "code") + '</span><code class="hljs">' + body + "</code></pre>";
+  } });
+window.DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A") { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
+});
+function markdownText(text, attachments) {
+  const el = h("div", { class: "text md" });
+  el.innerHTML = window.DOMPurify.sanitize(MD.render(text), { ADD_ATTR: ["target"] });
+  for (const a of attachments) el.append(h("p", { class: "sub small" }, "（添付: " + a + "、本体なし）"));
+  return el;
+}
+
 const VIEWS = {
   overview: () => [
     D.notices.length ? h("div", { class: "notice" }, D.notices.map((n) => h("p", {}, n))) : null,
@@ -348,7 +395,7 @@ const VIEWS = {
         const who = m.kind === "me" ? [m.tag ? state(m.tag) : null, h("span", { class: "tnum" }, m.time), h("b", {}, "あなた")]
           : [h("b", {}, m.label), h("span", { class: "tnum" }, m.time)];
         return h("li", { class: m.kind }, h("div", { class: "who" }, who),
-          h("div", {}, h("p", { class: "text" }, m.text || "（本文なし）", m.attachments.map((a) => "\n（添付: " + a + "、本体なし）"))));
+          h("div", {}, markdownText(m.text || "（本文なし）", m.attachments)));
       })))];
   },
   requests: () => [sec("依頼と成果", "REQUESTS & QUESTIONS", "",
