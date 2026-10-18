@@ -13,7 +13,7 @@
 入れないもの: ツールやコマンドの出力、推論、AGENTS.md などの差し込み。シークレットらしい値は伏せてから入れる。
 
 rollout は公開された仕様ではなく Codex の内部の形式なので、読めなかった行・形の分からない発言は数えて毎回報告する。
-.jsonl.zst は compression.zstd（Python 3.14 以上）で読む。読めない Python で動いたときは、3.14 を探して起動し直す。
+圧縮された記録（.jsonl.zst）は読まず、読めなかった本数を数えて出す（会社 PC の Codex は記録を圧縮しない）。
 
 検索の方式（evals/session-search の評価で決めた。README の「会話の検索」）:
   - `setup` で専用の環境（SudachiPy、ruri-v3-130m、ruri-v3-reranker-310m）を入れた PC: SudachiPy で単語に区切った
@@ -38,11 +38,6 @@ SCHEMA_VERSION = "3"
 EXTRACT_VERSION = "4"
 # 単語の索引の作り方。変えたら単語の索引だけを作り直す（取り込み直しや埋め込みの作り直しは要らない）
 WORDS_VERSION = "2"
-
-try:
-    from compression import zstd  # Python 3.14+（optional module）
-except ImportError:  # pragma: no cover - depends on the interpreter
-    zstd = None
 
 USER_SKIP_TYPES = {"image", "local_image", "audio", "local_audio", "skill", "mention"}
 KINDS = ("user", "commentary", "final", "memory")
@@ -406,7 +401,7 @@ def model_ready(kind="embed"):
 
 
 def python_command(value):
-    """\"py -3.14\" のようなコマンドか、空白を含むかもしれない実行ファイルのパスを、引数の並びにする。"""
+    """\"py -3.11\" のようなコマンドか、空白を含むかもしれない実行ファイルのパスを、引数の並びにする。"""
     value = value.strip().strip('"')
     if os.path.isfile(value):
         return [value]
@@ -448,23 +443,14 @@ def memory_files(home, failed=None):
     return sorted(out)
 
 
-# --- zstd を読める Python で起動し直す ------------------------------------------------------------------
+# --- setup で作った専用の環境で起動し直す ---------------------------------------------------------------
 
 REEXEC_ENV = "HIRATA_CODEX_SEARCH_REEXEC"
 BROKEN_VENV_ENV = "HIRATA_CODEX_SEARCH_BROKEN_VENV"
 
 
-def zstd_interpreters():
-    if os.environ.get("HIRATA_CODEX_PYTHON"):
-        yield python_command(os.environ["HIRATA_CODEX_PYTHON"])
-    if os.name == "nt":
-        yield ["py", "-3.14"]
-    yield ["python3.14"]
-    yield ["mise", "exec", "python@3.14", "--", "python"]
-
-
 def maybe_reexec(home, argv):
-    """setup で作った専用の環境があればその Python で、無くて zstd を読めず圧縮された記録があれば 3.14 で起動し直す。"""
+    """setup で作った専用の環境があれば、その Python で起動し直す。"""
     if os.environ.get(REEXEC_ENV):
         return None
     venv = venv_python()
@@ -479,20 +465,6 @@ def maybe_reexec(home, argv):
             env = dict(os.environ, **{REEXEC_ENV: venv})
             return subprocess.run([venv, os.path.abspath(__file__)] + argv, env=env).returncode
         os.environ[BROKEN_VENV_ENV] = venv
-    if zstd is not None:
-        return None
-    if not any(p.endswith(".zst") for p in rollout_files(home)):
-        return None
-    for cmd in zstd_interpreters():
-        try:
-            probe = subprocess.run(cmd + ["-c", "import compression.zstd, sqlite3"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if probe.returncode != 0:
-            continue
-        env = dict(os.environ, **{REEXEC_ENV: " ".join(cmd)})
-        return subprocess.run(cmd + [os.path.abspath(__file__)] + argv, env=env).returncode
     return None
 
 
@@ -500,13 +472,11 @@ def maybe_reexec(home, argv):
 
 
 def read_rollout_bytes(path):
-    with open(path, "rb") as f:
-        data = f.read()
+    """記録の中身。圧縮された記録（.jsonl.zst）は読まずに None を返す（呼び出し側が読めなかった本数に数える）。"""
     if path.endswith(".zst"):
-        if zstd is None:
-            return None
-        data = zstd.decompress(data)
-    return data
+        return None
+    with open(path, "rb") as f:
+        return f.read()
 
 
 def _texts(content, allowed, skipped_types, counters):
@@ -1098,7 +1068,7 @@ class Index:
                     self._record_file(path, home, {"thread_id": name_tid}, st, "forgotten", {}, {})
                 continue
             # 読めなかった .zst が読めるようになった、または「原本なし」にしたファイルが戻ってきたら、読み直す
-            retry = row and ((row["status"] == "zst_unreadable" and zstd is not None) or row["status"] == "missing")
+            retry = row and row["status"] == "missing"
             if row and row["size"] == st.st_size and row["mtime_ns"] == st.st_mtime_ns and not retry:
                 if row["status"] == "zst_unreadable":
                     report["zst_unreadable"] += 1
@@ -1837,8 +1807,7 @@ def coverage_lines(idx, home, report, note, sem=None):
         if sem is not None and error and model_ready(kind):
             lines.append("注意: %sのモデルを読み込めなかったので、%sをせずに探した（%s）。setup で入れ直せる" % (label, label, error))
     if cov["zst_unreadable"]:
-        lines.append("注意: 圧縮された記録 %d 本を読めなかった（Python 3.14 が要る。専用の環境があるなら、"
-                     "setup --python で 3.14 を指定して作り直す）" % cov["zst_unreadable"])
+        lines.append("注意: 圧縮された記録（.jsonl.zst）%d 本は読まないので、検索に入っていない" % cov["zst_unreadable"])
     if cov["partial"] or cov["shape_errors"] or cov["bad_json"]:
         lines.append("注意: 形の分からない発言 %d 件・壊れた行 %d 行（%d 本のファイル）は検索に入っていない"
                      % (cov["shape_errors"], cov["bad_json"], cov["partial"]))
@@ -1953,8 +1922,7 @@ def cmd_stats(args):
     q = idx.db.execute
     print("索引: %s" % idx.path)
     print("取り込み元: %s" % home)
-    print("SQLite %s、全文検索（FTS5 trigram）: %s、zstd: %s" % (
-        sqlite3.sqlite_version, "あり" if idx.fts else "なし（instr で検索）", "読める" if zstd else "読めない"))
+    print("SQLite %s、全文検索（FTS5 trigram）: %s" % (sqlite3.sqlite_version, "あり" if idx.fts else "なし（instr で検索）"))
     for status, n in q("SELECT status, COUNT(*) FROM files WHERE codex_home=? GROUP BY status", (home,)).fetchall():
         print("ファイル %s: %d" % (status, n))
     for kind, n in q("SELECT kind, COUNT(*) FROM messages WHERE codex_home=? GROUP BY kind", (home,)).fetchall():
@@ -2011,13 +1979,10 @@ def cmd_index(args):
 
 
 def setup_candidates(python=None):
-    """setup の元にする Python の候補。指定があればそれだけ。無ければ 3.14 を先に、3.13、3.11、今の Python の順。"""
+    """setup の元にする Python（3.11）の候補。指定があればそれだけ。無ければ py -3.11（Windows）、今の Python の順。"""
     if python:
         return [python_command(python)]
-    nt = os.name == "nt"
-    first = ([["py", "-3.14"]] if nt else []) + [["python3.14"], ["mise", "exec", "python@3.14", "--", "python"]]
-    rest = ([["py", "-3.13"], ["py", "-3.11"]] if nt else []) + [[sys.executable]]
-    return first + rest
+    return ([["py", "-3.11"]] if os.name == "nt" else []) + [[sys.executable]]
 
 
 def _probe(cmd, code):
@@ -2045,8 +2010,6 @@ def venv_rebuild_reason(base, venv):
         return "今の環境が起動できない"
     if have != _version(base):
         return "今の環境は %s で、選んだ Python と違う" % have
-    if _probe(base, "import compression.zstd") and not _probe([venv], "import compression.zstd"):
-        return "今の環境は圧縮された記録を読めない"
     return None
 
 
@@ -2056,7 +2019,7 @@ def cmd_setup(args):
     base = None
     for cmd in setup_candidates(args.python):
         try:
-            ok = subprocess.run(cmd + ["-c", "import sys, sqlite3, venv; assert sys.version_info >= (3, 11)"],
+            ok = subprocess.run(cmd + ["-c", "import sys, sqlite3, venv; assert sys.version_info[:2] == (3, 11)"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60).returncode == 0
         except (OSError, subprocess.SubprocessError):
             ok = False
@@ -2064,13 +2027,10 @@ def cmd_setup(args):
             base = cmd
             break
     if base is None:
-        print("Python 3.11 以上が見つからない（%s）" % ("指定: " + args.python if args.python else "3.14 を優先して探した"),
+        print("Python 3.11 が見つからない（%s）" % ("指定: " + args.python if args.python else "py -3.11 と今の Python を探した"),
               file=sys.stderr)
         return 1
     print("専用の環境: %s（元の Python: %s）" % (target, " ".join(base)))
-    if not _probe(base, "import compression.zstd"):
-        print("注意: この Python（3.14 より前）では、圧縮された記録（.jsonl.zst）を読めない。"
-              "3.14 を入れて setup --python で指定し直すと読める")
     reason = venv_rebuild_reason(base, venv_python())
     if reason:
         print("専用の環境を作る（%s）" % reason)
@@ -2209,7 +2169,7 @@ def build_parser():
     ix = sub.add_parser("index", help="取り込み・単語の区切り・埋め込みを全部済ませる")
     ix.set_defaults(func=cmd_index)
     su = sub.add_parser("setup", help="専用の環境を作り、ライブラリとモデルを入れる")
-    su.add_argument("--python", help="専用の環境の元にする Python（例: \"py -3.14\"）")
+    su.add_argument("--python", help="専用の環境の元にする Python 3.11（例: \"py -3.11\"）")
     su.set_defaults(func=cmd_setup)
     return p
 

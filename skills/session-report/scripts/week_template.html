@@ -297,7 +297,7 @@ function taskCard(t) {
         h("div", {}, h("h4", {}, "会話"), h("ul", {}, t.sessions.map((s) => h("li", {}, s.href ? h("a", { href: s.href }, s.label) : s.label)))))));
 }
 function missing() {
-  const unread = D.unreadable ? h("p", {}, "読めなかった記録が " + D.unreadable + " 本ある（圧縮された記録は Python 3.14 以上で読む）。この週の会話が欠けているかもしれない。") : null;
+  const unread = D.unreadable ? h("p", {}, "読めなかった記録が " + D.unreadable + " 本ある（圧縮された記録 .jsonl.zst は読まない）。この週の会話が欠けているかもしれない。") : null;
   if (!D.missing.length) return unread ? h("div", { class: "notice" }, unread) : null;
   return h("div", { class: "notice" }, unread, h("p", {}, "会話ごとの追記が無い（または記録が変わった）会話が " + D.missing.length + " 件ある。タスクに入っていないかもしれない:"),
     D.missing.map((m) => h("p", {}, m.state + "　" + (m.title || m.id))));

@@ -157,7 +157,7 @@ def run(args, env):
 def build(out):
     """6 本の記録を一時的な CODEX_HOME に書き、report.json と正解の追記を out/<名前>/ に置く。"""
     home = tempfile.mkdtemp(prefix="session-report-fixtures-")
-    env = dict(os.environ, CODEX_HOME=home, HIRATA_CODEX_REPORT_REEXEC="fixtures", TZ="Asia/Tokyo")
+    env = dict(os.environ, CODEX_HOME=home, TZ="Asia/Tokyo")
     try:
         day = os.path.join(home, "sessions", "2026", "10", "14")
         os.makedirs(day)
@@ -184,8 +184,7 @@ def build_week(out):
     """6 本を、会話ごとのレポートの既定の置き場所（HIRATA_CODEX_DATA の下）に作り、週の材料と週の正解の追記を置く。
     週の期間は 2026-10-14 の 1 日（6 本とも、この日の日本時間に始まる）。返り値は週のフォルダと env。"""
     home = tempfile.mkdtemp(prefix="session-report-fixtures-")
-    env = dict(os.environ, CODEX_HOME=home, HIRATA_CODEX_DATA=os.path.join(out, "data"), HIRATA_CODEX_REPORT_REEXEC="fixtures",
-               TZ="Asia/Tokyo")
+    env = dict(os.environ, CODEX_HOME=home, HIRATA_CODEX_DATA=os.path.join(out, "data"), TZ="Asia/Tokyo")
     day = os.path.join(home, "sessions", "2026", "10", "14")
     os.makedirs(day)
     for name, make in SESSIONS.items():

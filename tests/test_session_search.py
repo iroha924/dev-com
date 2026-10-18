@@ -170,11 +170,9 @@ class SessionSearchTest(_Base):
         self.assertTrue(any("原本が見つからない" in c for c in out["coverage"]))
 
     def test_compressed_files_are_reported_when_unreadable(self):
-        if ss.zstd is not None:
-            self.skipTest("この Python は zstd を読める")
         self.write(T1, "not really zstd", suffix=".jsonl.zst")
         out = self.search("何か")
-        self.assertTrue(any("圧縮された記録 1 本" in c for c in out["coverage"]))
+        self.assertTrue(any("圧縮された記録（.jsonl.zst）1 本" in c for c in out["coverage"]))
 
     def test_memories_are_searched(self):
         os.makedirs(os.path.join(self.home, "memories"))
@@ -229,26 +227,6 @@ class ReviewFindingsTest(_Base):
         out = self.search("ふくろう")
         self.assertTrue(out["results"])
         self.assertTrue(any("形の分からない" in c for c in out["coverage"]), out["coverage"])
-
-    def test_unreadable_zst_is_retried_when_reader_appears(self):
-        path = self.write(T1, "x", suffix=".jsonl.zst")
-        idx = self.idx()
-        saved = ss.zstd
-        try:
-            ss.zstd = None
-            self.assertEqual(idx.ingest(self.home)["zst_unreadable"], 1)
-
-            class Fake:
-                @staticmethod
-                def decompress(_):
-                    return paginated(T1, [("圧縮の中の依頼", "答え", None)]).encode()
-            ss.zstd = Fake
-            report = idx.ingest(self.home)
-            self.assertEqual(report["zst_unreadable"], 0)
-            self.assertEqual(report["updated"], 1)
-        finally:
-            ss.zstd = saved
-            idx.close()
 
     def test_forgotten_memory_stays_forgotten_after_update(self):
         os.makedirs(os.path.join(self.home, "memories"))
@@ -318,7 +296,7 @@ class ReviewFindingsTest(_Base):
         exe = os.path.join(d, "python.exe")
         open(exe, "w").close()
         self.assertEqual(ss.python_command(exe), [exe])
-        self.assertEqual(ss.python_command("py -3.14"), ["py", "-3.14"])
+        self.assertEqual(ss.python_command("py -3.11"), ["py", "-3.11"])
 
     def test_model_dir_needs_the_files(self):
         os.makedirs(os.path.join(self.tmp.name, "data", "models", ss.EMBED_MODEL_DIR))
@@ -488,12 +466,11 @@ class ReviewFindingsTest(_Base):
             self.write(tid, paginated(tid, [("せきれい %d" % n, "答え", None)]))
         self.assertEqual(len(self.search("せきれい")["results"]), 5)
 
-    def test_setup_prefers_314_and_uses_only_the_given_python(self):
+    def test_setup_uses_python_311_or_the_given_python(self):
         order = ss.setup_candidates(None)
-        first_other = next((i for i, c in enumerate(order) if "3.14" not in " ".join(c)), len(order))
-        self.assertTrue(all("3.14" in " ".join(c) for c in order[:first_other]))
-        self.assertGreater(first_other, 0)
-        self.assertEqual(ss.setup_candidates("py -3.13"), [["py", "-3.13"]])
+        self.assertTrue(all(c in (["py", "-3.11"], [sys.executable]) for c in order))
+        self.assertEqual(order[-1], [sys.executable])
+        self.assertEqual(ss.setup_candidates("py -3.11"), [["py", "-3.11"]])
 
     def test_legacy_same_text_finals_in_two_turns(self):
         rows = [line("2026-09-01T01:00:00Z", "session_meta", {"id": T1})]
@@ -517,19 +494,15 @@ class ReviewFindingsTest(_Base):
         con.close()
         self.assertFalse(self.search("かいつぶり")["results"])  # 取り込み直して、子の会話の印が戻る
 
-    def test_compressing_with_an_old_python_keeps_the_content(self):
+    def test_compressed_later_keeps_the_content(self):
+        # 読んだ記録が後で圧縮されて読めなくなっても、前に取り込んだ中身は残す
         path = self.write(T1, paginated(T1, [("ユニフォームの依頼", "答え", None)]))
         self.assertTrue(self.search("ユニフォーム")["results"])
         os.remove(path)
         with open(path + ".zst", "wb") as f:
             f.write(b"compressed")
         idx = self.idx()
-        saved = ss.zstd
-        try:
-            ss.zstd = None
-            idx.ingest(self.home)
-        finally:
-            ss.zstd = saved
+        idx.ingest(self.home)
         n = idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (T1,)).fetchone()[0]
         idx.close()
         self.assertEqual(n, 2)
@@ -820,35 +793,6 @@ class FourthReviewTest(_Base):
         self.assertEqual(n, 1)
         self.assertTrue(report["errors"])
 
-    def test_missing_count_clears_after_compressed_copy_is_read(self):
-        path = self.write(T1, paginated(T1, [("圧縮して移す るり", "答え", None)]))
-        self.search("るり")
-        idx = self.idx()
-        saved = ss.zstd
-        inplace = path + ".zst"  # その場で圧縮（読めない Python で取り込む）してから、archive へ移す
-        with open(inplace, "wb") as f:
-            f.write(b"z")
-        os.remove(path)
-        dest = os.path.join(self.home, "archived_sessions", os.path.basename(inplace))
-        try:
-            ss.zstd = None
-            idx.ingest(self.home)
-            os.makedirs(os.path.dirname(dest))
-            shutil.move(inplace, dest)
-            idx.ingest(self.home)
-
-            class Fake:
-                @staticmethod
-                def decompress(_):
-                    return paginated(T1, [("圧縮して移す るり", "答え", None)]).encode()
-            ss.zstd = Fake
-            idx.ingest(self.home)
-        finally:
-            ss.zstd = saved
-        cov = idx.coverage(self.home)
-        idx.close()
-        self.assertEqual(cov["missing"], 0)
-
     def test_extract_version_covers_the_latest_changes(self):
         self.assertGreaterEqual(int(ss.EXTRACT_VERSION), 3)
 
@@ -914,10 +858,7 @@ class FourthReviewTest(_Base):
         self.write(T1, paginated(T1, [("注意の行 かわせみ", "答え", None)]))
         self.write(T2, "not zstd", suffix=".jsonl.zst")
         code, out = self.run_cli("show", "%s/u1" % T1)
-        if ss.zstd is None:
-            self.assertIn("圧縮された記録", out)
-        else:
-            self.assertIn("読めなかったファイル", out)
+        self.assertIn("圧縮された記録", out)
 
     def test_bad_date_is_a_usage_error(self):
         code, out = self.run_cli("search", "--since", "2026/09/01", "x")
@@ -940,18 +881,16 @@ class FourthReviewTest(_Base):
 
     @unittest.skipIf(os.name == "nt", "偽の python を sh で作る")
     def test_venv_rebuild_reason(self):
-        def fake(name, version, zstd):
+        def fake(name, version):
             path = os.path.join(self.tmp.name, name)
             with open(path, "w") as f:
-                f.write("#!/bin/sh\ncase \"$2\" in\n  *compression.zstd*) exit %d;;\n  *version_info*) echo \"%s\";;\nesac\n"
-                        % (0 if zstd else 1, version))
+                f.write("#!/bin/sh\ncase \"$2\" in\n  *version_info*) echo \"%s\";;\nesac\n" % version)
             os.chmod(path, 0o755)
             return path
-        base = [fake("base", "(3, 14)", True)]
+        base = [fake("base", "(3, 11)")]
         self.assertEqual(ss.venv_rebuild_reason(base, os.path.join(self.tmp.name, "none")), "まだ無い")
-        self.assertIsNone(ss.venv_rebuild_reason(base, fake("same", "(3, 14)", True)))
-        self.assertIn("違う", ss.venv_rebuild_reason(base, fake("old", "(3, 11)", False)))
-        self.assertIn("圧縮", ss.venv_rebuild_reason(base, fake("nozstd", "(3, 14)", False)))
+        self.assertIsNone(ss.venv_rebuild_reason(base, fake("same", "(3, 11)")))
+        self.assertIn("違う", ss.venv_rebuild_reason(base, fake("old", "(3, 9)")))
         broken = os.path.join(self.tmp.name, "broken")
         with open(broken, "w") as f:
             f.write("#!/bin/sh\nexit 103\n")
@@ -1040,13 +979,8 @@ class FourthReviewTest(_Base):
         os.remove(path)
         with open(path + ".zst", "wb") as f:
             f.write(b"z")
-        saved = ss.zstd
         idx = self.idx()
-        try:
-            ss.zstd = None
-            idx.ingest(self.home)
-        finally:
-            ss.zstd = saved
+        idx.ingest(self.home)
         self.assertEqual(idx.coverage(self.home)["missing"], 0)
         idx.close()
 
@@ -1465,15 +1399,10 @@ class SeventhReviewTest(_Base):
 
     def test_unreadable_zst_that_disappears_is_not_counted(self):
         path = self.write(T1, "z", suffix=".jsonl.zst")
-        saved = ss.zstd
         idx = self.idx()
-        try:
-            ss.zstd = None
-            idx.ingest(self.home)
-            os.remove(path)
-            idx.ingest(self.home)
-        finally:
-            ss.zstd = saved
+        idx.ingest(self.home)
+        os.remove(path)
+        idx.ingest(self.home)
         cov = idx.coverage(self.home)
         idx.close()
         self.assertEqual((cov["missing"], cov["zst_unreadable"]), (0, 0))
@@ -1515,30 +1444,6 @@ class EighthReviewTest(_Base):
                              ('cmdkey /add:h /user:me /pass:"cmdPw4242"', "cmdPw4242"),
                              ('net use \\\\host\\share "network secret42" /user:me', "secret42")]:
             self.assertNotIn(secret, ss.redact(text), text)
-
-    def test_previously_read_zst_that_becomes_unreadable_then_vanishes_is_kept(self):
-        path = self.write(T1, "x", suffix=".jsonl.zst")
-        idx = self.idx()
-        saved = ss.zstd
-
-        class Fake:
-            @staticmethod
-            def decompress(_):
-                return paginated(T1, [("圧縮の中 つぐみ", "答え", None)]).encode()
-        try:
-            ss.zstd = Fake
-            idx.ingest(self.home)
-            ss.zstd = None
-            with open(path, "a") as f:
-                f.write("y")  # 変わったので読み直すが、読めない
-            idx.ingest(self.home)
-            os.remove(path)
-            idx.ingest(self.home)
-        finally:
-            ss.zstd = saved
-        n = idx.db.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (T1,)).fetchone()[0]
-        idx.close()
-        self.assertEqual(n, 2)
 
     def test_eval_embedding_cache_follows_the_text(self):
         spec2 = importlib.util.spec_from_file_location("run_eval", os.path.join(ROOT, "evals", "session-search", "run_eval.py"))
@@ -1764,17 +1669,15 @@ class TenthReviewTest(_Base):
         import contextlib
         import io
         buf = io.StringIO()
-        saved, saved_env = ss.zstd, dict(os.environ)
-        ss.zstd = None
+        saved_env = dict(os.environ)
         os.environ.update(self.env)
         try:
             with contextlib.redirect_stdout(buf):
                 ss.cmd_rebuild(ss.build_parser().parse_args(["--db", self.db, "rebuild"]))
         finally:
-            ss.zstd = saved
             os.environ.clear()
             os.environ.update(saved_env)
-        self.assertIn("圧縮された記録 1 本を読めなかった", buf.getvalue())
+        self.assertIn("圧縮された記録（.jsonl.zst）1 本は読まない", buf.getvalue())
 
     def test_forgotten_name_does_not_come_back(self):
         self.write(T1, paginated(T1, [("名前の消える会話 こげら", "答え", None)]))
@@ -1835,15 +1738,10 @@ class TenthReviewTest(_Base):
         self.search("いすか")
         self.run_cli("forget", T1)
         self.write(T1, "x", suffix=".jsonl.zst", sub=("archived_sessions",))
-        saved = ss.zstd
-        ss.zstd = None
-        try:
-            idx = self.idx()
-            idx.ingest(self.home)
-            cov = idx.coverage(self.home)
-            idx.close()
-        finally:
-            ss.zstd = saved
+        idx = self.idx()
+        idx.ingest(self.home)
+        cov = idx.coverage(self.home)
+        idx.close()
         self.assertEqual(cov["zst_unreadable"], 0)
 
     def test_missing_rows_are_not_compared_on_every_ingest(self):
@@ -2087,33 +1985,6 @@ class ThirteenthReviewTest(_Base):
         for text, secret in [("STORAGE_KEY: zz9secret", "zz9secret"), ("storage_key = abcdef9", "abcdef9"),
                              ("AWS_SECRET_ACCESS_KEY=abc123x", "abc123x")]:
             self.assertNotIn(secret, ss.redact(text), text)
-
-    def test_unreadable_revert_file_keeps_its_thread_for_forget(self):
-        rid = "77777777-7777-4777-8777-777777777777"  # revert でできたファイルは、名前の ID と中の会話の ID が違う
-        self.write(rid, "x", suffix=".jsonl.zst")
-        saved = ss.zstd
-
-        class Fake:
-            @staticmethod
-            def decompress(_):
-                return paginated(T1, [("revert の会話 かやくぐり", "答え", None)]).encode()
-        try:
-            ss.zstd = Fake
-            idx = self.idx()
-            idx.ingest(self.home)
-            idx.close()
-            ss.zstd = None
-            idx = self.idx()
-            idx.rebuild()
-            idx.ingest(self.home)
-            idx.forget(self.home, T1)
-            idx.rebuild()
-            idx.ingest(self.home)
-            left = idx.db.execute("SELECT COUNT(*) FROM messages WHERE text LIKE '%かやくぐり%'").fetchone()[0]
-            idx.close()
-        finally:
-            ss.zstd = saved
-        self.assertEqual(left, 0)
 
     def test_agent_eval_reruns_when_the_condition_changes(self):
         spec2 = importlib.util.spec_from_file_location("agent_eval", os.path.join(ROOT, "evals", "session-search", "agent_eval.py"))

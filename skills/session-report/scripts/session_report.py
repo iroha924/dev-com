@@ -27,12 +27,10 @@ import importlib.util
 import json
 import os
 import re
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SEARCH_SCRIPT = os.path.normpath(os.path.join(HERE, "..", "..", "session-search", "scripts", "session_search.py"))
-REEXEC_ENV = "HIRATA_CODEX_REPORT_REEXEC"
 PROBE_VERSION = "1"
 SCHEMA_VERSION = "1"
 EXTRACT_VERSION = "1"
@@ -49,24 +47,6 @@ def load_search():
 
 
 ss = load_search()
-
-
-def maybe_reexec(paths, argv):
-    """圧縮された記録を読めない Python で動いたら、読める Python で起動し直す（session-search と同じ探し方）。"""
-    if os.environ.get(REEXEC_ENV) or ss.zstd is not None:
-        return None
-    if not any(p.endswith(".zst") for p in paths):
-        return None
-    for cmd in ss.zstd_interpreters():
-        try:
-            ok = subprocess.run(cmd + ["-c", "import compression.zstd"], stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=60).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if ok:
-            env = dict(os.environ, **{REEXEC_ENV: " ".join(cmd)})
-            return subprocess.run(cmd + [os.path.abspath(__file__)] + argv, env=env).returncode
-    return None
 
 
 # --- probe ---------------------------------------------------------------------------------------
@@ -375,7 +355,7 @@ def find_rollout(home, thread_id=None, last_cwd=None, exclude=None):
     for p in paths:
         try:
             data = ss.read_rollout_bytes(p)
-        except Exception:  # compression.zstd の ZstdError は OSError ではない
+        except Exception:  # 読めない記録は、どんな例外でも読めなかった記録として扱う
             data = None
         metas.append((p, None if data is None else (_first_meta(data) or {})))
 
@@ -1188,7 +1168,7 @@ def cmd_extract(args):
         else:
             path, others = find_rollout(home, thread_id=args.thread_id)
     except UnreadableRecords as e:
-        print("読めない記録が %d 本ある（圧縮された記録は Python 3.14 以上の compression.zstd で読む）。正しい会話を選べたか"
+        print("読めない記録が %d 本ある（圧縮された記録 .jsonl.zst は読まない）。正しい会話を選べたか"
               "分からないので止める: %s" % (len(e.args[0]), e.args[0][0]), file=sys.stderr)
         return 1
     if path is None:
@@ -1197,7 +1177,7 @@ def cmd_extract(args):
         return 1
     data = ss.read_rollout_bytes(path)
     if data is None:
-        print("圧縮された記録を読める Python が無い（Python 3.14 以上の compression.zstd が要る）: %s" % path, file=sys.stderr)
+        print("圧縮された記録（.jsonl.zst）は読まない: %s" % path, file=sys.stderr)
         return 1
     report = build_report(path, data, home, others)
     report["digest"] = digest(report)
@@ -2074,7 +2054,7 @@ def build_week(home, since, until):
             lines.append("- [%s:%s] %s" % (tid, k, v))
         lines.append("")
     if unreadable:
-        lines[2:2] = ["**読めなかった記録が %d 本ある（圧縮された記録は Python 3.14 以上で読む）。この週の会話が欠けているかもしれない。**" % len(unreadable), ""]
+        lines[2:2] = ["**読めなかった記録が %d 本ある（圧縮された記録 .jsonl.zst は読まない）。この週の会話が欠けているかもしれない。**" % len(unreadable), ""]
     week = {"format_version": "1", "since": since, "until": until, "unreadable": len(unreadable), "tz_offset_minutes":
             int(datetime.datetime.now().astimezone().utcoffset().total_seconds() // 60), "sessions": sessions}
     week["digest"] = digest(week)
@@ -2105,7 +2085,7 @@ def cmd_week(args):
         if s["state"] != "追記あり":
             print("  %s: %s（%s）" % (s["id"], s["state"], s["title"] or ""))
     if week["unreadable"]:
-        print("読めなかった記録が %d 本ある（圧縮された記録は Python 3.14 以上で読む）。週の会話が欠けているかもしれない" % week["unreadable"],
+        print("読めなかった記録が %d 本ある（圧縮された記録 .jsonl.zst は読まない）。週の会話が欠けているかもしれない" % week["unreadable"],
               file=sys.stderr)
     return 0
 
@@ -2328,10 +2308,6 @@ def main(argv=None):
               % SEARCH_SCRIPT, file=sys.stderr)
         return 2
     args = build_parser().parse_args(argv)
-    if args.command in ("probe", "extract", "week"):
-        code = maybe_reexec(probe_paths(ss.codex_home(), getattr(args, "since", None)), argv)
-        if code is not None:
-            return code
     return args.func(args)
 
 

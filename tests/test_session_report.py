@@ -120,7 +120,7 @@ class _Base(unittest.TestCase):
         self.home = os.path.join(self.tmp.name, "codex")
         os.makedirs(os.path.join(self.home, "sessions", "2026", "10", "14"))
         self.env = dict(os.environ, CODEX_HOME=self.home, HIRATA_CODEX_DATA=os.path.join(self.tmp.name, "data"),
-                        HIRATA_CODEX_REPORT_REEXEC="test", TZ="Asia/Tokyo")  # 表示の時刻を、流す PC の時差によらず決める
+                        TZ="Asia/Tokyo")  # 表示の時刻を、流す PC の時差によらず決める
 
     def write(self, tid, text, day="2026-10-14"):
         y, m, d = day.split("-")
@@ -521,7 +521,7 @@ class ExtractTest(_Base):
 
         def read(p):
             if p == broken:
-                raise ValueError("壊れた圧縮")  # compression.zstd の ZstdError は OSError ではない
+                raise ValueError("壊れた記録")  # OSError でない例外でも、読めない記録として扱う
             return real(p)
         sr.ss.read_rollout_bytes = read
         try:
