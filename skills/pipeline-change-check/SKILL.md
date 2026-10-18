@@ -55,3 +55,5 @@ ADO preview '<project>/_apis/pipelines/<id>/runs' -BodyFile after.json -OutFile 
 | `powershell:` / `pwsh:` のステップで、`git` や `python` などのネイティブのコマンドの失敗を `$ErrorActionPreference = 'Stop'` で止めるつもりになっている | ネイティブのコマンドが 0 以外で終わっても、`$ErrorActionPreference` では止まらない。PowerShell 7.4 以降で `$PSNativeCommandUseErrorActionPreference = $true` にしたときだけ止まる（既定は `$false`）。それ以外は `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }` を書く |
 | CI で足した・変えた検査（lint、シークレットの検出）と、ローカルの手順やフックが別の道具・別の設定 | ローカルでは通るのに CI で落ちる、が繰り返される。揃えられないなら、その理由を YAML のコメントに書く |
 | PR から起動するジョブに、書き込みの権限やシークレットの変数グループを渡している | PR の内容（スクリプト、テスト）がそのシークレットで動く |
+| `checkout` で取り出すコミットが PR の変更を含んでいない（target branch や決まったコミットを取り出している） | 緑でも、確かめたのは前のコードで、PR の変更は merge の後に初めて動く |
+| エージェント（Codex など）が考えた結果を、同じジョブの中で、書き込みの権限（PR の作成、push、本番への反映）を持つステップがそのまま使う | Work Item や PR の文章でエージェントが操られると、そのまま書き込まれる。考える段と書き込む段を分け、間に人の承認か決まった検査を挟む |

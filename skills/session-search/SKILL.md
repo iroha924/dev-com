@@ -66,4 +66,4 @@ memories（Codex が過去の会話から作った要点）が文脈に入って
 - `SEARCH stats` で、索引の場所・件数・方式・読めなかった記録が分かる。
 - 「索引のファイルが壊れている」と出たら、持ち主に `SEARCH rebuild --discard-broken` を案内する（forget の一覧は引き継げない）。Codex は勝手に流さない。
 - 会話を検索に出したくないときは `SEARCH forget <thread_id>`。Codex の記録そのものは消さない。`codex delete` で記録を消しても索引には残るので、検索から外すのは forget。
-- 索引に書けない（サンドボックス）と出たときは、前の索引で検索した結果になっている。hirata-codex の docs/notes.md の「会話の検索」に、書けるようにする設定がある。
+- 索引に書けない（サンドボックス）と出たときは、前の索引で検索した結果になっている。dev-com の docs/notes.md の「会話の検索」に、書けるようにする設定がある。

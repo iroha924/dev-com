@@ -1,4 +1,4 @@
-# hirata-codex
+# dev-com
 
 Windows の Codex で使う、持ち主専用の skill 18 個・custom agent 5 つ・AGENTS.md。
 スクラム（1 週間スプリント）と Azure DevOps Server 2020（以下 ADO）での Work Item・PR・パイプラインの作業、プロンプトと Python の変更の確認、壁打ち、文章の作成、過去の会話の検索と振り返りを手伝う。
@@ -92,7 +92,7 @@ flowchart LR
 3. ターミナルと Codex を起動し直し、`/skills` に 18 個あることと、`/hooks` で `hirata-codex usage status` を信頼したことを確かめる。
 4. Codex に「ADO に接続できるか確かめて」と頼む。
 
-更新は新しいフォルダで `install.ps1 -Force`。消し方とフックの細部は [docs/notes.md の「更新と削除」](docs/notes.md#更新と削除)。
+更新は新しいフォルダで `install.ps1 -Force`。GitHub のリポジトリの名前は 2026-10-18 に hirata-codex から dev-com へ変えた（古い URL は転送される）。入れた先の名前（`%LOCALAPPDATA%\hirata-codex`、`$HOME\.hirata-codex-backup`、フックの `hirata-codex usage status`、環境変数の `HIRATA_CODEX_*`）は、入れてある索引とフックの信頼を保つために変えていない。消し方とフックの細部は [docs/notes.md の「更新と削除」](docs/notes.md#更新と削除)。
 
 ## 利用枠
 

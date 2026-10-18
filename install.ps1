@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install the hirata-codex skills, custom agents and global AGENTS.md for Codex on Windows.
+  Install the dev-com skills, custom agents and global AGENTS.md for Codex on Windows.
 
 .DESCRIPTION
   Copies

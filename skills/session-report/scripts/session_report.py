@@ -2328,7 +2328,7 @@ def main(argv=None):
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
     if ss is None:
-        print("session-search の skill が見つからない（%s）。hirata-codex の install.ps1 で session-search も入れる"
+        print("session-search の skill が見つからない（%s）。dev-com の install.ps1 で session-search も入れる"
               % SEARCH_SCRIPT, file=sys.stderr)
         return 2
     args = build_parser().parse_args(argv)

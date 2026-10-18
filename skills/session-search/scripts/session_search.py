@@ -1824,9 +1824,6 @@ def coverage_lines(idx, home, report, note, sem=None):
     if os.environ.get(BROKEN_VENV_ENV):
         lines.append("注意: 専用の環境（%s）が起動できないので、標準ライブラリだけの方式で探した。"
                      "setup で作り直せる" % os.environ[BROKEN_VENV_ENV])
-    reexec = os.environ.get(REEXEC_ENV)
-    if reexec and os.path.abspath(reexec) != os.path.abspath(venv_python()):
-        lines.append("参考: 圧縮された記録を読むため %s で動かした" % reexec)
     return lines
 
 
