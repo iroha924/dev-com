@@ -566,6 +566,18 @@ git bisect で原因のコミットを探す。
 - 判定は .ps1 に書き、`git bisect run pwsh -NoProfile -ExecutionPolicy Bypass -File <判定.ps1>` で流す。判定に使うコマンドが無いときは 128 で止める（PowerShell はコマンドが無くても先へ進むので、誤った判定になる）。`git bisect run` は判定のコマンドを PowerShell ではなく sh で起動するので、PowerShell の式をそのまま渡さない。
 - 未コミットの変更で起きる失敗を探すときは、差分を `git diff --binary --output=<ファイル>` で書き、判定の .ps1 の中で毎回「当てる → 判定する → 戻す」。一度だけ当てたままにすると、次のコミットへ進めない。PowerShell 5.1 と 7.3 以前はパイプと `>` で差分が壊れるので、`--output` を使う。
 
+### deep-latest
+
+Codex の公式アップデートを前回の記録以降の分だけ拾い、実行したリポジトリ（git ルート）の Codex の設定に直すもの・足すものが無いかを探す。`$deep-latest` と名前で呼んだときだけ動く（重い監査で、利用枠を使うため）。
+
+- 見るソースは 3 本。ChatGPT & Codex の changelog（`learn.chatgpt.com`）、OpenAI のニュース（`openai.com`）、Codex CLI の正式リリースのタグ（`github.com/openai/codex` へ `git ls-remote`）。
+- 記録は `%USERPROFILE%\.codex\deep-latest\<名前>-<hash>.json` に、リポジトリごとに持つ（`<hash>` は git ルートのパスから作るので、フォルダを動かすと記録が無い扱いになる）。全体の突き合わせを終えた記録が無いリポジトリでは、毎回全体を見る。
+- 突き合わせの相手は、`AGENTS.md`・`.agents\`・`.codex\` の下のように置き場所で Codex の設定と分かるものと、README や install のスクリプトが `$HOME\.agents\skills` などに配ると書いているもの。分からないものは名前だけ報告して、提案を作らない。
+- **会社のネットワークで届かないソースは `ok: false` と出て、記録はそのソースだけ進まない。**「更新なし」とは言わない。全部届かなければ、この PC では使えない。
+- 見つけたものは一覧で見せ、PR を作る・作業ツリーに残す・何もしないを聞く。相手のリポジトリの README などに書かれた検査のコマンドは、選択肢に書いて見せてから流す。PR は本文を見せて承認を受けてから作る（ADO なら `ado` の手順）。
+- 反証は `design-challenger` に頼む。起動できなければ、指摘を反映しない。
+- スクリプトとテストは dev-codex（個人の PC の Codex の設定）と同じファイル。Windows で作れない名前と symlink のテストだけ、Windows では飛ばす。
+
 ## custom agent
 
 `~/.codex/agents/` に入る。skill の手順は、親の会話を引き継がない子として起動するので、親の思い込みを引き継がない。

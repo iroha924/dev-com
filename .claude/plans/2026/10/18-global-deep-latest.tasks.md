@@ -32,12 +32,14 @@ base: main
   - 結果: `python3 -m unittest discover -s tests` → Ran 425 tests OK (skipped=24。PowerShell が無い Mac のため)
   - 結果: `diff ~/Projects/dev-codex/skills/deep-latest/scripts/fetch_updates.py skills/deep-latest/scripts/fetch_updates.py` → 差分なし
 
-- [ ] T02: docs/notes.md に deep-latest の節を足し、README の skill の数を直す
+- [x] T02: docs/notes.md に deep-latest の節を足し、README の skill の数を直す
   - 種別: 追加
   - 計画: S2
   - 依存: T01（書く対象の skill が要る）
   - 変更: `docs/notes.md`、`README.md`
   - 完了条件: `python3 -m unittest discover -s tests` → OK。`grep -c '19 個' README.md` → 2
   - コミット: `docs: deep-latest の見るものと、会社のネットワークで届かないときの扱いを書く`
+  - 結果: `python3 -m unittest discover -s tests` → Ran 425 tests OK (skipped=24)
+  - 結果: `grep -c "19 個" README.md` → 2
 
 ## 記録
