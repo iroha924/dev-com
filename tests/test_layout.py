@@ -39,6 +39,10 @@ def skill_dirs():
 
 
 class SkillLayoutTest(unittest.TestCase):
+    def test_cleanup_approval_rule_is_present(self):
+        text = read(os.path.join(ROOT, "AGENTS.md"))
+        self.assertEqual(text.count("<!-- invariant: temp-cleanup-needs-approval -->"), 1)
+
     def test_frontmatter(self):
         for name in skill_dirs():
             with self.subTest(skill=name):
