@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import importlib.util
 import json
 import os
@@ -5,6 +7,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+from pathlib import Path
+from unittest.mock import patch
+
+# Git の hook から走ると、Git が渡した GIT_INDEX_FILE などを使い捨てのリポジトリの git まで引き継ぐので消す。
+for variable in subprocess.run(
+    ["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, encoding="utf-8",
+).stdout.split():
+    os.environ.pop(variable, None)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -384,6 +397,429 @@ class CodexStatusHookTest(unittest.TestCase):
         self.assertEqual(turn["model"], "new")
         self.assertEqual(limits["primary"]["used_percent"], 30.0)
 
+
+class FetchUpdatesTest(unittest.TestCase):
+    """deep-latest の記録が、項目を見たことにして落とさないこと。ネットワークには出ない。"""
+
+    def setUp(self) -> None:
+        self.fu = load("skills/deep-latest/scripts/fetch_updates.py")
+        self.dir = tempfile.TemporaryDirectory()
+        self.state = Path(self.dir.name) / "seen.json"
+        self.result = Path(self.dir.name) / "result.json"
+        self.pages: list[tuple[str, str]] = []
+        self.fail = False
+
+        def fake_fetch(url: str):
+            if self.fail:
+                raise OSError("down")
+            body = "".join(f"<item><title>{l}</title><link>{l}</link><pubDate>{d}</pubDate></item>" for l, d in self.pages)
+            return ET.fromstring(f"<rss><channel>{body}</channel></rss>")
+
+        self.patches = [
+            patch.object(self.fu, "SOURCES", [("s", "rss", "https://example.invalid/rss")]),
+            patch.object(self.fu, "fetch", fake_fetch),
+        ]
+        for p_ in self.patches:
+            p_.start()
+
+    def tearDown(self) -> None:
+        for p_ in self.patches:
+            p_.stop()
+        self.dir.cleanup()
+
+    def run_once(self) -> dict:
+        result = self.fu.check(7, self.state, Path(self.dir.name))
+        self.result.write_text(json.dumps(result))
+        self.fu.commit(self.result, self.state)
+        return result
+
+    def test_item_added_later_with_the_same_date_is_new(self) -> None:
+        date = "Tue, 22 Sep 2026 00:00:00 GMT"
+        self.pages = [("a", date)]
+        self.run_once()
+        self.pages = [("a", date), ("b", date)]
+        result = self.fu.check(7, self.state, Path(self.dir.name))
+        self.assertEqual([i["link"] for i in result["sources"][0]["new_items"]], ["b"])
+
+    def test_every_new_item_is_reported(self) -> None:
+        # check() は 7 日の窓の中の記事だけを数えるので、日付を今日から数える
+        now = datetime.now(timezone.utc)
+        self.pages = [(f"p{i}", format_datetime(now - timedelta(hours=1, minutes=i), usegmt=True)) for i in range(60)]
+        first = self.run_once()
+        self.assertEqual(len(first["sources"][0]["new_items"]), 60)
+        self.assertFalse(self.fu.check(7, self.state, Path(self.dir.name))["any_new"])
+
+    def test_item_that_disappears_and_returns_is_not_reported_again(self) -> None:
+        date = "Tue, 22 Sep 2026 00:00:00 GMT"
+        for pages in ([("a", date), ("b", date)], [("b", date)]):
+            self.pages = pages
+            self.run_once()
+        self.pages = [("a", date), ("b", date)]
+        self.assertFalse(self.fu.check(7, self.state, Path(self.dir.name))["any_new"])
+
+    def test_broken_record_falls_back_to_recent_days(self) -> None:
+        for broken in (b'{"sources": []}', b'{"sources": {"s": "not-a-date"}}', b'{"sources": {"s": {"newest": "x"}}}', b"\xff\xfe"):
+            with self.subTest(broken=broken):
+                self.state.write_bytes(broken)
+                self.assertTrue(self.fu.check(7, self.state, Path(self.dir.name))["sources"][0]["since_from"].endswith("days"))
+
+    def test_failed_source_does_not_advance(self) -> None:
+        self.pages = [("a", "Tue, 22 Sep 2026 00:00:00 GMT")]
+        self.run_once()
+        before = self.state.read_text()
+        self.fail = True
+        result = self.run_once()
+        self.assertFalse(result["all_ok"])
+        self.assertEqual(self.state.read_text().count("newest"), before.count("newest"))
+        self.assertIn("2026-09-22", self.state.read_text())
+
+
+    def test_bad_date_fails_only_that_source(self) -> None:
+        pages = {"https://example.invalid/bad": [("a", "not-a-date")], "https://example.invalid/good": [("b", "Tue, 22 Sep 2026 00:00:00 GMT")]}
+
+        def fetch(url: str):
+            body = "".join(f"<item><title>{l}</title><link>{l}</link><pubDate>{d}</pubDate></item>" for l, d in pages[url])
+            return ET.fromstring(f"<rss><channel>{body}</channel></rss>")
+
+        sources = [("bad", "rss", "https://example.invalid/bad"), ("good", "rss", "https://example.invalid/good")]
+        with patch.object(self.fu, "SOURCES", sources), patch.object(self.fu, "fetch", fetch):
+            result = self.fu.check(7, self.state, Path(self.dir.name))
+        self.assertEqual([s["ok"] for s in result["sources"]], [False, True])
+
+    def test_response_that_is_not_a_feed_is_a_failure(self) -> None:
+        for kind, body in (("rss", "<html><body>Proxy authentication required</body></html>"),):
+            with self.subTest(kind=kind), patch.object(self.fu, "SOURCES", [("s", kind, "https://example.invalid/x")]), \
+                    patch.object(self.fu, "fetch", lambda url, body=body: ET.fromstring(body)):
+                result = self.fu.check(7, self.state, Path(self.dir.name))
+                self.assertFalse(result["sources"][0]["ok"], "取得できていないソースを更新なしとして扱った")
+
+    def test_older_feed_does_not_move_the_record_back(self) -> None:
+        self.pages = [("newer", "Sun, 18 Oct 2026 00:00:00 GMT"), ("older", "Sat, 17 Oct 2026 00:00:00 GMT")]
+        self.run_once()
+        self.pages = [("older", "Sat, 17 Oct 2026 00:00:00 GMT")]
+        self.run_once()
+        self.pages = [("newer", "Sun, 18 Oct 2026 00:00:00 GMT"), ("older", "Sat, 17 Oct 2026 00:00:00 GMT")]
+        self.assertFalse(self.fu.check(7, self.state, Path(self.dir.name))["any_new"], "古い一覧で記録が巻き戻り、見た項目をもう一度出した")
+
+
+def fake_tag(*numbers: int, suffix: str = "") -> str:
+    """偽のタグ。番号をソースに書くと VersionPinTest に当たるので、数値から組み立てる。"""
+    return "rust-v" + ".".join(map(str, numbers)) + suffix
+
+
+class CodexCliTagsTest(unittest.TestCase):
+    """codex-cli のソースは、ほかのソースと同じく既読記録で前回からの新しい正式タグを出す。ネットワークには出ない。"""
+
+    def setUp(self) -> None:
+        self.fu = load("skills/deep-latest/scripts/fetch_updates.py")
+        self.dir = tempfile.TemporaryDirectory()
+        self.state = Path(self.dir.name) / "seen.json"
+        self.tags = [fake_tag(0, n, 0) for n in range(150, 157)] + [
+            fake_tag(0, 157, 9), fake_tag(0, 157, 10), fake_tag(0, 159, 0, suffix="-alpha.8"), "v1.0.0",
+        ]
+        self.ls_remote_failed = False
+        self.patches = [
+            patch.object(self.fu, "SOURCES", [("codex-cli", "git-tags", "https://github.com/openai/codex")]),
+            patch.object(self.fu.subprocess, "run", self.fake_ls_remote),
+        ]
+        for p_ in self.patches:
+            p_.start()
+
+    def fake_ls_remote(self, *args, **kwargs) -> subprocess.CompletedProcess:
+        if self.ls_remote_failed:
+            return subprocess.CompletedProcess([], 128, "", "fatal: unable to access")
+        return subprocess.CompletedProcess([], 0, "".join(f"{'0' * 40}\trefs/tags/{t}\n" for t in self.tags), "")
+
+    def tearDown(self) -> None:
+        for p_ in self.patches:
+            p_.stop()
+        self.dir.cleanup()
+
+    def check(self) -> dict:
+        return self.fu.check(7, self.state, Path(self.dir.name))
+
+    def commit(self, result: dict, hold: list[str] | None = None) -> None:
+        path = Path(self.dir.name) / "result.json"
+        path.write_text(json.dumps(result))
+        self.fu.commit(path, self.state, hold or [])
+
+    def titles(self, result: dict) -> list[str]:
+        return [i["title"] for i in result["sources"][0]["new_items"]]
+
+    def test_first_run_lists_the_five_newest_stable_tags(self) -> None:
+        # 末尾が 10 のタグと 9 のタグは、文字列で比べると逆に並ぶ。プレリリースと別の形のタグは出さない
+        self.assertEqual(self.titles(self.check()), [
+            fake_tag(0, 157, 10), fake_tag(0, 157, 9), fake_tag(0, 156, 0), fake_tag(0, 155, 0), fake_tag(0, 154, 0),
+        ])
+
+    def test_commit_marks_checked_tags_as_seen(self) -> None:
+        self.commit(self.check())
+        self.assertEqual(self.titles(self.check()), [], "初回に出さなかった古いタグも含め、既読にしたタグを出した")
+
+    def test_tag_added_after_check_is_reported_later(self) -> None:
+        result = self.check()
+        self.tags.append(fake_tag(0, 158, 0))
+        self.commit(result)
+        self.assertEqual(self.titles(self.check()), [fake_tag(0, 158, 0)])
+
+    def test_hold_keeps_the_record(self) -> None:
+        self.commit(self.check())
+        self.tags.append(fake_tag(0, 158, 0))
+        self.commit(self.check(), hold=["codex-cli"])
+        self.assertEqual(self.titles(self.check()), [fake_tag(0, 158, 0)], "ノートを読み切れなかった回に記録を進めた")
+
+    def test_tag_that_disappears_and_returns_is_not_reported_again(self) -> None:
+        self.commit(self.check())
+        removed = self.tags.pop(0)
+        self.commit(self.check())
+        self.tags.insert(0, removed)
+        self.assertEqual(self.titles(self.check()), [])
+
+    def test_broken_record_falls_back_to_the_first_run(self) -> None:
+        self.state.write_text(json.dumps({"sources": {"codex-cli": {"seen_tags": "broken"}}}))
+        self.assertEqual(len(self.titles(self.check())), 5)
+
+    def test_failures_are_not_reported_as_no_updates_and_keep_the_record(self) -> None:
+        self.commit(self.check())
+        before = self.state.read_text()
+        for broken in ("ls-remote", "no-stable-tag"):
+            with self.subTest(broken=broken):
+                kept, self.tags = self.tags, [fake_tag(0, 159, 0, suffix="-alpha.8")] if broken == "no-stable-tag" else self.tags
+                self.ls_remote_failed = broken == "ls-remote"
+                result = self.check()
+                self.assertFalse(result["sources"][0]["ok"])
+                self.assertNotIn("new_count", result["sources"][0])
+                self.commit(result)
+                self.assertEqual(json.loads(self.state.read_text())["sources"], json.loads(before)["sources"])
+                self.tags, self.ls_remote_failed = kept, False
+
+    def test_other_sources_keep_their_records(self) -> None:
+        self.state.write_text(json.dumps({"sources": {"codex": {"newest": "2026-10-01T00:00:00+00:00", "links_at_newest": ["x"]}}}))
+        self.commit(self.check(), hold=["codex-cli"])
+        self.commit(self.check())
+        self.assertIn("codex", json.loads(self.state.read_text())["sources"])
+
+
+class RepoStateTest(unittest.TestCase):
+    """deep-latest の記録が相手のリポジトリごとに分かれ、別の記録を進めないこと。ネットワークには出ない。"""
+
+    def setUp(self) -> None:
+        self.fu = load("skills/deep-latest/scripts/fetch_updates.py")
+        self.dir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.dir.name).resolve()
+        self.patches = [
+            patch.object(self.fu, "SOURCES", []),
+            patch.object(self.fu, "STATE_DIR", self.tmp / "states"),
+        ]
+        for p_ in self.patches:
+            p_.start()
+
+    def tearDown(self) -> None:
+        for p_ in self.patches:
+            p_.stop()
+        self.dir.cleanup()
+
+    def symlink(self, link: Path, target: Path) -> bool:
+        """Windows は開発者モードか管理者の権限が無いと symlink を作れない。作れなければ False。"""
+        try:
+            link.symlink_to(target)
+        except OSError:
+            return False
+        return True
+
+    def git_repo(self, name: str) -> Path:
+        repo = self.tmp / name
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        return repo
+
+    def checked(self, root: Path, state: Path | None = None) -> Path:
+        result = self.fu.check(7, state or self.fu.default_state_path(root), root)
+        path = self.tmp / "result.json"
+        path.write_text(json.dumps(result), encoding="utf-8")
+        return path
+
+    def test_clones_with_the_same_name_get_different_records(self) -> None:
+        a = self.fu.default_state_path(self.tmp / "a" / "dev")
+        b = self.fu.default_state_path(self.tmp / "b" / "dev")
+        self.assertNotEqual(a, b)
+        self.assertTrue(a.name.startswith("dev-") and b.name.startswith("dev-"))
+
+    def test_record_name_is_safe_and_short(self) -> None:
+        name = self.fu.default_state_path(self.tmp / ("日本語 の repo" + "x" * 60)).name
+        self.assertRegex(name, r"^[A-Za-z0-9._-]{1,40}-[0-9a-f]{12}\.json$")
+
+    def test_subdirectory_and_symlink_find_the_same_root(self) -> None:
+        repo = self.git_repo("日本語 の repo")
+        (repo / "sub").mkdir()
+        link = self.tmp / "link"
+        if not self.symlink(link, repo):
+            self.skipTest("symlink を作れない")
+        self.assertEqual(self.fu.find_repo_root(str(link / "sub")), repo)
+        self.assertEqual(self.fu.find_repo_root(str(repo)), repo)
+
+    def test_git_environment_does_not_change_the_repo(self) -> None:
+        repo, other = self.git_repo("dev"), self.git_repo("other")
+        (other / "AGENTS.md").write_text("", encoding="utf-8")
+        subprocess.run(["git", "-C", str(other), "add", "-A"], check=True)
+        env = {"GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other), "GIT_INDEX_FILE": str(other / ".git" / "index")}
+        with patch.dict(os.environ, env):
+            self.assertEqual(self.fu.find_repo_root(str(repo)), repo)
+            self.assertEqual(self.fu.targets(repo, "codex")["classified"], [])
+
+    def test_empty_repo_or_outside_git_stops(self) -> None:
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        for repo in ("", str(outside)):
+            with self.subTest(repo=repo), self.assertRaises(self.fu.UsageError):
+                self.fu.find_repo_root(repo)
+
+    def test_commit_writes_the_record_of_the_checked_repo(self) -> None:
+        root = self.git_repo("dev")
+        self.fu.commit(self.checked(root))
+        self.assertTrue(self.fu.default_state_path(root).is_file())
+
+    def test_tampered_repo_root_does_not_advance_another_record(self) -> None:
+        root, other = self.git_repo("dev"), self.git_repo("other")
+        path = self.checked(root)
+        result = json.loads(path.read_text(encoding="utf-8"))
+        result["repo_root"] = str(other)
+        path.write_text(json.dumps(result), encoding="utf-8")
+        with self.assertRaises(self.fu.UsageError):
+            self.fu.commit(path)
+        self.assertFalse((self.tmp / "states").exists())
+
+    def test_explicit_state_must_match_the_check(self) -> None:
+        root = self.git_repo("dev")
+        given = self.tmp / "given.json"
+        path = self.checked(root, given)
+        for state in (None, self.tmp / "other.json"):
+            with self.subTest(state=state), self.assertRaises(self.fu.UsageError):
+                self.fu.commit(path, state)
+        self.fu.commit(path, given)
+        self.assertTrue(given.is_file())
+
+    def test_out_must_not_overwrite_the_record(self) -> None:
+        root = self.git_repo("dev")
+        state = self.tmp / "s.json"
+        self.fu.commit(self.checked(root, state), state, full_done_now=True)
+        before = state.read_text(encoding="utf-8")
+        link = self.tmp / "link.json"
+        hard = self.tmp / "hard.json"
+        os.link(state, hard)
+        outs = [state, hard] + ([link] if self.symlink(link, state) else [])
+        upper = self.tmp / "S.json"
+        if upper.exists() and os.path.samefile(upper, state):  # 大文字小文字を区別しないファイルシステムだけ
+            outs.append(upper)
+        for out in outs:
+            argv = ["fetch_updates.py", "check", "--repo", str(root), "--state", str(state), "--out", str(out)]
+            with self.subTest(out=out.name), patch.object(sys, "argv", argv), patch("sys.stderr"):
+                self.assertEqual(self.fu.main(), 2)
+                self.assertEqual(state.read_text(encoding="utf-8"), before)
+
+    @unittest.skipIf(sys.platform == "win32", "Windows のファイル名は末尾の空白・改行を持てない")
+    def test_trailing_space_in_the_repo_name_is_kept(self) -> None:
+        for name in ("dev ", "dev\n", "dev\r"):
+            with self.subTest(name=name):
+                repo = self.git_repo(name)
+                self.assertEqual(self.fu.find_repo_root(str(repo)), repo)
+                self.assertNotEqual(self.fu.default_state_path(repo), self.fu.default_state_path(self.tmp / "dev"))
+
+    def test_full_is_required_until_a_full_run_is_committed(self) -> None:
+        root = self.git_repo("dev")
+        state = self.fu.default_state_path(root)
+        self.assertTrue(self.fu.check(7, state, root)["full_required"])
+        self.fu.commit(self.checked(root))
+        self.assertTrue(self.fu.check(7, state, root)["full_required"], "全体の突き合わせを終えていない回で初回を外した")
+        self.fu.commit(self.checked(root), full_done_now=True)
+        self.assertFalse(self.fu.check(7, state, root)["full_required"])
+        self.fu.commit(self.checked(root))
+        self.assertFalse(self.fu.check(7, state, root)["full_required"], "部分監査の回で全体の突き合わせの記録を消した")
+        record = json.loads(state.read_text(encoding="utf-8"))
+        record["full_done_at"] = "broken"
+        state.write_text(json.dumps(record), encoding="utf-8")
+        self.assertTrue(self.fu.check(7, state, root)["full_required"])
+
+
+class TargetsTest(unittest.TestCase):
+    """deep-latest の突き合わせの候補が、置き場所で分かるものだけホストに分かれること。"""
+
+    FILES = {
+        ".claude/skills/a/SKILL.md": "",
+        ".claude/settings.json": "{}",
+        ".claude/rules/sub/r.md": "",
+        "CLAUDE.md": "",
+        ".mcp.json": "{}",
+        ".agents/skills/b/SKILL.md": "",
+        ".codex/config.toml": "",
+        "AGENTS.md": "",
+        "skills/c/SKILL.md": "",
+        "skills/c/agents/openai.yaml": "",
+        "agents/role.toml": 'developer_instructions = "x"',
+        "claude/settings.json": "{}",
+        "claude/agents/r.md": "",
+        "pyproject.toml": "[project]",
+        ".vscode/settings.json": "{}",
+        "docs/guide.md": "",
+        "skills/c/evals/fixtures/SKILL.md": "",
+        "vendor/x/SKILL.md": "",
+    }
+
+    def setUp(self) -> None:
+        self.fu = load("skills/deep-latest/scripts/fetch_updates.py")
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name).resolve()
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        for name, body in self.FILES.items():
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / name).write_text(body, encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+
+    def tearDown(self) -> None:
+        self.dir.cleanup()
+
+    def test_each_host_gets_only_its_own_files(self) -> None:
+        claude = self.fu.targets(self.root, "claude")
+        codex = self.fu.targets(self.root, "codex")
+        self.assertEqual(claude["classified"], sorted([
+            ".claude/rules/sub/r.md", ".claude/settings.json", ".claude/skills/a/SKILL.md", ".mcp.json", "CLAUDE.md",
+        ]))
+        self.assertEqual(codex["classified"], sorted([
+            ".agents/skills/b/SKILL.md", ".codex/config.toml", "AGENTS.md", "skills/c/agents/openai.yaml",
+        ]))
+        self.assertEqual(claude["other_host"], codex["classified"])
+        self.assertEqual(codex["other_host"], claude["classified"])
+
+    def test_files_without_a_placement_are_left_unclassified(self) -> None:
+        self.assertEqual(self.fu.targets(self.root, "claude")["unclassified"], sorted([
+            "agents/role.toml", "claude/agents/r.md", "claude/settings.json", "skills/c/SKILL.md",
+        ]))
+
+    def test_placement_that_points_to_both_hosts_is_left_unclassified(self) -> None:
+        for name in (".codex/skills/x/CLAUDE.md", ".agents/skills/x/.mcp.json", ".claude/agents/openai.yaml"):
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / name).write_text("", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+        for host in ("claude", "codex"):
+            with self.subTest(host=host):
+                found = self.fu.targets(self.root, host)
+                for name in (".codex/skills/x/CLAUDE.md", ".agents/skills/x/.mcp.json", ".claude/agents/openai.yaml"):
+                    self.assertIn(name, found["unclassified"])
+
+    @unittest.skipIf(sys.platform == "win32", "Windows のファイル名は CR を持てない")
+    def test_file_name_with_cr_is_kept(self) -> None:
+        name = ".claude/skills/a\r/SKILL.md"
+        (self.root / name).parent.mkdir(parents=True)
+        (self.root / name).write_text("", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+        self.assertIn(name, self.fu.targets(self.root, "claude")["classified"])
+
+    def test_excluded_and_unrelated_files_are_not_candidates(self) -> None:
+        found = self.fu.targets(self.root, "claude")
+        listed = set(found["classified"]) | set(found["other_host"]) | set(found["unclassified"])
+        for name in ("pyproject.toml", ".vscode/settings.json", "docs/guide.md", "skills/c/evals/fixtures/SKILL.md", "vendor/x/SKILL.md"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, listed)
 
 if __name__ == "__main__":
     unittest.main()

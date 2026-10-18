@@ -11,7 +11,7 @@ AGENTS = os.path.join(ROOT, "agents")
 # ado skill の「書く」の手順で ADO へ書き込む skill。名前で呼んだときだけ動くようにする。
 WRITE_SKILLS = {"pr-evidence-pack", "work-item-ready", "pr-review-assist", "incident-report"}
 # 書き込まないが、子を起動して何往復もする重い skill。
-MANUAL_SKILLS = WRITE_SKILLS | {"grill"}
+MANUAL_SKILLS = WRITE_SKILLS | {"grill", "deep-latest"}
 # 書き込みは本題ではなく、ユーザーが送るよう頼んだときだけ ado skill の「書く」へ渡す skill。自動で選ばれてよい。
 # 書き込みの手順を持つ ado skill 自体が自動で選ばれるので、この 2 つを手動にしても書き込みの経路は減らない。
 # 送る前に人が承認することを機械で止めるのは、ado.ps1 の write を常に許可にしていないときの Codex の承認だけ。

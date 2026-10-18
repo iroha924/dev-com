@@ -1,6 +1,6 @@
 # dev-com
 
-Windows の Codex で使う、持ち主専用の skill 18 個・custom agent 5 つ・AGENTS.md。
+Windows の Codex で使う、持ち主専用の skill 19 個・custom agent 5 つ・AGENTS.md。
 スクラム（1 週間スプリント）と Azure DevOps Server 2020（以下 ADO）での Work Item・PR・パイプラインの作業、プロンプトと Python の変更の確認、壁打ち、文章の作成、過去の会話の検索と振り返りを手伝う。
 Python の標準ライブラリと Windows 標準の PowerShell だけで動く（会話の検索の意味の近さの検索だけ、任意で専用の環境を入れる）。
 
@@ -28,6 +28,7 @@ Python の標準ライブラリと Windows 標準の PowerShell だけで動く�
 | [`root-cause`](docs/notes.md#root-cause) | skill | 自動 | 使わない | どのコミットで壊れたかを git bisect で探すとき |
 | [`session-search`](docs/notes.md#会話の検索) | skill | 自動 | 使わない | 「前に〇〇って何て言ってた？」と過去の Codex の会話を探すとき |
 | [`session-report`](docs/notes.md#会話のレポート) | skill | 自動 | 使わない | 1 つの会話や 1 週間分を、振り返り・スプリントレビュー・プランニング用の HTML にするとき |
+| [`deep-latest`](docs/notes.md#deep-latest) | skill | 手動 | 頼めば PR を作る | Codex の公式アップデートで、実行したリポジトリの Codex の設定に直すものが無いかを探すとき |
 | [`change-risk-reviewer`](docs/notes.md#change-risk-reviewer) | agent | `pr-review-assist` から | 使わない | 差分を独立した文脈で読むレビュアー |
 | [`incident-evidence-analyst`](docs/notes.md#incident-evidence-analyst) | agent | `incident-report` から | 使わない | 障害のログを大量に読んで整理する |
 | [`design-challenger`](docs/notes.md#design-challenger) | agent | `grill` から | 読む | 要件や設計の叩き台に反論する議論の相手 |
@@ -89,7 +90,7 @@ flowchart LR
    ```powershell
    [Environment]::SetEnvironmentVariable('ADO_COLLECTION_URL', 'https://<サーバー>/tfs/<Collection>', 'User')
    ```
-3. ターミナルと Codex を起動し直し、`/skills` に 18 個あることと、`/hooks` で `hirata-codex usage status` を信頼したことを確かめる。
+3. ターミナルと Codex を起動し直し、`/skills` に 19 個あることと、`/hooks` で `hirata-codex usage status` を信頼したことを確かめる。
 4. Codex に「ADO に接続できるか確かめて」と頼む。
 
 更新は新しいフォルダで `install.ps1 -Force`。GitHub のリポジトリの名前は 2026-10-18 に hirata-codex から dev-com へ変えた（古い URL は転送される）。入れた先の名前（`%LOCALAPPDATA%\hirata-codex`、`$HOME\.hirata-codex-backup`、フックの `hirata-codex usage status`、環境変数の `HIRATA_CODEX_*`）は、入れてある索引とフックの信頼を保つために変えていない。消し方とフックの細部は [docs/notes.md の「更新と削除」](docs/notes.md#更新と削除)。
