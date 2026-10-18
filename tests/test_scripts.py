@@ -474,6 +474,34 @@ class FetchUpdatesTest(unittest.TestCase):
         self.assertIn("2026-09-22", self.state.read_text())
 
 
+    def test_bad_date_fails_only_that_source(self) -> None:
+        pages = {"https://example.invalid/bad": [("a", "not-a-date")], "https://example.invalid/good": [("b", "Tue, 22 Sep 2026 00:00:00 GMT")]}
+
+        def fetch(url: str):
+            body = "".join(f"<item><title>{l}</title><link>{l}</link><pubDate>{d}</pubDate></item>" for l, d in pages[url])
+            return ET.fromstring(f"<rss><channel>{body}</channel></rss>")
+
+        sources = [("bad", "rss", "https://example.invalid/bad"), ("good", "rss", "https://example.invalid/good")]
+        with patch.object(self.fu, "SOURCES", sources), patch.object(self.fu, "fetch", fetch):
+            result = self.fu.check(7, self.state, Path(self.dir.name))
+        self.assertEqual([s["ok"] for s in result["sources"]], [False, True])
+
+    def test_response_that_is_not_a_feed_is_a_failure(self) -> None:
+        for kind, body in (("rss", "<html><body>Proxy authentication required</body></html>"),):
+            with self.subTest(kind=kind), patch.object(self.fu, "SOURCES", [("s", kind, "https://example.invalid/x")]), \
+                    patch.object(self.fu, "fetch", lambda url, body=body: ET.fromstring(body)):
+                result = self.fu.check(7, self.state, Path(self.dir.name))
+                self.assertFalse(result["sources"][0]["ok"], "取得できていないソースを更新なしとして扱った")
+
+    def test_older_feed_does_not_move_the_record_back(self) -> None:
+        self.pages = [("newer", "Sun, 18 Oct 2026 00:00:00 GMT"), ("older", "Sat, 17 Oct 2026 00:00:00 GMT")]
+        self.run_once()
+        self.pages = [("older", "Sat, 17 Oct 2026 00:00:00 GMT")]
+        self.run_once()
+        self.pages = [("newer", "Sun, 18 Oct 2026 00:00:00 GMT"), ("older", "Sat, 17 Oct 2026 00:00:00 GMT")]
+        self.assertFalse(self.fu.check(7, self.state, Path(self.dir.name))["any_new"], "古い一覧で記録が巻き戻り、見た項目をもう一度出した")
+
+
 def fake_tag(*numbers: int, suffix: str = "") -> str:
     """偽のタグ。番号をソースに書くと VersionPinTest に当たるので、数値から組み立てる。"""
     return "rust-v" + ".".join(map(str, numbers)) + suffix
@@ -591,11 +619,13 @@ class RepoStateTest(unittest.TestCase):
             p_.stop()
         self.dir.cleanup()
 
-    def symlink(self, link: Path, target: Path) -> None:
+    def symlink(self, link: Path, target: Path) -> bool:
+        """Windows は開発者モードか管理者の権限が無いと symlink を作れない。作れなければ False。"""
         try:
             link.symlink_to(target)
-        except OSError as error:  # Windows は開発者モードか管理者の権限が無いと symlink を作れない
-            self.skipTest(f"symlink を作れない: {error}")
+        except OSError:
+            return False
+        return True
 
     def git_repo(self, name: str) -> Path:
         repo = self.tmp / name
@@ -623,9 +653,19 @@ class RepoStateTest(unittest.TestCase):
         repo = self.git_repo("日本語 の repo")
         (repo / "sub").mkdir()
         link = self.tmp / "link"
-        self.symlink(link, repo)
+        if not self.symlink(link, repo):
+            self.skipTest("symlink を作れない")
         self.assertEqual(self.fu.find_repo_root(str(link / "sub")), repo)
         self.assertEqual(self.fu.find_repo_root(str(repo)), repo)
+
+    def test_git_environment_does_not_change_the_repo(self) -> None:
+        repo, other = self.git_repo("dev"), self.git_repo("other")
+        (other / "AGENTS.md").write_text("", encoding="utf-8")
+        subprocess.run(["git", "-C", str(other), "add", "-A"], check=True)
+        env = {"GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other), "GIT_INDEX_FILE": str(other / ".git" / "index")}
+        with patch.dict(os.environ, env):
+            self.assertEqual(self.fu.find_repo_root(str(repo)), repo)
+            self.assertEqual(self.fu.targets(repo, "codex")["classified"], [])
 
     def test_empty_repo_or_outside_git_stops(self) -> None:
         outside = self.tmp / "outside"
@@ -665,10 +705,9 @@ class RepoStateTest(unittest.TestCase):
         self.fu.commit(self.checked(root, state), state, full_done_now=True)
         before = state.read_text(encoding="utf-8")
         link = self.tmp / "link.json"
-        self.symlink(link, state)
         hard = self.tmp / "hard.json"
         os.link(state, hard)
-        outs = [state, link, hard]
+        outs = [state, hard] + ([link] if self.symlink(link, state) else [])
         upper = self.tmp / "S.json"
         if upper.exists() and os.path.samefile(upper, state):  # 大文字小文字を区別しないファイルシステムだけ
             outs.append(upper)
@@ -767,13 +806,20 @@ class TargetsTest(unittest.TestCase):
                 for name in (".codex/skills/x/CLAUDE.md", ".agents/skills/x/.mcp.json", ".claude/agents/openai.yaml"):
                     self.assertIn(name, found["unclassified"])
 
+    @unittest.skipIf(sys.platform == "win32", "Windows のファイル名は CR を持てない")
+    def test_file_name_with_cr_is_kept(self) -> None:
+        name = ".claude/skills/a\r/SKILL.md"
+        (self.root / name).parent.mkdir(parents=True)
+        (self.root / name).write_text("", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+        self.assertIn(name, self.fu.targets(self.root, "claude")["classified"])
+
     def test_excluded_and_unrelated_files_are_not_candidates(self) -> None:
         found = self.fu.targets(self.root, "claude")
         listed = set(found["classified"]) | set(found["other_host"]) | set(found["unclassified"])
         for name in ("pyproject.toml", ".vscode/settings.json", "docs/guide.md", "skills/c/evals/fixtures/SKILL.md", "vendor/x/SKILL.md"):
             with self.subTest(name=name):
                 self.assertNotIn(name, listed)
-
 
 if __name__ == "__main__":
     unittest.main()

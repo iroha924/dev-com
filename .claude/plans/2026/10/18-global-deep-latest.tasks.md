@@ -32,6 +32,17 @@ base: main
   - 結果: `python3 -m unittest discover -s tests` → Ran 425 tests OK (skipped=24。PowerShell が無い Mac のため)
   - 結果: `diff ~/Projects/dev-codex/skills/deep-latest/scripts/fetch_updates.py skills/deep-latest/scripts/fetch_updates.py` → 差分なし
 
+- [x] T03: 全差分のレビューの指摘（RSS でない応答、壊れた日付、記録の巻き戻り、Git の環境変数、ファイル名の CR、`--hold` の書き方、Windows で symlink を作れないときに飛ばす範囲）を塞ぐ
+  - 種別: 修正
+  - 計画: S1, S2
+  - 依存: T01（直す対象のスクリプトとテストが要る）
+  - 変更: `skills/deep-latest/scripts/fetch_updates.py`、`skills/deep-latest/SKILL.md`、`tests/test_scripts.py`
+  - red: 写したテストを直す前のスクリプトで `python3 -m unittest tests.test_scripts` → 足した 5 つのテストが落ちる
+  - 完了条件: `python3 -m unittest discover -s tests` → OK。`diff ~/Projects/dev-codex/skills/deep-latest/scripts/fetch_updates.py skills/deep-latest/scripts/fetch_updates.py` → 差分なし
+  - コミット: `fix(deep-latest): フィードでない応答と壊れた日付をソースの失敗にし、記録を巻き戻さず、Git の環境変数で相手を変えない`
+  - 結果: red: テストだけ写した状態で `python3 -m unittest tests.test_scripts` → failures=4, errors=1
+  - 結果: `python3 -m unittest discover -s tests` → Ran 430 tests OK (skipped=24)。`diff` → 差分なし
+
 - [x] T02: docs/notes.md に deep-latest の節を足し、README の skill の数を直す
   - 種別: 追加
   - 計画: S2
@@ -43,3 +54,5 @@ base: main
   - 結果: `grep -c "19 個" README.md` → 2
 
 ## 記録
+
+2026-10-18 / T03 / 全差分のレビュー（high）の指摘を全部採った（RSS でない応答を更新なしにする、壊れた日付で全ソースが止まる、古い一覧で記録が巻き戻る、GIT_DIR、ファイル名の CR、`--hold` の書き方、symlink を作れない Windows でテスト全体が飛ぶ）。dev-codex の T04 のスクリプトとテストを写し直し、symlink は作れたときだけ確かめるようにした / 修正タスク T03 を足した

@@ -145,9 +145,10 @@ DL targets --repo <ルート> --host codex
 返事が来ないまま会話が終わった回は、記録を進めない（次の回に同じ項目がもう一度出る）。
 
 ```bash
-DL commit <dir>/updates.json [--hold <ソース名> ...] [--full-done]
+DL commit <dir>/updates.json [--hold <ソース名>]... [--full-done]
 ```
 
+止めるソースごとに `--hold <ソース名>` を繰り返す（`--hold codex --hold codex-cli`）。
 手順 1 で見た最新の値だけを、手順 1 で決めた相手の記録に書く（取得に失敗したソースと、`--hold` で指定したソースは進めない）。
 Codex CLI のノートを読み切れなかった回は `--hold codex-cli` を付ける（手順 1）。ほかのソースも、拾った項目のリンク先を
 取れなかった・判定できなかったなら `--hold <ソース名>` を付ける（手順 2）。付けずに進めると、その項目は二度と出てこない。

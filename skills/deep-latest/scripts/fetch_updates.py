@@ -52,11 +52,18 @@ class UsageError(Exception):
     """相手のリポジトリか記録先が決まらない。記録を書かずに止める。"""
 
 
+def local_git(args: list[str]) -> subprocess.CompletedProcess:
+    # GIT_DIR などが設定されていると -C より優先され、別のリポジトリを読む。hook の中から呼ばれても相手を変えない。
+    names = subprocess.run(["git", "rev-parse", "--local-env-vars"], capture_output=True, timeout=60).stdout.decode().split()
+    env = {k: v for k, v in os.environ.items() if k not in names}
+    # text=True は CRLF を LF に変えるので、名前の CR まで失う。bytes で受ける。
+    return subprocess.run(["git", *args], capture_output=True, timeout=60, env=env)
+
+
 def find_repo_root(repo: str) -> Path:
     if not repo:
         raise UsageError("--repo が空")
-    # text=True は CRLF を LF に変えるので、名前の末尾の CR まで失う。bytes で受ける。
-    found = subprocess.run(["git", "-C", repo, "rev-parse", "--show-toplevel"], capture_output=True, timeout=60)
+    found = local_git(["-C", repo, "rev-parse", "--show-toplevel"])
     if found.returncode != 0:
         raise UsageError(found.stderr.decode("utf-8", "replace").strip() or f"{repo} は git のリポジトリの中ではない")
     # 末尾の空白や改行もディレクトリ名の一部になりうるので、git が足した最後の改行 1 つだけを落とす。
@@ -96,13 +103,11 @@ def host_by_placement(path: PurePosixPath) -> str | None:
 
 
 def targets(repo_root: Path, host: str) -> dict:
-    listed = subprocess.run(
-        ["git", "-C", str(repo_root), "ls-files", "-z"], capture_output=True, text=True, encoding="utf-8", timeout=60,
-    )
+    listed = local_git(["-C", str(repo_root), "ls-files", "-z"])
     if listed.returncode != 0:
-        raise UsageError(listed.stderr.strip() or "git ls-files が失敗した")
+        raise UsageError(listed.stderr.decode("utf-8", "replace").strip() or "git ls-files が失敗した")
     out = {"repo_root": str(repo_root), "host": host, "classified": [], "other_host": [], "unclassified": []}
-    for name in sorted(n for n in listed.stdout.split("\0") if n):
+    for name in sorted(n.decode("utf-8") for n in listed.stdout.split(b"\0") if n):
         path = PurePosixPath(name)
         if not is_candidate(repo_root, path):
             continue
@@ -160,6 +165,9 @@ def release_tags(repo: str) -> list[tuple[list[int], str]]:
 
 
 def items(root: ET.Element) -> list[dict]:
+    # プロキシの認証画面のような別の XML を、項目 0 件（更新なし）と読まない。
+    if root.tag != "rss":
+        raise ValueError(f"rss ではない応答（ルートが {root.tag}）")
     out = []
     for item in root.iter("item"):
         out.append({
@@ -214,14 +222,17 @@ def check(days: int, state_path: Path, repo_root: Path) -> dict:
         entry = {"name": name, "url": url, "since": since.isoformat(), "since_from": "record" if seen else f"{days} days"}
         try:
             found = items(fetch(url))
-        except Exception as error:  # 取得や解析の失敗はソースごとに記録し、他のソースは続ける
+            dated = sorted(((parse_time(i["date"]), i) for i in found), key=lambda pair: pair[0], reverse=True)
+        except Exception as error:  # 取得・解析・日付の失敗はソースごとに記録し、他のソースは続ける
             entry.update(ok=False, error=f"{type(error).__name__}: {error}")
             result["sources"].append(entry)
             continue
-        dated = sorted(((parse_time(i["date"]), i) for i in found), key=lambda pair: pair[0], reverse=True)
         # 同じ日時で後から増えた項目を落とさないよう、記録と同じ日時の項目はリンクで見分ける。
         new = [dict(i, date=d.isoformat()) for d, i in dated if d > since or (d == since and i["link"] not in seen_links)]
         newest = dated[0][0] if dated else (since if seen else None)
+        if seen and newest < since:
+            # 一時的に古い一覧が返っても記録を巻き戻さない。戻すと、見た項目が次の回にもう一度出る。
+            newest = since
         entry.update(
             ok=True,
             newest=newest.isoformat() if newest else None,
