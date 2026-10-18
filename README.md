@@ -21,7 +21,7 @@ Python の標準ライブラリと Windows 標準の PowerShell だけで動く�
 | [`prompt-regression`](docs/notes.md#prompt-regression) | skill | 自動 | 使わない | プロンプト変更を PR にする前 |
 | [`python-change-check`](docs/notes.md#python-change-check) | skill | 自動 | 使わない | Python を変更した後、PR の前 |
 | [`incident-report`](docs/notes.md#incident-report) | skill | 手動 | 読む・書く | 障害の後のまとめ、ポストモーテム |
-| [`grill`](docs/notes.md#grill) | skill | 手動 | 読む | 要件定義・設計・壁打ち。別の文脈の Codex と議論して合意を取る |
+| [`grill`](docs/notes.md#grill) | skill | 手動 | 読む | 要件定義・設計・壁打ち。別の文脈の Codex と議論して合意を取る。要件が固まっていない依頼や直すのが難しい変更では、実装の前に Codex が使うかを聞く |
 | [`review-triage`](docs/notes.md#review-triage) | skill | 自動 | 読む（頼めば返信） | PR に付いたレビュー指摘の採否を決めるとき。他の skill が指摘の裏を取るときにも使う（`grill` の議論は除く） |
 | [`writing-quality`](docs/notes.md#writing-quality) | skill | 自動 | 使わない（頼めば送る） | PR 本文・Work Item・Teams・メール・設計文書を書く・直す・レビューするとき |
 | [`code-comments`](docs/notes.md#code-comments) | skill | 自動 | 使わない | コードのコメントを書く・直すとき |

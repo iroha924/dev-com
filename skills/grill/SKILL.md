@@ -1,6 +1,6 @@
 ---
 name: grill
-description: 要件定義・設計・壁打ちの叩き台を、独立した文脈で起動した custom agent の design-challenger と同じ会話の中で最大 4 往復議論し、合意が取れたら、合意した案と、持ち主に決めてほしい点（推奨案付き）と、確かめられなかったことを報告する。実装には入らない。「$grill で詰めて」と名前で呼ばれたときだけ使う。1 回で済む差分のレビュー（pr-review-assist、change-risk-reviewer）には使わない。
+description: 要件定義・設計・壁打ちの叩き台を、独立した文脈で起動した custom agent の design-challenger と同じ会話の中で最大 4 往復議論し、合意が取れたら、合意した案と、持ち主に決めてほしい点（推奨案付き）と、確かめられなかったことを報告する。実装には入らない。「$grill で詰めて」と名前で呼ばれたときか、AGENTS.md の「実装の前に」の問いに持ち主が「はい」と答えたときだけ使う。1 回で済む差分のレビュー（pr-review-assist、change-risk-reviewer）には使わない。
 metadata:
   short-description: 要件や設計を別の文脈の Codex と議論して合意を取る
 ---
