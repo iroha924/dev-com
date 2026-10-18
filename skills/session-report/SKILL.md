@@ -87,7 +87,7 @@ REPORT week                                   # 今週の月曜から今日ま�
 REPORT week --since 2026-10-12 --until 2026-10-16
 ```
 
-期間に始まった会話（子のエージェントの会話は除く）を並べ、`%LOCALAPPDATA%\hirata-codex\session-report\weeks\<期間>\` に week.json と week-input.md を書く。以下の `<期間>` は `--since` と `--until` を同じように渡す。
+期間に始まった会話（子のエージェントの会話と、codex exec の自動の実行は除く。exec も入れるなら `--include-exec`）を並べ、`%LOCALAPPDATA%\hirata-codex\session-report\weeks\<期間>\` に week.json と week-input.md を書く。以下の `<期間>` は `--since` と `--until` を同じように渡す。
 
 1. 出力に「未抽出」「追記なし」「記録が変わった」の会話が並んだら、**その件数を持ち主に見せて、会話ごとのレポートを先に作るかを聞く**（1 本ごとに利用枠を使う）。作るなら、それぞれ 1〜4 の手順で annotations.json を作って check を通し、`REPORT week ...` をもう一度流す。作らない会話は、週のレポートの頭に「追記が無い会話」として出る。
 2. week-input.md を読み、同じフォルダの `week-annotations.json` を書く。形は `scripts\week.schema.json`。

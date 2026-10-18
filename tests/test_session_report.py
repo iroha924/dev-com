@@ -1217,6 +1217,8 @@ class WeekTest(_Base):
         self.write(T2, self.session(T2, "2026-10-13T01:00:00Z", "別の依頼").text(), day="2026-10-13")
         self.write(T3, self.session(T3, "2026-10-20T01:00:00Z").text(), day="2026-10-20")  # 期間の外
         self.write(T4, Rollout(T4, source={"subagent": {"thread_spawn": {}}}, start="2026-10-12T02:00:00Z").text(), day="2026-10-12")
+        self.write("55555555-5555-4555-8555-555555555555", Rollout("55555555-5555-4555-8555-555555555555", source="exec",
+                   start="2026-10-12T03:00:00Z").text(), day="2026-10-12")  # codex exec の実行は入れない
         # T1 だけ会話ごとのレポートを作る
         rdir = os.path.join(self.tmp.name, "data", "session-report", T1)
         code, out, err = self.run_cli("extract", T1, "--out", rdir)
@@ -1253,6 +1255,8 @@ class WeekTest(_Base):
         self.assertEqual(s1["items"]["D1"], "決定（持ち主）: 直し方 A")
         self.assertIn("[%s:R1] 依頼（できた）: #1287 の件" % T1, open(os.path.join(wdir, "week-input.md"), encoding="utf-8").read())
         self.assertIn("%s: 未抽出" % T2, out)
+        listed = sr.week_sessions(self.home, "2026-10-12", "2026-10-18", include_exec=True)
+        self.assertIn("55555555-5555-4555-8555-555555555555", [x[0] for x in listed])
 
     def test_week_check(self):
         wdir, _ = self.make_week()
