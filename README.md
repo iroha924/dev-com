@@ -77,7 +77,7 @@ flowchart LR
 
 ## 入れ方
 
-前提: Windows 10 / 11、Python 3.8 以上（`python --version`）、Codex。
+前提: Windows 10 / 11、Python 3.11（`python --version`。確かめているのは 3.11 だけ）、Codex。
 
 1. このフォルダを会社 PC に置き、PowerShell で何が起きるかを見てから入れる。
    ```powershell

@@ -191,7 +191,7 @@ if ($python -and $python.Source -notmatch 'WindowsApps') {
 } elseif ($launcher) {
     Write-Host "python     not on PATH; use 'py -3' ($($launcher.Source))"
 } else {
-    Write-Host 'python     NOT FOUND. The skills run Python scripts; install Python 3.8 or later.'
+    Write-Host 'python     NOT FOUND. The skills run Python scripts; install Python 3.11.'
 }
 
 if ($env:ADO_COLLECTION_URL) {

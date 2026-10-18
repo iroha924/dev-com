@@ -630,7 +630,7 @@ TOML でサンドボックスや承認の設定は上書きできず、親のも
 |---|---|---|
 | Windows | 10 / 11 | |
 | PowerShell | ふだんのシェルは 7 でも 5.1 でもよい。**`ado.ps1` は、skill の手順では常に Windows PowerShell 5.1（`powershell`、Windows に標準で入っている）で起動する** | `$PSVersionTable.PSVersion`、`powershell -NoProfile -Command '$PSVersionTable.PSVersion'` |
-| Python | 3.8 以上。`python` か `py -3` で起動できること | `python --version` |
+| Python | 3.11（確かめているのは 3.11 だけ）。`python` か `py -3` で起動できること | `python --version` |
 | Codex | 最低バージョンは未確認。手順 5 の `/skills` にこのパッケージの 17 個が出れば skill は足りている | `codex --version` |
 | モデル | サブエージェントのツールが v2 のもの（gpt-6.1-sol で確認）。`grill` などの子を起動する手順は v2 の書き方だけで書いてある | 手順 6 の後の、`$grill` の試し |
 | git | 作業リポジトリで使っているもの | `git --version` |
