@@ -905,11 +905,11 @@ skill を足したり直したりしたら流す。`tests/test_layout.py` の一
 | パイプラインの検証はサーバーの `previewRun` | YAML の解析器を自作: テンプレートの展開を正しく再現できない |
 | custom agent は 5 つ（レビュー、ログの整理、反論、文章のレビュー、調べもの） | 役ごとに多数: 使われない役が残るだけ。独立した文脈が要る場面（レビュー、議論の相手、大量の読み込み）にだけ置く |
 | 子は `fork_turns: "none"` で起動し、テストで書き忘れを落とす | 既定のまま起動: 親の会話を全部引き継ぎ、独立したレビューや反論にならない |
-| `grill` は議論と報告まで。計画ファイルと実装は持たない | hir4ta-developer の grill-codex と同じく plan / tasks を書いて実装まで回す: 依頼は「合意したら報告」まで。会社のリポジトリに計画ファイルを置く前提も無い |
+| `grill` は議論と報告まで。計画ファイルと実装は持たない | dev-claude の grill-codex と同じく plan / tasks を書いて実装まで回す: 依頼は「合意したら報告」まで。会社のリポジトリに計画ファイルを置く前提も無い |
 | `grill` の相手は同じ Codex の子 | 子を `codex exec` で別に立てる: 持ち主がサブエージェントでの議論を望んだ。`codex exec` は Windows のサンドボックスの中で毎回の承認と network の設定が要る |
 | `grill` は v2 のツールの書き方だけを載せる | v1 の書き方も載せる: 使っているモデル（gpt-6.1-sol）は v2。使わない書き方は読み違えのもとになる |
 | `review-triage` と `writing-quality` は自動で選ばれてよい | 手動だけ: 書き込みは本題ではなく、送るのは頼まれたときだけ。書き込みの手順を持つ `ado` 自体が自動で選ばれるので、この 2 つを手動にしても書き込みの経路は減らない |
-| hir4ta-developer から `review-triage`・`code-comments`・`root-cause`・`writing-quality`・`prose-reviewer`・`researcher` を写す | `docs-author` / `docs-audit`（Claude Code の設定専用）、`proposal-challenge`（`deep-audit` 専用。反論の役は `design-challenger` が持つ）、`atlas`（npm に依存）、`codex`（Claude から Codex を呼ぶもの）、`agent-config`（AGENTS.md の 1 行で足りる） |
+| dev-claude から `review-triage`・`code-comments`・`root-cause`・`writing-quality`・`prose-reviewer`・`researcher` を写す | `docs-author` / `docs-audit`（Claude Code の設定専用）、`proposal-challenge`（`deep-audit` 専用。反論の役は `design-challenger` が持つ）、`atlas`（npm に依存）、`codex`（Claude から Codex を呼ぶもの）、`agent-config`（AGENTS.md の 1 行で足りる） |
 | Codex の規範は AGENTS.md に数行で足す | `paths` 付きの rule として写す: Codex には `paths` で読み込む仕組みが無い |
 | モデルと effort は、親の Codex が依頼ごとに案内し、持ち主が切り替える | Codex が自分で切り替える: モデルから設定を変える手段が無い。子だけは TOML と spawn の引数で軽いモデルにできるので、そちらは自動にした |
 | 案内は AGENTS.md の決まり・各 skill の「推奨の設定」の行・フックの 1 行の 3 か所から促す | AGENTS.md だけ: 毎回読まれるが、作業の途中で忘れやすい。skill の行は無いとテストで落ちる |
