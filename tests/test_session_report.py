@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "skills", "session-report", "scripts", "session_report.py")
@@ -1214,6 +1215,9 @@ class WeekTest(_Base):
     def setUp(self):
         super().setUp()
         self.env["HIRATA_CODEX_DATA"] = os.path.join(self.tmp.name, "data")
+        env = mock.patch.dict(os.environ, {"HIRATA_CODEX_DATA": self.env["HIRATA_CODEX_DATA"]})  # build_week を直に呼ぶテスト用
+        env.start()
+        self.addCleanup(env.stop)
 
     def session(self, tid, start, text="依頼 #1287 の件"):
         r = Rollout(tid, start=start).turn("t1").user("u1", text).agent("a1", "答え").end("答え")
@@ -1315,6 +1319,39 @@ class WeekTest(_Base):
         finally:
             os.path.relpath = real
         self.assertTrue(view["tasks"][0]["sessions"][0]["href"].startswith("file://"))
+
+    def test_week_detects_a_record_written_after_extract(self):
+        # 抽出の後に同じ会話へ書き足されたら、古い追記を「追記あり」のまま使わない
+        wdir, _ = self.make_week()
+        before = sr.read_json(os.path.join(wdir, "week.json"))
+        path = next(p for p in sr.ss.rollout_files(self.home) if T1 in p)
+        more = Rollout(T1, start="2026-10-12T05:00:00Z").turn("t2").user("u2", "追加条件: まだ失敗しています。完了扱いを取り消してください。")
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(more.end("了解").lines[1:]) + "\n")
+        week, _ = sr.build_week(self.home, "2026-10-12", "2026-10-18")
+        self.assertEqual(week["sessions"][0]["state"], "記録が変わった")
+        self.assertNotEqual(week["digest"], before["digest"])
+        w = self.good(week)
+        w["tasks"][0]["sessions"] = []
+        self.assertTrue(any(e.startswith("%s: 週の会話がどのタスクにも入っていない" % T1) for e in sr.check_week(w, week)))
+
+    def test_week_keeps_the_state_when_the_record_is_unchanged(self):
+        wdir, _ = self.make_week()
+        before = sr.read_json(os.path.join(wdir, "week.json"))
+        week, text = sr.build_week(self.home, "2026-10-12", "2026-10-18")
+        self.assertEqual(week["sessions"][0]["state"], "追記あり")
+        self.assertEqual(week["digest"], before["digest"])
+        self.assertEqual(text, open(os.path.join(wdir, "week-input.md"), encoding="utf-8").read())
+
+    def test_week_does_not_trust_a_record_it_cannot_check(self):
+        self.make_week()
+        rp = os.path.join(self.tmp.name, "data", "session-report", T1, "report.json")
+        report = sr.read_json(rp)
+        report.pop("sources")  # 元の記録を照らし合わせる材料が無い
+        sr.write_json(rp, report)
+        week, _ = sr.build_week(self.home, "2026-10-12", "2026-10-18")
+        self.assertEqual(week["sessions"][0]["state"], "元の記録を確かめられない")
+        self.assertEqual(sr.build_week_view(week, self.good(week), os.path.join(self.tmp.name, "week"))["missing"][0]["id"], T1)
 
     def test_unreadable_records_are_reported(self):
         self.write(T1, self.session(T1, "2026-10-12T01:00:00Z").text(), day="2026-10-12")

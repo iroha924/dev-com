@@ -299,7 +299,7 @@ function taskCard(t) {
 function missing() {
   const unread = D.unreadable ? h("p", {}, "読めなかった記録が " + D.unreadable + " 本ある（圧縮された記録 .jsonl.zst は読まない）。この週の会話が欠けているかもしれない。") : null;
   if (!D.missing.length) return unread ? h("div", { class: "notice" }, unread) : null;
-  return h("div", { class: "notice" }, unread, h("p", {}, "会話ごとの追記が無い（または記録が変わった）会話が " + D.missing.length + " 件ある。タスクに入っていないかもしれない:"),
+  return h("div", { class: "notice" }, unread, h("p", {}, "会話ごとの追記が無い（または記録が変わって古いかもしれない）会話が " + D.missing.length + " 件ある。タスクに入っていないかもしれない:"),
     D.missing.map((m) => h("p", {}, m.state + "　" + (m.title || m.id))));
 }
 const VIEWS = {
