@@ -53,7 +53,7 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
 
 両方のジョブで、#6 と #7 の全ケースが通る。
 
-- [ ] T03: hooks.json を JSON として読み、目印のハンドラーの定義を比べて案内する
+- [x] T03: hooks.json を JSON として読み、目印のハンドラーの定義を比べて案内する
   - 種別: 修正
   - 計画: S2
   - 依存: T01（直す前に落ちる試験が要る）
@@ -61,6 +61,7 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - red: `gh run view <run> --log-failed` → T01 の CI で、#6 の古い command のケースなどが unchanged と出て落ちる
   - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`git diff HEAD~1 --stat` → 変えたのは install.ps1 と tasks だけ。両ジョブでの成功は plan の A2 で見る
   - コミット: `fix(install): hooks.json の目印のハンドラーの定義を比べ、違えば書き換えずに案内する (T03)`
+  - 結果: red は run 39190779796 で、両ジョブの #6 の目印の 9 ケースが unchanged と出て落ちたことを実測。`python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（手元）。install.ps1 は ASCII だけ。直したコードの両ジョブでの結果は plan の A2 で見る
 - [ ] T04: Install-One の結果と配布物の一覧で Unblock-File の対象を決める
   - 種別: 修正
   - 計画: S3

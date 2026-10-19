@@ -143,20 +143,84 @@ if ($pythonCall) {
 # The command may be encoded, so the handler carries a plain marker to recognize it on later runs.
 $hookMarker = 'hirata-codex usage status'
 
+function Get-JsonProperty($object, [string]$name) {
+    # The value of a property parsed by ConvertFrom-Json, or $null when there is no such object or property.
+    # StrictMode makes reading a missing property an error, so check first.
+    if ($object -isnot [System.Management.Automation.PSCustomObject]) { return $null }
+    $property = $object.PSObject.Properties[$name]
+    if ($property) { return $property.Value }
+    return $null
+}
+
+function Find-MarkedHandlers($config, [string]$marker) {
+    # Every handler under hooks.UserPromptSubmit[].hooks[] whose statusMessage is the marker, before checking its shape,
+    # so that a well-formed handler next to a broken one is seen as a duplicate.
+    $found = @()
+    $groups = Get-JsonProperty (Get-JsonProperty $config 'hooks') 'UserPromptSubmit'
+    foreach ($group in @(if ($null -ne $groups) { $groups })) {
+        $handlers = Get-JsonProperty $group 'hooks'
+        foreach ($handler in @(if ($null -ne $handlers) { $handlers })) {
+            $status = Get-JsonProperty $handler 'statusMessage'
+            if ($status -is [string] -and [string]::Equals($status, $marker, [StringComparison]::Ordinal)) { $found += , $handler }
+        }
+    }
+    return , $found
+}
+
 $hooksJson = Join-Path $codexHome 'hooks.json'
 $script:hookReady = $false
 if (-not $hookCommand) {
     Write-Host "skipped    $hooksJson  (Python was not found; install Python and rerun)"
 } elseif (Test-Path -LiteralPath $hooksJson) {
-    # Get-Content -Raw returns nothing for an empty file, so test before calling a method on it.
-    $existing = Get-Content -LiteralPath $hooksJson -Raw
-    if ($existing -and $existing.Contains($hookMarker)) {
-        Write-Host "unchanged  $hooksJson  (already has the hirata-codex hook)"
-        $script:hookReady = $true
-    } else {
-        Write-Host "skipped    $hooksJson  (exists; add this handler under hooks.UserPromptSubmit yourself):"
-        Write-Host ('  {"hooks": [{"type": "command", "command": ' + (ConvertTo-Json $hookCommand) + ', "timeout": 10, "statusMessage": "' + $hookMarker + '"}]}')
+    # This file is written as UTF-8 without a BOM, which Windows PowerShell 5.1 would otherwise read as ANSI.
+    # Get-Content -Raw returns nothing for an empty file.
+    $existing = Get-Content -LiteralPath $hooksJson -Raw -Encoding UTF8
+    $config = $null
+    $readable = $false
+    if ($existing) {
+        try {
+            $config = ConvertFrom-Json -InputObject $existing
+            $readable = $true
+        } catch {
+            $readable = $false
+        }
+    }
+    $handlerLine = '  {"hooks": [{"type": "command", "command": ' + (ConvertTo-Json $hookCommand) + ', "timeout": 10, "statusMessage": "' + $hookMarker + '"}]}'
+    $found = @()
+    if ($readable) { $found = Find-MarkedHandlers $config $hookMarker }
+    if (-not $readable) {
+        Write-Host "skipped    $hooksJson  (not readable as JSON; fix it, then add this handler under hooks.UserPromptSubmit):"
+        Write-Host $handlerLine
         $script:skipped++
+    } elseif ($found.Count -eq 0) {
+        Write-Host "skipped    $hooksJson  (exists; add this handler under hooks.UserPromptSubmit yourself):"
+        Write-Host $handlerLine
+        $script:skipped++
+    } elseif ($found.Count -gt 1) {
+        Write-Host "skipped    $hooksJson  ($($found.Count) handlers carry the statusMessage `"$hookMarker`"; keep only this one):"
+        Write-Host $handlerLine
+        $script:skipped++
+    } else {
+        $handler = $found[0]
+        $type = Get-JsonProperty $handler 'type'
+        $command = Get-JsonProperty $handler 'command'
+        $plain = ($type -is [string]) -and [string]::Equals($type, 'command', [StringComparison]::Ordinal) -and
+            ($command -is [string]) -and -not $handler.PSObject.Properties['commandWindows']
+        if (-not $plain) {
+            # commandWindows overrides command on Windows; this installer never writes it, so a person added it.
+            Write-Host "skipped    $hooksJson  (the hirata-codex handler is not a plain command handler; check its type, command and commandWindows, then make it):"
+            Write-Host $handlerLine
+            $script:skipped++
+        } elseif ([string]::Equals($command, $hookCommand, [StringComparison]::Ordinal)) {
+            Write-Host "unchanged  $hooksJson  (the hirata-codex hook definition matches; check in /hooks that it is enabled and trusted)"
+            $script:hookReady = $true
+        } else {
+            Write-Host "skipped    $hooksJson  (the hirata-codex hook runs another command; replace its command, then trust it again in /hooks):"
+            Write-Host "  now: $command"
+            Write-Host "  new: $hookCommand"
+            Write-Host ('  as JSON: "command": ' + (ConvertTo-Json $hookCommand))
+            $script:skipped++
+        }
     }
 } elseif ($script:cmdlet.ShouldProcess($hooksJson, 'write')) {
     $handler = [ordered]@{ type = 'command'; command = $hookCommand; timeout = 10; statusMessage = $hookMarker }
