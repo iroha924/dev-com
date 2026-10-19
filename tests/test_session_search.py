@@ -2629,7 +2629,7 @@ class TwentyFirstReviewTest(_Base):
         cwd = os.getcwd()
         os.chdir(self.tmp.name)
         try:
-            self.assertEqual(rv.mock_home("work"), os.path.join(os.path.realpath(self.tmp.name), "work", "codex_home"))
+            self.assertEqual(rv.mock_home("work"), os.path.join(os.getcwd(), "work", "codex_home"))  # Windows の一時フォルダは 8.3 形式の名前のことがある
         finally:
             os.chdir(cwd)
 

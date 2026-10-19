@@ -121,7 +121,7 @@ class _Base(unittest.TestCase):
         self.home = os.path.join(self.tmp.name, "codex")
         os.makedirs(os.path.join(self.home, "sessions", "2026", "10", "14"))
         self.env = dict(os.environ, CODEX_HOME=self.home, HIRATA_CODEX_DATA=os.path.join(self.tmp.name, "data"),
-                        TZ="Asia/Tokyo")  # 表示の時刻を、流す PC の時差によらず決める
+                        TZ="JST-9")  # 表示の時刻を、流す PC の時差によらず決める（Windows の C ランタイムも読む POSIX の書き方）
 
     def write(self, tid, text, day="2026-10-14"):
         y, m, d = day.split("-")
@@ -330,7 +330,7 @@ class ExtractTest(_Base):
         with open(os.path.join(self.tmp.name, "out", "report.json"), encoding="utf-8") as f:
             text = f.read()
         self.assertNotIn(CANARY, text)
-        self.assertNotIn("Users", text.replace(self.home, ""))
+        self.assertNotIn("Users", text.replace(json.dumps(self.home, ensure_ascii=False)[1:-1], ""))  # JSON の中では \\ が重なる
 
     def test_secrets_are_redacted(self):
         self.write(T1, sample().text())
@@ -1250,6 +1250,20 @@ class WeekTest(_Base):
         self.assertEqual(code, 0, err)
         return wdir, out
 
+    def week_again(self):
+        # 比べる 2 回とも、CLI を同じ環境（同じ TZ）で流して保存させる。テストのプロセスで作ると、時差の違いで digest が変わる
+        wdir = os.path.join(self.tmp.name, "week-again")
+        code, out, err = self.run_cli("week", "--since", "2026-10-12", "--dir", wdir)
+        self.assertEqual(code, 0, err)
+        return wdir
+
+    def saved_week(self, wdir):
+        """CLI が保存した week.json と week-input.md。保存された digest が中身と合うことも確かめる。"""
+        week = sr.read_json(os.path.join(wdir, "week.json"))
+        self.assertEqual(week["digest"], sr.digest(week))
+        with open(os.path.join(wdir, "week-input.md"), encoding="utf-8") as f:
+            return week, f.read()
+
     def good(self, week):
         return {"format_version": "1", "source_digest": week["digest"], "title": "週",
                 "tasks": [{"id": "T1", "work_item": "1287", "title": "#1287", "one_liner": "直した", "state": "できた", "points": ["a", "b", "c"],
@@ -1323,12 +1337,13 @@ class WeekTest(_Base):
     def test_week_detects_a_record_written_after_extract(self):
         # 抽出の後に同じ会話へ書き足されたら、古い追記を「追記あり」のまま使わない
         wdir, _ = self.make_week()
-        before = sr.read_json(os.path.join(wdir, "week.json"))
+        before, _ = self.saved_week(wdir)
+        self.assertEqual(before["sessions"][0]["state"], "追記あり")
         path = next(p for p in sr.ss.rollout_files(self.home) if T1 in p)
         more = Rollout(T1, start="2026-10-12T05:00:00Z").turn("t2").user("u2", "追加条件: まだ失敗しています。完了扱いを取り消してください。")
         with open(path, "a", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(more.end("了解").lines[1:]) + "\n")
-        week, _ = sr.build_week(self.home, "2026-10-12", "2026-10-18")
+        week, _ = self.saved_week(self.week_again())
         self.assertEqual(week["sessions"][0]["state"], "記録が変わった")
         self.assertNotEqual(week["digest"], before["digest"])
         w = self.good(week)
@@ -1337,11 +1352,10 @@ class WeekTest(_Base):
 
     def test_week_keeps_the_state_when_the_record_is_unchanged(self):
         wdir, _ = self.make_week()
-        before = sr.read_json(os.path.join(wdir, "week.json"))
-        week, text = sr.build_week(self.home, "2026-10-12", "2026-10-18")
+        before, before_text = self.saved_week(wdir)
+        week, text = self.saved_week(self.week_again())
         self.assertEqual(week["sessions"][0]["state"], "追記あり")
-        self.assertEqual(week["digest"], before["digest"])
-        self.assertEqual(text, open(os.path.join(wdir, "week-input.md"), encoding="utf-8").read())
+        self.assertEqual((week["digest"], text), (before["digest"], before_text))
 
     def test_week_does_not_trust_a_record_it_cannot_check(self):
         self.make_week()

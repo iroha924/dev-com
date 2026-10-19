@@ -16,7 +16,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILDER = os.path.join(ROOT, "hooks", "New-HookCommand.ps1")
 HOOK = os.path.join(ROOT, "hooks", "codex_status.py")
 INSTALL = os.path.join(ROOT, "install.ps1")
-POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import powershell  # noqa: E402
+
+POWERSHELL = powershell.PATH
 
 
 def ps_quote(s):

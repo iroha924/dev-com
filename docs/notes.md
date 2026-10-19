@@ -799,16 +799,20 @@ sequenceDiagram
 python -m unittest discover -s tests
 ```
 
-- `tests/test_ado_ps1.py` は、`powershell`（Windows PowerShell 5.1）があればそれを、無ければ `pwsh` を使い、どちらも無ければ飛ばす。
-  Windows で流して `skipped` が 0 件なら、5.1 で確かめたことになる。
-- `install.ps1` はテストの対象外。`-WhatIf` で流して結果を見る。
+- CI（`.github/workflows/tests.yml`）が、PR と main への push のたびに、windows-2025（Windows PowerShell 5.1、Python 3.11）と ubuntu-24.04（PowerShell 7、Python 3.11）で全部のテストを流す。PR では PR の先端のコミットを確かめ、ログの `git rev-parse HEAD` に出る。
+- PowerShell が要るテスト（`tests/test_ado_ps1.py`、`tests/test_hook_command.py`）は、`powershell`（Windows PowerShell 5.1）があればそれを、無ければ `pwsh` を使い、どちらも無ければ飛ばす（`tests/powershell.py`）。手元で流すときはこれでよい。
+- 飛ばしたテストで通ったことにしないため、CI では環境変数で必須にする。`DEV_COM_REQUIRE_POWERSHELL=1` なら PowerShell が無いと読み込みの時点で落ち、`DEV_COM_EXPECT_POWERSHELL=5.1` なら版の Major.Minor が 5.1 でないか、版を取れないと落ちる。
+  5.1 で確かめたかは、skip の件数ではなく Windows のジョブが成功したことで見る。Windows では `test_hook_command.py` の 1 件と `InstallHooksJsonTest` の 2 件を設計どおり飛ばすので、skip は 0 件にならない。
+- `install.ps1` で確かめているのは、POSIX の PowerShell 7 で `hooks.json` を 1 度だけ作り、既存のものに触らないこと（`InstallHooksJsonTest` の 2 件、Ubuntu のジョブ）だけ。Windows での skill のコピー・退避・`Unblock-File` は確かめていない。
+  `-WhatIf` は何を置くかを見るだけで、コピーや退避が正しく動くかの検査の代わりにはならない。
 
 | ファイル | 見ているもの |
 |---|---|
 | `tests/test_scripts.py` | Python スクリプト 6 本とフック（`hooks/codex_status.py`）の動作。フックは、壊れた入力や読めない記録でも終了コード 0 で「不明」と出すこと |
 | `tests/test_ado_ps1.py` | `ado.ps1` を手元の偽サーバーに向けて流し、送り先の制限・承認のハッシュ・Content-Type・拒否のときに送っていないことを確かめる。PowerShell が無ければ飛ばす |
 | `tests/test_hook_command.py` | フックのコマンドを実際にシェルから流す（PowerShell の `-Command` と、cmd の代わりのシェル）。空白・日本語・引用符を含むパス、`-EncodedCommand` の形でスクリプトが無くても依頼を止めないこと、`install.ps1` が `hooks.json` を 1 度だけ作り、既存のもの（空のものも含む）に触らないこと。PowerShell が無ければ飛ばす |
-| `tests/test_layout.py` | 各 skill の形（名前と説明、説明の合計が 6,000 文字以内か、手動だけの skill の一覧と `openai.yaml` が合うか、SKILL.md が参照するスクリプトとリンクと agent があるか、**子を起動する段落ごとに `fork_turns: "none"` があるか**、description が YAML で途中で切れない書き方か、コードフェンスが正しく閉じているか）、agent の形、.ps1 が ASCII だけか |
+| `tests/test_powershell.py` | PowerShell の探し方が、必須の指定で不在・版違い・版を取れないときに落ち、指定が無ければ飛ばすこと |
+| `tests/test_layout.py` | 各 skill の形（名前と説明、説明の合計が 6,000 文字以内か、手動だけの skill の一覧と `openai.yaml` が合うか、SKILL.md が参照するスクリプトとリンクと agent があるか、**子を起動する段落ごとに `fork_turns: "none"` があるか**、description が YAML で途中で切れない書き方か、コードフェンスが正しく閉じているか）、agent の形、.ps1 が ASCII だけか、workflow の action が SHA で固定され、権限が `contents: read` だけか |
 
 skill を足したり直したりしたら流す。`tests/test_layout.py` の一覧に足すものは次のとおり（足し忘れるとテストが落ちる）。
 
@@ -877,8 +881,8 @@ skill を足したり直したりしたら流す。`tests/test_layout.py` の一
 
 2026-10-16 時点。
 
-- **Windows PowerShell 5.1 では一度も流していない。**検査したのは PowerShell 7.4（Linux のコンテナ）だけ。
-  `ado.ps1` と Python スクリプトは、会社 PC で [テスト](#テスト) を流すと確かめられる。`install.ps1` は流して結果を見るしかない。
+- Windows PowerShell 5.1 で確かめたのは、CI の windows-2025（5.1.26100、英語のロケール）で流すテストまで（2026-10-19）。**会社 PC の日本語のロケール（cp932）では流していない。**
+  `install.ps1` を Windows で流すこと（コピー・退避・`Unblock-File`）は確かめていない。
 - 会社の ADO Server にはまだ繋いでいない。統合認証が通るか、`previewRun` で本当にビルドが作られないか、`rev` の条件で更新が止まるかは、実際のサーバーで確かめる必要がある。
 - 公式の資料で確かめられなかった API の仕様と、skill 側の扱い:
 
