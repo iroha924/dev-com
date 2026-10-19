@@ -39,6 +39,16 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - コミット: `test: Unblock-File が skip した skill と配布物でないファイルに触れないことを Windows で確かめる試験を足す (T02)`
   - 結果: `python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（足した UnblockTest の 3 件が Windows だけ）。印は plan の Set-Content -Stream ではなく、Python で `<file>:Zone.Identifier` に書く（同じ代替データストリーム）。Copy-Item で印が写る対照は setUp で確かめる。直す前のコードで落ちることは CI で確かめる（plan の A1）
 
+- [x] T06: install.ps1 を流す試験の子の PowerShell の環境から PSModulePath を除く
+  - 種別: 修正
+  - 計画: S1
+  - 依存: T01（直す試験の準備が要る）
+  - 変更: `tests/test_hook_command.py`
+  - red: `gh run view 39190415176 --log` → Windows のジョブで、試験の環境でも元の環境でも子の Windows PowerShell 5.1 に Get-FileHash が無く、PSModulePath の先頭に `c:\program files\powershell\7\Modules` などの PowerShell 7 のパスが並ぶ
+  - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。Windows のジョブで Get-FileHash が見つかり、直す前のコードで #6・#7 が意図した理由でだけ落ちることは plan の A1 で見る
+  - コミット: `test: install.ps1 を流す試験の子の PowerShell から、PowerShell 7 のモジュールのパスを外す (T06)`
+  - 結果: red は上のとおり run 39190415176 で実測。原因は about_PSModulePath の「Starting Windows PowerShell from PowerShell 7」にある、途中のプロセス（ここでは Python）を挟むと PowerShell 7 のパスが残り、Microsoft.PowerShell.Utility のコマンドが CommandNotFoundException になる件。PowerShell 7 が powershell.exe を直接起動するとき（持ち主がターミナルから流すとき）は取り除かれるので、install.ps1 の不具合ではない。試験の環境から PSModulePath を除いた。`python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28
+
 ## P2: install.ps1 を直す
 
 両方のジョブで、#6 と #7 の全ケースが通る。

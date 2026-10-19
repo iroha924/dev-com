@@ -122,8 +122,9 @@ class _InstallBase(unittest.TestCase):
         self.home = os.path.join(os.path.realpath(self.tmp.name), "home")
         self.codex_home = os.path.join(self.home, ".codex")
         os.makedirs(self.codex_home)
-        self.env = dict(os.environ)
-        self.env.pop("CODEX_HOME", None)
+        # Python を挟んで起動した Windows PowerShell は、PowerShell 7 のモジュールのパスを引き継ぐと Get-FileHash などを
+        # 読めない（about_PSModulePath の「Starting Windows PowerShell from PowerShell 7」）。消すと起動時に作り直す
+        self.env = {k: v for k, v in os.environ.items() if k.upper() not in ("CODEX_HOME", "PSMODULEPATH")}
         if os.name == "nt":
             # Windows の $HOME は USERPROFILE から決まる（about_Automatic_Variables）
             drive, rest = os.path.splitdrive(self.home)
