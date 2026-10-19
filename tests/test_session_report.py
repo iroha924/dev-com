@@ -1334,6 +1334,64 @@ class WeekTest(_Base):
             os.path.relpath = real
         self.assertTrue(view["tasks"][0]["sessions"][0]["href"].startswith("file://"))
 
+    def resumed(self, tid, days):
+        """days の各 UTC の時刻に、持ち主の発言 1 つと答えのターンを足していく 1 本の会話（再開も同じファイルに続く）。"""
+        r = Rollout(tid, start=days[0])
+        for n, start in enumerate(days, 1):
+            r.now = datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
+            r.turn("t%d" % n).user("u%d" % n, "%d 回目の依頼" % n).agent("a%d" % n, "%d 回目の答え" % n).end("答え")
+        self.write(tid, r.text(), day=days[0][:10])
+        return r
+
+    def annotate(self, tid, decisions):
+        """会話ごとのレポートを作り、decisions（{決定の ID: 根拠の発言の ID}）の追記を書く。"""
+        rdir = os.path.join(self.tmp.name, "data", "session-report", tid)
+        code, out, err = self.run_cli("extract", tid, "--out", rdir)
+        self.assertEqual(code, 0, err)
+        report = sr.read_json(os.path.join(rdir, "report.json"))
+        ev = [{"ref": "u1", "quote": "依頼"}]
+        users = [m["id"] for m in report["messages"] if m["kind"] == "user"]
+        ann = {"format_version": "1", "source_digest": report["digest"], "summary": {"text": "会話の要約", "evidence": ev},
+               "chapters": [], "questions": [], "lessons": [], "command_notes": [], "issues": [], "requests": [],
+               "owner_messages": {u: [d for d, at in decisions.items() if at == u] for u in users},
+               "decisions": [{"id": d, "text": "決定 %s" % d, "at": at, "by": "持ち主", "why": "", "alternatives": [],
+                              "supersedes": None, "evidence": [{"ref": at, "quote": "依頼"}]} for d, at in decisions.items()]}
+        with open(os.path.join(rdir, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(ann, f, ensure_ascii=False)
+        self.assertEqual(sr.check_annotations(ann, report), [])
+
+    def week_of(self, since, until):
+        wdir = os.path.join(self.tmp.name, "week-%s" % since)
+        code, out, err = self.run_cli("week", "--since", since, "--until", until, "--dir", wdir)
+        self.assertEqual(code, 0, err)
+        week = sr.read_json(os.path.join(wdir, "week.json"))
+        with open(os.path.join(wdir, "week-input.md"), encoding="utf-8") as f:
+            return {s["id"]: s for s in week["sessions"]}, f.read()
+
+    def test_a_resumed_session_is_in_each_week_it_was_worked_on_with_only_that_weeks_items(self):
+        # 先週の金曜に始めて今週の月曜に再開した会話は、両方の週に出て、それぞれの週の項目だけを持つ（#13）
+        self.resumed(T1, ["2026-10-09T01:00:00Z", "2026-10-12T01:00:00Z"])
+        self.annotate(T1, {"D1": "u1", "D2": "u2"})
+        self.resumed(T2, ["2026-10-15T01:00:00Z", "2026-10-19T01:00:00Z"])  # 今週始めて翌週も続く
+        self.resumed(T3, ["2026-10-05T01:00:00Z"])  # 先週だけ
+        last, last_text = self.week_of("2026-10-05", "2026-10-11")
+        this, this_text = self.week_of("2026-10-12", "2026-10-18")
+        nxt, _ = self.week_of("2026-10-19", "2026-10-25")
+        self.assertEqual((sorted(last), sorted(this), sorted(nxt)), (sorted([T1, T3]), sorted([T1, T2]), [T2]))
+        self.assertEqual((sorted(last[T1]["items"]), sorted(this[T1]["items"])), (["D1", "summary"], ["D2", "summary"]))
+        self.assertIn("[%s:D2]" % T1, this_text)
+        self.assertNotIn("[%s:D1]" % T1, this_text)
+        self.assertTrue(this[T1]["outside_period"] and last[T1]["outside_period"])
+        self.assertFalse(last[T3]["outside_period"])
+        self.assertIn("会話全体の要約", this_text)
+
+    def test_the_week_boundary_is_the_local_midnight(self):
+        # TZ=JST-9 では、UTC 15:00 が日付の境目
+        self.resumed(T1, ["2026-10-11T14:30:00Z"])  # 10/11 23:30（先週）
+        self.resumed(T2, ["2026-10-11T15:30:00Z"])  # 10/12 00:30（今週）
+        this, _ = self.week_of("2026-10-12", "2026-10-18")
+        self.assertEqual(sorted(this), [T2])
+
     def test_week_detects_a_record_written_after_extract(self):
         # 抽出の後に同じ会話へ書き足されたら、古い追記を「追記あり」のまま使わない
         wdir, _ = self.make_week()
