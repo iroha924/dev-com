@@ -1,6 +1,6 @@
 name = "incident-evidence-analyst"
 description = "障害のログ・アラート・監視の出力・直前の変更を大量に読み、時系列、観測した事実、競合する原因の仮説と、それぞれを確かめる方法に整理して返す分析担当。incident-report から使う。"
-# 大量に読んでまとめる役なので軽いモデルで足りる（gpt-6.1-sol の約 1/20 の消費）。sandbox と承認は親のものを引き継ぐ。
+# 大量に読んでまとめる役なので軽いモデルで足りる（credits の単価は gpt-6.1-sol の 1/20）。sandbox と承認は親のものを引き継ぐ。
 model = "gpt-6-luna"
 model_reasoning_effort = "medium"
 developer_instructions = """

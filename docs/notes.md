@@ -102,7 +102,7 @@ flowchart TD
 
 ## 利用枠を節約する
 
-会社のアカウントは、利用枠が Plus 相当で小さい。利用枠には 5 時間ごとの枠と週ごとの枠があり、それぞれ決まった時刻にリセットされる（アカウントによっては片方だけ）。`[利用状況]` の行には見えている枠が全部出て、どちらかが 80% を超えると軽い設定を優先して案内する。消費はモデルで大きく違い、gpt-6-luna は gpt-6.1-sol の約 1/20 で済む（[前提にした事実](#前提にした事実)）。このパッケージは次の 3 つで節約する。
+会社のアカウントは、利用枠が Plus 相当で小さい。利用枠には 5 時間ごとの枠と週ごとの枠があり、それぞれ決まった時刻にリセットされる（アカウントによっては片方だけ）。`[利用状況]` の行には見えている枠が全部出て、どちらかが 80% を超えると軽い設定を優先して案内する。消費はモデルで大きく違う。gpt-6-luna の credits の単価は、入力と出力で gpt-6.1-sol の 1/20（キャッシュ済みの入力は 1/10）で、公式の目安では 5 時間に送れるメッセージがおよそ 20 倍になる。ただし credits の単価だけでは定額の枠の減り方は決まらず、会社の枠で実際に減る比は測っていない（[前提にした事実](#前提にした事実)）。このパッケージは次の 3 つで節約する。
 
 1. 親の Codex が、依頼ごとに設定の切り替えを案内する。AGENTS.md の「モデルと effort の案内」に従い、依頼を受けたら作業に手を付ける前に、勧める設定と今の設定を比べ、違えば止めて返答の最後にこの形で書く。依頼の途中では止めない。
    ```text
@@ -849,7 +849,7 @@ skill を足したり直したりしたら流す。`tests/test_layout.py` の一
 - Codex の custom agent は、ユーザーが頼んだとき、または AGENTS.md や skill の指示が求めたときに起動する。TOML に `sandbox_mode` や `approval_policy` を書いても親の設定は上書きされない。
   [Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)
 - `~/.codex/AGENTS.md` は毎回読まれる。[AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
-- 利用枠の消費はモデルで違う。credits の単価（100 万トークンあたり、入力 / キャッシュ済みの入力 / 出力）は、gpt-6.1-sol が 50 / 2.5 / 250、gpt-6-luna が 2.5 / 0.25 / 12.5。Plus 相当の 5 時間あたりの目安は、gpt-6.1-sol が 15〜160 メッセージ、gpt-6-luna が 350〜3,000 メッセージ。flexible pricing でない Enterprise は、多くの機能で Plus と同じ 1 人あたりの枠。[Pricing](https://learn.chatgpt.com/docs/pricing)、[Usage and cost](https://learn.chatgpt.com/docs/enterprise/chatgpt-work-usage-and-cost)
+- 利用枠の消費はモデルで違う。credits の単価（100 万トークンあたり、入力 / キャッシュ済みの入力 / 出力）は、gpt-6.1-sol が 50 / 2.5 / 250、gpt-6-luna が 2.5 / 0.25 / 12.5。Plus 相当の 5 時間あたりの目安は、gpt-6.1-sol が 15〜160 メッセージ、gpt-6-luna が 350〜3,000 メッセージ。同じページに「credits の単価だけでは、サブスクリプションに含まれる利用量は決まらない」とある（2026-10-19 に確認）。flexible pricing でない Enterprise は、多くの機能で Plus と同じ 1 人あたりの枠。[Pricing](https://learn.chatgpt.com/docs/pricing)、[Usage and cost](https://learn.chatgpt.com/docs/enterprise/chatgpt-work-usage-and-cost)
 - effort ごとの倍率は公表されていない。effort を上げるとトークンが増える。[Models](https://learn.chatgpt.com/docs/models)
 - Fast mode は、含まれている利用枠を 2.5 倍の速さで使う。[Speed](https://learn.chatgpt.com/docs/agent-configuration/speed)
 - プロンプトのキャッシュは、モデルや effort が変わると次の 1 回は効かない見込みが高い。[Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)（モデルは公式、effort は公式の説明と利用者の実測 [#42996](https://github.com/openai/codex/issues/42996)）

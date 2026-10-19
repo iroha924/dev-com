@@ -1,6 +1,6 @@
 name = "prose-reviewer"
 description = "writing-quality の Step 5 の 2 段目を担う、独立した文脈の文章のレビュアー。書いた・直した、またはレビューを頼まれた文章（PR 本文、Work Item の説明、設計文書、手順書、社内外の説明資料、HTML を含む）を、writing-quality の共通の評価基準で判定し、根拠付きで指摘する。"
-# 大量に読んでまとめる役なので軽いモデルで足りる（gpt-6.1-sol の約 1/20 の消費）。sandbox と承認は親のものを引き継ぐ。
+# 大量に読んでまとめる役なので軽いモデルで足りる（credits の単価は gpt-6.1-sol の 1/20）。sandbox と承認は親のものを引き継ぐ。
 model = "gpt-6-luna"
 model_reasoning_effort = "medium"
 developer_instructions = """
