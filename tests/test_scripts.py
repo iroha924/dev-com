@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -215,6 +217,54 @@ class CheckOutputsTest(unittest.TestCase):
                 json.dump({"cases": [{"id": "c1", "expect": {"must_inculde": ["x"]}}]}, f)
             with self.assertRaises(check_outputs.CasesError):
                 check_outputs.load_cases(cases)
+
+    def write_case(self, d, case, outputs):
+        cases = os.path.join(d, "cases.json")
+        with open(cases, "w", encoding="utf-8") as f:
+            json.dump({"cases": [case]}, f)
+        for sub, text in outputs.items():
+            os.makedirs(os.path.join(d, sub), exist_ok=True)
+            if text is not None:
+                with open(os.path.join(d, sub, case["id"] + ".txt"), "w", encoding="utf-8") as f:
+                    f.write(text)
+        return cases
+
+    def test_case_without_any_check_is_rejected(self):
+        # 何も確かめないケースが、空の出力でも通ったことにならない
+        for expect in (None, {}, {"must_include": []}, {"json": False}, {"must_include": [], "regex": [], "json_required_keys": []}):
+            with self.subTest(expect=expect), tempfile.TemporaryDirectory() as d:
+                case = {"id": "sample"} if expect is None else {"id": "sample", "expect": expect}
+                cases = self.write_case(d, case, {"after": ""})
+                with self.assertRaises(check_outputs.CasesError):
+                    check_outputs.load_cases(cases)
+                self.assertEqual(check_outputs.main([cases, os.path.join(d, "after")]), 2)
+
+    def test_bad_check_value_is_rejected(self):
+        for expect in ({"must_include": "OK"}, {"must_not_include": [1]}, {"regex": ["("]}, {"json": "yes"},
+                       {"json_required_keys": "a"}, {"max_chars": "800"}, {"max_chars": True}, {"max_chars": -1}, []):
+            with self.subTest(expect=expect), tempfile.TemporaryDirectory() as d:
+                cases = self.write_case(d, {"id": "sample", "expect": expect}, {})
+                with self.assertRaises(check_outputs.CasesError):
+                    check_outputs.load_cases(cases)
+
+    def test_lost_output_is_a_regression(self):
+        with tempfile.TemporaryDirectory() as d:
+            cases = self.write_case(d, {"id": "sample", "expect": {"must_include": ["OK"]}}, {"before": "OK", "after": None})
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = check_outputs.main([cases, os.path.join(d, "after"), "--baseline", os.path.join(d, "before")])
+            result = json.loads(out.getvalue())
+            self.assertEqual((code, result["failed"]), (1, ["sample"]))
+            self.assertEqual(result["regressions"], [{"case": "sample", "check": "must_include:OK"}])
+
+    def test_no_baseline_output_is_not_a_regression(self):
+        with tempfile.TemporaryDirectory() as d:
+            cases = self.write_case(d, {"id": "sample", "expect": {"must_include": ["OK"]}}, {"before": None, "after": None})
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = check_outputs.main([cases, os.path.join(d, "after"), "--baseline", os.path.join(d, "before")])
+            result = json.loads(out.getvalue())
+            self.assertEqual((code, result["failed"], result["regressions"]), (1, ["sample"], []))
 
 
 class PreviewBodyTest(unittest.TestCase):
