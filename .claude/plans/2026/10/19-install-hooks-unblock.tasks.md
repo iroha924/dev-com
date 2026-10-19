@@ -82,6 +82,34 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - コミット: `fix(install): -WhatIf でも中身の比べ方が Get-FileHash の値を受け取れるようにする (T07)`
   - 結果: red は run 39190779796 の test_whatif_changes_nothing で実測。Get-TreeHash の中だけ `$WhatIfPreference = $false` にした（関数の中の変数なので、呼び出し元の -WhatIf は変わらない）。`python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（手元）。Windows での結果は plan の A2 で見る
 
+- [x] T08: hooks.json の欄の値を読むとき、配列を展開せず 1 つの値のまま返す
+  - 種別: 修正
+  - 計画: S2
+  - 依存: T03（直す読み方が要る）
+  - 変更: `install.ps1`
+  - red: `gh run view 39192103933 --log` → 両ジョブで、command と type が 1 要素の配列のハンドラーが skipped ではなく unchanged と出て落ちる
+  - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。両ジョブでの成功は plan の A2 で見る
+  - コミット: `fix(install): hooks.json の配列の値を展開せず、-Confirm で中の操作を聞き直さず、中身の比べ方を .NET の SHA256 にする (T08, T09, T10)`
+  - 結果: red は上のとおり run 39192103933 で実測（`'skipped    …/hooks.json' not found`、出力は unchanged）。Get-JsonProperty を `return , $property.Value` にした。`python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（手元。足したのは subTest なので件数は変わらない）
+- [x] T09: 外側で承認した後の、コピーと退避の中の操作で -Confirm を聞き直さない
+  - 種別: 修正
+  - 計画: S3
+  - 依存: T04（直す結果の返し方が要る）
+  - 変更: `install.ps1`
+  - red: `powershell -File install.ps1 -Force -Confirm` → 対話のホストで外側の置き換えを承認し、中のコピーを断ると、replaced と表示され、コピーしていないファイルが Unblock-File の対象に入る。機械では再現できない（断る操作は対話のホストでしかできず、CI の試験では流せない）。根拠は Codex のレビュー（316b761）の F1 と、Microsoft の Everything about ShouldProcess の「Suppressing nested confirm prompts」
+  - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`grep -cF -- '-Confirm:$false' install.ps1` → 6（Copy-Tree の New-Item と Copy-Item の 2 か所ずつ、退避の New-Item と Move-Item）
+  - コミット: `fix(install): hooks.json の配列の値を展開せず、-Confirm で中の操作を聞き直さず、中身の比べ方を .NET の SHA256 にする (T08, T09, T10)`
+  - 結果: 直す前の失敗は上のとおり確かめていない。`grep -cF -- '-Confirm:$false' install.ps1` → 6
+- [x] T10: 中身の比べ方を Get-FileHash ではなく .NET の SHA256 で計算し、-WhatIf でも止まらないようにする
+  - 種別: 修正
+  - 計画: S5
+  - 依存: T07（T07 の直しが効かなかった）
+  - 変更: `install.ps1`
+  - red: `gh run view 39191767307 --log` → T07 を入れた後も、Windows の test_whatif_changes_nothing が `The property 'Hash' cannot be found on this object` で落ちる
+  - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`grep -n "Get-FileHash" install.ps1` → 説明のコメントの 1 行だけ。`grep -c "WhatIfPreference = " install.ps1` → 0。Windows での成功は plan の A2 で見る
+  - コミット: `fix(install): hooks.json の配列の値を展開せず、-Confirm で中の操作を聞き直さず、中身の比べ方を .NET の SHA256 にする (T08, T09, T10)`
+  - 結果: red は上のとおり run 39191767307 で実測。Get-FileSha256 を足し、T07 の `$WhatIfPreference = $false` は消した。`grep -n "Get-FileHash" install.ps1` → 53 行目のコメントだけ。`grep -c "WhatIfPreference = " install.ps1` → 0
+
 ## P3: 文書を合わせる
 
 install.ps1 の説明と docs/notes.md が、直した動きと確かめた範囲を書いている。
@@ -99,3 +127,6 @@ install.ps1 の説明と docs/notes.md が、直した動きと確かめた範�
 - 2026-10-19 / T01 / 1012042 の CI（run 39189958694）: Ubuntu は #6 の目印のケースだけが意図どおり落ちた。Windows は `$HOME` の assert は通ったが、2 回目の install.ps1 が `Get-FileHash` を見つけられず止まり、直す前でも通るはずのケースまで落ちた / 試験の準備に、子の PowerShell で Get-FileHash が見つかるかの確かめを足し、見つからなければ試験の環境と元の環境の結果と PSModulePath を出して止めるようにした（T02 のコミットに入れた）。原因を確かめてから進め方を決める
 - 2026-10-19 / A1 / 直す前のコード（4fef51a、run 39190779796）: 両ジョブで #6 の目印の 9 ケースが unchanged と出る今の判定で落ちた。Windows で #7 の test_only_installed_or_matching_package_files_are_unblocked が、利用者の cache.pyc の印が消えて落ちた。test_force_unblocks_the_new_copy_and_keeps_the_backup_marked は今のコードでも通った（守りの試験） / red を記録した
 - 2026-10-19 / T07 / 同じ run で test_whatif_changes_nothing が install.ps1 自体の -WhatIf の不具合で落ちた。持ち主が同じ PR で直す案を選んだ / plan に S5 を足し、修正タスク T07 を足した
+- 2026-10-19 / T03 / Codex のタスクごとのレビュー（b56db1f）が、1 要素の配列の command と type を一致と判定する欠陥を読みで見つけた（F1）。受け入れ / 試験を足して CI で red を確かめ（run 39192103933）、修正タスク T08 で直した
+- 2026-10-19 / T07 / Codex のレビュー（54fad6e）は指摘なしだったが、CI（run 39191767307）で -WhatIf の試験がまだ落ちた。関数の中の `$WhatIfPreference = $false` は Get-FileHash に効かなかった / 修正タスク T10 で、Get-FileHash を使わない形に直した
+- 2026-10-19 / T04 / Codex のタスクごとのレビュー（316b761）が、-Confirm で中の操作を断っても成功の結果を返す欠陥を読みで見つけた（F1）。受け入れ / 修正タスク T09 で直した。断る操作は CI で流せないので red は確かめていない

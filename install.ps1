@@ -49,29 +49,41 @@ function Get-SourceFiles([string]$root) {
         Sort-Object)
 }
 
+function Get-FileSha256([string]$path) {
+    # .NET rather than Get-FileHash: under -WhatIf, Windows PowerShell 5.1's Get-FileHash only reports what it
+    # would do and returns nothing, even though reading a file changes nothing.
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($path)
+    try {
+        return [System.BitConverter]::ToString($sha.ComputeHash($stream))
+    } finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
 function Get-TreeHash([string]$root) {
-    # Reading is not a change: under -WhatIf, Windows PowerShell 5.1's Get-FileHash would only report what it
-    # would do and return nothing.
-    $WhatIfPreference = $false
     $lines = foreach ($rel in (Get-SourceFiles $root)) {
         if ($rel -eq '') { $file = $root } else { $file = Join-Path $root $rel }
-        $rel.Replace('\', '/') + '|' + (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+        $rel.Replace('\', '/') + '|' + (Get-FileSha256 $file)
     }
     return ($lines -join "`n")
 }
 
 function Copy-Tree([string]$from, [string]$to) {
+    # Called only after Install-One confirmed the whole item, so -Confirm does not ask again for each file;
+    # a "no" there would leave a partial copy that is still reported as installed or replaced.
     if (Test-Path -LiteralPath $from -PathType Leaf) {
         $parent = Split-Path -Parent $to
-        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-        Copy-Item -LiteralPath $from -Destination $to -Force
+        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force -Confirm:$false | Out-Null }
+        Copy-Item -LiteralPath $from -Destination $to -Force -Confirm:$false
         return
     }
     foreach ($rel in (Get-SourceFiles $from)) {
         $dest = Join-Path $to $rel
         $parent = Split-Path -Parent $dest
-        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-        Copy-Item -LiteralPath (Join-Path $from $rel) -Destination $dest -Force
+        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force -Confirm:$false | Out-Null }
+        Copy-Item -LiteralPath (Join-Path $from $rel) -Destination $dest -Force -Confirm:$false
     }
 }
 
@@ -100,8 +112,8 @@ function Install-One([string]$from, [string]$to) {
     }
     $backup = Join-Path $backupRoot $relative
     $parent = Split-Path -Parent $backup
-    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-    Move-Item -LiteralPath $to -Destination $backup
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force -Confirm:$false | Out-Null }
+    Move-Item -LiteralPath $to -Destination $backup -Confirm:$false
     Copy-Tree $from $to
     Write-Host "replaced   $to  (backup: $backup)"
     return 'replaced'
@@ -152,7 +164,8 @@ function Get-JsonProperty($object, [string]$name) {
     # StrictMode makes reading a missing property an error, so check first.
     if ($object -isnot [System.Management.Automation.PSCustomObject]) { return $null }
     $property = $object.PSObject.Properties[$name]
-    if ($property) { return $property.Value }
+    # The leading comma keeps an array as one value; without it ["x"] would come back as the string "x".
+    if ($property) { return , $property.Value }
     return $null
 }
 
