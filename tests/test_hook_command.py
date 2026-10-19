@@ -108,44 +108,117 @@ if POWERSHELL:
         POWERSHELL_PLAIN = None
 
 
-@unittest.skipUnless(POWERSHELL and os.name != "nt", "install.ps1 を一時的なホームで流す試験は POSIX でだけ流す（Windows の $HOME は環境変数で変えられない）")
-class InstallHooksJsonTest(unittest.TestCase):
+MARKER = "hirata-codex usage status"
+
+
+@unittest.skipUnless(POWERSHELL, "PowerShell が無い")
+class _InstallBase(unittest.TestCase):
+    """install.ps1 を一時フォルダの HOME で流す。流す前に、子の PowerShell の $HOME がそこを指すことを確かめる。"""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.home = os.path.join(self.tmp.name, "home")
+        self.home = os.path.join(os.path.realpath(self.tmp.name), "home")
         self.codex_home = os.path.join(self.home, ".codex")
         os.makedirs(self.codex_home)
-        bindir = os.path.join(self.tmp.name, "bin")
-        os.makedirs(bindir)
-        os.symlink(sys.executable, os.path.join(bindir, "python"))
-        self.env = dict(os.environ, HOME=self.home, PATH=bindir + os.pathsep + os.environ.get("PATH", ""))
+        self.env = dict(os.environ)
         self.env.pop("CODEX_HOME", None)
-
-    def install(self):
-        r = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-File", INSTALL],
+        if os.name == "nt":
+            # Windows の $HOME は USERPROFILE から決まる（about_Automatic_Variables）
+            drive, rest = os.path.splitdrive(self.home)
+            self.env.update(USERPROFILE=self.home, HOMEDRIVE=drive, HOMEPATH=rest)
+        else:
+            bindir = os.path.join(self.tmp.name, "bin")
+            os.makedirs(bindir)
+            os.symlink(sys.executable, os.path.join(bindir, "python"))
+            self.env.update(HOME=self.home, PATH=bindir + os.pathsep + os.environ.get("PATH", ""))
+        r = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", "$HOME"],
                            capture_output=True, encoding="utf-8", env=self.env)
+        # 本物の HOME へ入れないため、向けられなければここで止める
+        self.assertEqual(os.path.normcase(r.stdout.strip()), os.path.normcase(self.home), r.stderr)
+        self.hooks_json = os.path.join(self.codex_home, "hooks.json")
+
+    def install(self, *args, script=INSTALL):
+        argv = [POWERSHELL, "-NoProfile", "-NonInteractive"]
+        if os.name == "nt":
+            argv += ["-ExecutionPolicy", "Bypass"]
+        r = subprocess.run(argv + ["-File", script] + list(args), capture_output=True, encoding="utf-8", env=self.env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return r.stdout
 
+
+class InstallHooksJsonTest(_InstallBase):
     def test_writes_once_then_leaves_it(self):
         out = self.install()
-        path = os.path.join(self.codex_home, "hooks.json")
-        with open(path, "rb") as f:
+        with open(self.hooks_json, "rb") as f:
             raw = f.read()
         self.assertFalse(raw.startswith(b"\xef\xbb\xbf"), "BOM が付いている")
         handler = json.loads(raw.decode("utf-8"))["hooks"]["UserPromptSubmit"][0]["hooks"][0]
-        self.assertEqual(handler["statusMessage"], "hirata-codex usage status")
-        self.assertIn("installed  " + path, out)
-        self.assertIn("unchanged  " + path, self.install())
+        self.assertEqual(handler["statusMessage"], MARKER)
+        self.assertIn("installed  " + self.hooks_json, out)
+        again = self.install()
+        self.assertIn("unchanged  " + self.hooks_json, again)
+        self.assertNotIn("is not active yet", again)
+
+    def current_handler(self):
+        """install.ps1 が今作るハンドラー（空の CODEX_HOME に 1 度書かせて読む）。"""
+        self.install()
+        with open(self.hooks_json, encoding="utf-8") as f:
+            handler = json.load(f)["hooks"]["UserPromptSubmit"][0]["hooks"][0]
+        os.remove(self.hooks_json)
+        return handler
+
+    def assert_left_alone(self, text, *, force=False):
+        """hooks.json がそのままで、フックを使える状態と表示しない。"""
+        with open(self.hooks_json, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        out = self.install(*(["-Force"] if force else []))
+        self.assertIn("skipped    " + self.hooks_json, out)
+        self.assertNotIn("unchanged  " + self.hooks_json, out)
+        self.assertIn("is not active yet", out)
+        with open(self.hooks_json, encoding="utf-8", newline="") as f:
+            self.assertEqual(f.read(), text)
+        return out
 
     def test_existing_files_are_not_touched(self):
-        path = os.path.join(self.codex_home, "hooks.json")
-        for content in ("", '{"hooks": {}}'):
+        for content in ("", "null", "{}", '{"hooks": {}}', '{"hooks": {"UserPromptSubmit": [{}]}}', "{broken",
+                        '{"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "other"}]}]}}'):
             with self.subTest(content=content):
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                out = self.install()
-                self.assertIn("skipped    " + path, out)
-                with open(path, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), content)
+                self.assert_left_alone(content)
+
+    def test_a_marker_that_is_not_a_matching_handler_is_not_ready(self):
+        good = self.current_handler()
+
+        def config(*handlers, event="UserPromptSubmit"):
+            return json.dumps({"hooks": {event: [{"hooks": list(handlers)}]}}, ensure_ascii=False)
+
+        cases = [
+            ("古い command", config(dict(good, command='"C:\\old\\python.exe" "C:\\old\\codex_status.py"'))),
+            ("大文字小文字だけ違う command", config(dict(good, command=good["command"].swapcase()))),
+            ("別のイベントの目印", config(good, event="Stop")),
+            ("目印が 2 件", config(good, good)),
+            ("正しい 1 件と type 違いの目印", config(good, dict(good, type="prompt"))),
+            ("type 違い", config(dict(good, type="prompt"))),
+            ("command が文字列でない", config(dict(good, command=["python", "x.py"]))),
+            ("commandWindows あり", config(dict(good, commandWindows=good["command"]))),
+            ("目印が説明の文字列にあるだけ", json.dumps({"description": MARKER, "hooks": {}})),
+        ]
+        for name, text in cases:
+            with self.subTest(name=name):
+                self.assert_left_alone(text)
+        old = '"C:\\old\\python.exe" "C:\\old\\codex_status.py"'
+        out = self.assert_left_alone(config(dict(good, command=old)), force=True)
+        self.assertIn(old, out)  # 差し替える前の command と、新しい command を並べて見せる
+        self.assertIn(good["command"], out)
+
+    def test_the_same_definition_is_left_alone(self):
+        good = self.current_handler()
+        text = json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "other"}]}],
+                                     "UserPromptSubmit": [{"hooks": [good]}]}}, indent=2)
+        with open(self.hooks_json, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        out = self.install()
+        self.assertIn("unchanged  " + self.hooks_json, out)
+        self.assertNotIn("is not active yet", out)
+        with open(self.hooks_json, encoding="utf-8", newline="") as f:
+            self.assertEqual(f.read(), text)
