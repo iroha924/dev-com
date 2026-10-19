@@ -222,5 +222,96 @@ class PowerShellFilesTest(unittest.TestCase):
                             fh.read().decode("ascii")
 
 
+WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
+USES = re.compile(r"^\s*(- )?uses: [\w.-]+/[\w./-]+@[0-9a-f]{40}  # \S+$")
+# YAML のライブラリは使わず（標準ライブラリだけで動かす）、許す書き方を狭く決めて行で見る。アンカー・エイリアス・マージ・
+# フローの書き方は、行で見る検査をすり抜けるので使わない
+NOT_ALLOWED = [("pull_request_target", "pull_request_target を使わない（fork の PR に書き込みの権限と secret が渡る）"),
+               ("secrets.", "secret を使わない"), ("continue-on-error", "continue-on-error で落ちたテストを通さない"),
+               ("<<:", "マージキーを使わない"), ("\t", "タブを使わない")]
+
+
+def workflow_errors(text):
+    """workflow の action の固定と権限の崩れ。違反の説明の一覧（空なら通る）。"""
+    lines = text.splitlines()
+    errors = []
+    for n, line in enumerate(lines, 1):
+        for word, why in NOT_ALLOWED:
+            if word in line:
+                errors.append("%d: %s" % (n, why))
+        if re.search(r"(^|\s)[&*][\w-]+|[:-] [\[{]", line):
+            errors.append("%d: アンカー・エイリアス・フローの書き方を使わない" % n)
+        if re.search(r"\buses\s*:", line) and not USES.match(line):
+            errors.append("%d: uses は owner/repo@<40 桁の SHA>  # <版> の形で固定する" % n)
+        if re.search(r"\bpermissions\s*:", line) and line != "permissions:":
+            errors.append("%d: permissions はトップレベルの 1 か所だけにする（ジョブで上書きしない）" % n)
+    tops = [n for n, line in enumerate(lines) if line == "permissions:"]
+    if len(tops) != 1 or lines[tops[0] + 1:tops[0] + 2] != ["  contents: read"] or \
+            (len(lines) > tops[0] + 2 and lines[tops[0] + 2].startswith(" ")):
+        errors.append("permissions: トップレベルに 1 か所、中身は contents: read だけにする")
+    for n, line in enumerate(lines):
+        if re.match(r"^\s*(- )?uses: actions/checkout@", line):
+            col = line.index("uses:")
+            block = []
+            for nxt in lines[n + 1:]:
+                if nxt.strip() and len(nxt) - len(nxt.lstrip(" ")) < col:
+                    break
+                block.append(nxt)
+            if not any(re.match(r"^\s*persist-credentials: false$", b) for b in block):
+                errors.append("%d: actions/checkout に persist-credentials: false を付ける（トークンを残さない）" % (n + 1))
+    return errors
+
+
+GOOD_WORKFLOW = """name: tests
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  t:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: setup
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: python -m unittest discover -s tests
+"""
+
+
+class WorkflowTest(unittest.TestCase):
+    def test_workflows_pin_actions_and_keep_permissions_read_only(self):
+        files = sorted(f for f in os.listdir(WORKFLOWS) if f.endswith((".yml", ".yaml"))) if os.path.isdir(WORKFLOWS) else []
+        for f in files:
+            with self.subTest(workflow=f):
+                self.assertEqual(workflow_errors(read(os.path.join(WORKFLOWS, f))), [])
+
+    def test_the_check_catches_each_break(self):
+        self.assertEqual(workflow_errors(GOOD_WORKFLOW), [])
+        sha = "3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1"
+        breaks = [
+            ("uses の固定", lambda w: w.replace("checkout@" + sha, "checkout@v7")),
+            ("SHA の後の版", lambda w: w.replace("  # v7.0.1", "")),
+            ("ジョブの permissions", lambda w: w.replace("    runs-on:", "    permissions: write-all\n    runs-on:")),
+            ("トップの permissions", lambda w: w.replace("  contents: read", "  contents: write")),
+            ("permissions の追加", lambda w: w.replace("  contents: read\n", "  contents: read\n  pull-requests: write\n")),
+            ("persist-credentials", lambda w: w.replace("          persist-credentials: false\n", "")),
+            ("secret", lambda w: w.replace("python -m", "TOKEN=${{ secrets.X }} python -m")),
+            ("pull_request_target", lambda w: w.replace("  pull_request:", "  pull_request_target:")),
+            ("continue-on-error", lambda w: w.replace("      - run:", "      - continue-on-error: true\n        run:")),
+            ("アンカー", lambda w: w.replace("    steps:", "    steps: &s")),
+            ("フロー", lambda w: w.replace("      - name: setup\n        uses:", "      - {name: setup, uses:")),
+        ]
+        for name, mutate in breaks:
+            with self.subTest(name=name):
+                broken = mutate(GOOD_WORKFLOW)
+                self.assertNotEqual(broken, GOOD_WORKFLOW)
+                self.assertNotEqual(workflow_errors(broken), [])
+
+
 if __name__ == "__main__":
     unittest.main()

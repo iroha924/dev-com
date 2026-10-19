@@ -31,13 +31,14 @@ base: main
   - 完了条件: `DEV_COM_REQUIRE_POWERSHELL=1 python3.11 -m unittest tests.test_ado_ps1 tests.test_hook_command` → 0 以外で終わる。`python3.11 -m unittest tests.test_powershell` → OK。`python3.11 -m unittest discover -s tests` → OK、skip 23
   - コミット: `test: PowerShell の探し方をまとめ、CI の指定で不在と版違いを失敗にする (T01)`
   - 結果: red は直す前に `DEV_COM_REQUIRE_POWERSHELL=1 python3.11 -m unittest tests.test_ado_ps1 tests.test_hook_command` → Ran 20、OK (skipped=20)、終了コード 0。直した後は同じコマンドが PowerShellError で終了コード 1。`python3.11 -m unittest tests.test_powershell` → OK（5 件）。`python3.11 -m unittest discover -s tests` → 446 件 OK、skipped=23。`DEV_COM_REQUIRE_POWERSHELL=1 python3.11 -m unittest discover -s tests` → test_ado_ps1・test_hook_command・test_powershell の読み込みが失敗し、FAILED (errors=3)
-- [ ] T02: tests/test_layout.py に workflow の固定と権限の検査を足す
+- [x] T02: tests/test_layout.py に workflow の固定と権限の検査を足す
   - 種別: 追加
   - 計画: S3
   - 依存: なし
   - 変更: `tests/test_layout.py`
   - 完了条件: `python3.11 -m unittest tests.test_layout` → OK。崩した workflow の見本（`@v7`、ジョブの `permissions: write-all`、`persist-credentials: false` の欠落、`secrets.X`、`pull_request_target`、`continue-on-error`）をそれぞれ検査に通すと違反が出る
   - コミット: `test: workflow の action の固定と権限を検査する (T02)`
+  - 結果: `python3.11 -m unittest tests.test_layout` → 20 件 OK。WorkflowTest.test_the_check_catches_each_break で、見本の workflow を 11 通り（`@v7`、SHA の後の版の欠落、ジョブの `permissions: write-all`、`contents: write`、権限の追加、`persist-credentials: false` の欠落、`secrets.X`、`pull_request_target`、`continue-on-error`、アンカー、フローの書き方）に崩すと、それぞれ違反が出る。崩す前の見本は違反 0
 
 ## P2: CI を入れ、Windows PowerShell 5.1 と PowerShell 7 で流す
 
