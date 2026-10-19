@@ -54,21 +54,23 @@ base: main
 
 PR と main への push のたびに、両方のジョブで必須のテストが走ったことを CI のログで確かめられる。
 
-- [ ] T03: .github/workflows/tests.yml を足す
+- [x] T03: .github/workflows/tests.yml を足す
   - 種別: 追加
   - 計画: S4
   - 依存: T01（環境変数で必須にしないと、PowerShell が無くても CI が通ってしまう）
   - 変更: `.github/workflows/tests.yml`
-  - 完了条件: `python3.11 -m unittest tests.test_layout` → OK。`gh run view <run> --log` → PR の CI で両ジョブがテストの手順まで進み、`git rev-parse HEAD` が PR の先端と同じ、Windows に PowerShell の絶対パスと版、Ubuntu の負の確かめの手順が版違いで落ちたことが出る
+  - 完了条件: `python3.11 -m unittest tests.test_layout` → OK で、workflow の違反 0。`gh run view <run> --log` → PR の CI で両ジョブが tests の手順まで進み、versions の手順の `git rev-parse HEAD` が PR の先端と同じで、Windows に PowerShell の絶対パスと 5.1 の版が出る
   - コミット: `ci: Windows PowerShell 5.1 と PowerShell 7 で既存のテストを流す (T03)`
-- [ ] T04: 最初の CI で Windows だけで落ちたテストの組み立てを直す（落ちなければ取りやめ）
+  - 結果: `python3.11 -m unittest tests.test_layout` → 21 件 OK、`.github/workflows/tests.yml` の違反 0。PR #18 の run 39185321545 で両ジョブが tests の手順まで進んだ。versions の手順の `git rev-parse HEAD` は両ジョブとも bbd759466aa2bcec864530ab3a6b5ae1b4920470（PR の先端）。Windows は `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.EXE`、5.1.26100.33438、Python 3.11.9。Ubuntu は /usr/bin/pwsh、7.6.6、Python 3.11.17。tests の手順は両ジョブとも失敗し（T04）、負の確かめの手順はまだ走っていない（plan の A4 で確かめる）。ジョブに timeout-minutes: 20 を足した（既定は 6 時間。この回の Windows のジョブは約 2.5 分）
+- [x] T04: 最初の CI で Windows だけで落ちたテストの組み立てを直す（落ちなければ取りやめ）
   - 種別: 修正
   - 計画: S5
   - 依存: T03（Windows で落ちるテストは CI を流すまで分からない）
-  - 変更: `tests/`
+  - 変更: `tests/test_session_report.py`, `tests/test_session_search.py`
   - red: `gh run view <run> --log-failed` → T03 の CI で Windows のジョブだけが落ちたテストと理由
-  - 完了条件: `gh run view <run> --log` → 両ジョブが成功し、期待値の緩和・必須の skip・continue-on-error を足していない
+  - 完了条件: `TZ=UTC python3.11 -m unittest tests.test_session_report tests.test_session_search` → OK（親プロセスの時差がランナーと同じ UTC でも通る）。`python3.11 -m unittest discover -s tests` → OK、skip 23。`git diff main -- tests` に期待値の緩和・必須の skip・continue-on-error が無い
   - コミット: `test: Windows で落ちたテストの組み立てを直す (T04)`
+  - 結果: red は run 39185321545 で、Ubuntu 1 件・Windows 5 件。Ubuntu と Windows の test_week_keeps_the_state_when_the_record_is_unchanged は、CLI の子（TZ を渡す）と同じプロセスの build_week（ランナーは UTC）の digest を比べていた。Windows の test_view_contents・test_input_orders_messages_and_operations は TZ=Asia/Tokyo を C ランタイムが読めず、時刻が 10:12 ではなく 02:12。test_attachments_keep_only_names は JSON の中の \\ を消せず Users が残った。test_run_eval_mixtures_and_home は 8.3 形式の一時フォルダ（RUNNER~1）と realpath の食い違い。直す前の手元で `TZ=UTC python3.11 -m unittest tests.test_session_report` → test_week_keeps_the_state_when_the_record_is_unchanged が FAIL を再現。直した後は `TZ=UTC python3.11 -m unittest tests.test_session_report tests.test_session_search` → 320 件 OK、`python3.11 -m unittest discover -s tests` → 449 件 OK、skip 23。Windows の 3 件は手元で再現できず、CI（plan の A4・A5）で確かめる
 
 ## P3: 文書を CI で確かめた事実に合わせる
 
@@ -86,3 +88,4 @@ docs/notes.md のテストの説明と「確かめていないこと」が、CI 
 - 2026-10-19 / T01 / Codex のタスクごとのレビュー（06c40e8）は指摘なし。全テストは Codex の sandbox で流せず、手元で 446 件 OK を確かめた / 受け取った
 - 2026-10-19 / T02 / Codex のタスクごとのレビュー（68ec44b）が、行で見る検査のすり抜け 4 件と誤検出 1 件を再現した（F1〜F5）。すべて受け入れ / 修正タスク T06 を足して直した
 - 2026-10-19 / T03 / Codex のレビュー（bbd7594）の 1 回目は、AGENTS.md の設定の案内で止まり covered が空だった。非対話の実行と依頼文に書いてやり直し、指摘なし / 受け取った
+- 2026-10-19 / T03, T04 / 完了条件を「PR の CI が通る」から、そのタスクのコミットで確かめられるものに変えた。T03 の前: 負の確かめの手順が版違いで落ちたことが出る、後: Windows に絶対パスと 5.1 の版が出る（負の確かめは A4）。T04 の前: `gh run view <run> --log` → 両ジョブが成功、後: TZ=UTC で手元のテストが通り、期待値を緩めていない（CI の成功は A4・A5）。T04 の変更欄の前: `tests/`、後: 2 ファイル。理由: CI の結果は push の後にしか分からず、チェックを付けるコミットの中で確かめられないため / plan の A4・A5 は変えない

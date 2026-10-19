@@ -14,6 +14,7 @@ jobs:
   # 会社の PC と同じ Windows PowerShell 5.1 で、PowerShell が要るテストを飛ばさずに流す
   windows:
     runs-on: windows-2025
+    timeout-minutes: 20
     env:
       DEV_COM_EXPECT_POWERSHELL: "5.1"
     steps:
@@ -35,6 +36,7 @@ jobs:
   # PowerShell 7 で、POSIX でだけ流す install.ps1 の試験を含めて流す
   ubuntu:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       DEV_COM_REQUIRE_POWERSHELL: "1"
     steps:

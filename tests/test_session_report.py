@@ -121,7 +121,7 @@ class _Base(unittest.TestCase):
         self.home = os.path.join(self.tmp.name, "codex")
         os.makedirs(os.path.join(self.home, "sessions", "2026", "10", "14"))
         self.env = dict(os.environ, CODEX_HOME=self.home, HIRATA_CODEX_DATA=os.path.join(self.tmp.name, "data"),
-                        TZ="Asia/Tokyo")  # 表示の時刻を、流す PC の時差によらず決める
+                        TZ="JST-9")  # 表示の時刻を、流す PC の時差によらず決める（Windows の C ランタイムも読む POSIX の書き方）
 
     def write(self, tid, text, day="2026-10-14"):
         y, m, d = day.split("-")
@@ -330,7 +330,7 @@ class ExtractTest(_Base):
         with open(os.path.join(self.tmp.name, "out", "report.json"), encoding="utf-8") as f:
             text = f.read()
         self.assertNotIn(CANARY, text)
-        self.assertNotIn("Users", text.replace(self.home, ""))
+        self.assertNotIn("Users", text.replace(json.dumps(self.home, ensure_ascii=False)[1:-1], ""))  # JSON の中では \\ が重なる
 
     def test_secrets_are_redacted(self):
         self.write(T1, sample().text())
@@ -1322,8 +1322,8 @@ class WeekTest(_Base):
 
     def test_week_detects_a_record_written_after_extract(self):
         # 抽出の後に同じ会話へ書き足されたら、古い追記を「追記あり」のまま使わない
-        wdir, _ = self.make_week()
-        before = sr.read_json(os.path.join(wdir, "week.json"))
+        self.make_week()
+        before, _ = sr.build_week(self.home, "2026-10-12", "2026-10-18")  # 比べる 2 回とも同じプロセスの時差で作る
         path = next(p for p in sr.ss.rollout_files(self.home) if T1 in p)
         more = Rollout(T1, start="2026-10-12T05:00:00Z").turn("t2").user("u2", "追加条件: まだ失敗しています。完了扱いを取り消してください。")
         with open(path, "a", encoding="utf-8", newline="\n") as f:
@@ -1336,12 +1336,11 @@ class WeekTest(_Base):
         self.assertTrue(any(e.startswith("%s: 週の会話がどのタスクにも入っていない" % T1) for e in sr.check_week(w, week)))
 
     def test_week_keeps_the_state_when_the_record_is_unchanged(self):
-        wdir, _ = self.make_week()
-        before = sr.read_json(os.path.join(wdir, "week.json"))
+        self.make_week()
+        before, before_text = sr.build_week(self.home, "2026-10-12", "2026-10-18")  # 比べる 2 回とも同じプロセスの時差で作る
         week, text = sr.build_week(self.home, "2026-10-12", "2026-10-18")
         self.assertEqual(week["sessions"][0]["state"], "追記あり")
-        self.assertEqual(week["digest"], before["digest"])
-        self.assertEqual(text, open(os.path.join(wdir, "week-input.md"), encoding="utf-8").read())
+        self.assertEqual((week["digest"], text), (before["digest"], before_text))
 
     def test_week_does_not_trust_a_record_it_cannot_check(self):
         self.make_week()
