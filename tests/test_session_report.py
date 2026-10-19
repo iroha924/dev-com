@@ -1353,6 +1353,17 @@ class WeekTest(_Base):
         self.assertEqual(week["sessions"][0]["state"], "元の記録を確かめられない")
         self.assertEqual(sr.build_week_view(week, self.good(week), os.path.join(self.tmp.name, "week"))["missing"][0]["id"], T1)
 
+    def test_week_does_not_trust_a_record_with_a_missing_prefix(self):
+        # revert の前半のファイルが抽出のときから読めない会話は、ハッシュが同じでも最新とは確かめられない
+        r = self.session(T1, "2026-10-12T01:00:00Z")
+        meta = json.loads(r.lines[0])
+        meta["payload"]["history_base"] = {"thread_id": T2, "end_byte_offset": 10}
+        r.lines[0] = json.dumps(meta, ensure_ascii=False)
+        path = self.write(T1, r.text(), day="2026-10-12")
+        report = sr.build_report(path, sr.ss.read_rollout_bytes(path), self.home)
+        self.assertTrue(report["coverage"]["prefix_missing"])
+        self.assertEqual(sr._source_state(report, path, self.home), "元の記録を確かめられない")
+
     def test_unreadable_records_are_reported(self):
         self.write(T1, self.session(T1, "2026-10-12T01:00:00Z").text(), day="2026-10-12")
         real = sr.ss.read_rollout_bytes

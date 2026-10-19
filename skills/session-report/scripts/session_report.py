@@ -2037,9 +2037,11 @@ def _source_state(report, path, home):
     if data is None or not isinstance(stored, list) or not all(isinstance(s, dict) for s in stored):
         return "元の記録を確かめられない"
     _, now, missing = effective_record(path, data, home)
+    if missing:  # revert の前半を読み切れない。抽出のときから同じでも、前半が今の記録と同じかは分からない
+        return "元の記録を確かめられない"
     if [(s.get("size"), s.get("sha256")) for s in stored] == [(s["size"], s["sha256"]) for s in now]:
         return None
-    return "元の記録を確かめられない" if missing else "記録が変わった"
+    return "記録が変わった"
 
 
 def _wi_mentions(report, ann):

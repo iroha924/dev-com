@@ -151,6 +151,7 @@ class SkillLayoutTest(unittest.TestCase):
         notes = read(os.path.join(ROOT, "docs", "notes.md"))
         line = next(l for l in notes.split("## 更新と削除", 1)[1].splitlines() if "$HOME\\.agents\\skills\\` の下" in l)
         self.assertEqual(sorted(re.findall(r"`([\w-]+)`", line.split("の下", 1)[1])), skill_dirs())
+        self.assertEqual(int(re.search(r"の下の (\d+) 個", line).group(1)), len(skill_dirs()))
 
     def test_skill_counts_match(self):
         # 本文に書いた skill の個数が skills/ の数と同じ
