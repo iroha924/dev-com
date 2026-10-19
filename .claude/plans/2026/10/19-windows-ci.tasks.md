@@ -86,13 +86,14 @@ PR と main への push のたびに、両方のジョブで必須のテスト�
 
 docs/notes.md のテストの説明と「確かめていないこと」が、CI で確かめた範囲と未確認の範囲を分けて書いている。
 
-- [ ] T05: docs/notes.md の「テスト」と「確かめていないこと」を直す
+- [x] T05: docs/notes.md の「テスト」と「確かめていないこと」を直す
   - 種別: 変更
   - 計画: S6
   - 依存: T03（書く版と結果は CI のログから取る）
   - 変更: `docs/notes.md`
   - 完了条件: `python3.11 -m unittest tests.test_layout` → OK。`grep -nE "skipped. が 0 件|はテストの対象外" docs/notes.md` → 何も出ない
   - コミット: `docs: テストの説明と確かめていないことを、CI で確かめた範囲に合わせる (T05)`
+  - 結果: `python3.11 -m unittest tests.test_layout` → 21 件 OK。`grep -nE "skipped. が 0 件|はテストの対象外" docs/notes.md` → 何も出ず終了コード 1。書いた版（Windows PowerShell 5.1.26100、Python 3.11）と、Windows で AdoPs1Test 13 件・HookCommandTest 4 件が ok だったことは run 39185321545 のログから取った
 
 ## 記録
 - 2026-10-19 / T01 / Codex のタスクごとのレビュー（06c40e8）は指摘なし。全テストは Codex の sandbox で流せず、手元で 446 件 OK を確かめた / 受け取った
