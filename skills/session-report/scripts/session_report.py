@@ -1968,16 +1968,21 @@ def _local_date(ts):
     return t.astimezone().strftime("%Y-%m-%d")
 
 
-def owner_days(path, data, home):
-    """持ち主の発言のあったローカルの日付の集合。revert で前半が別のファイルにある会話は、前半もつないで見る。"""
+def activity_days(path, data, home):
+    """(持ち主の発言のあったローカルの日付の集合, 記録の最初の日付, 最後の日付)。最初と最後は Codex の答えや操作も含む。
+    revert で前半が別のファイルにある会話は、前半もつないで見る。添付だけの発言も、report.json と同じく持ち主の発言に数える
+    （parse_rollout は本文の無い発言を返さない）。"""
     full, _, _ = effective_record(path, data, home)
     _, messages, _ = ss.parse_rollout(path, full)
-    return {d for d in (_local_date(m["ts"]) for m in messages if m["kind"] == "user") if d}
+    scan = scan_rollout(full)
+    stamps = [m["ts"] for m in messages if m["kind"] == "user"] + [a["ts"] for a in scan["attachments"].values()]
+    return {d for d in map(_local_date, stamps) if d}, _local_date(scan["first_ts"]), _local_date(scan["last_ts"])
 
 
 def week_sessions(home, since, until, with_unreadable=False, include_exec=False):
-    """期間（ローカルの日付、両端を含む）に持ち主の発言がある会話の (会話の ID, 始まり, パス, 期間の外にも発言があるか)。
-    再開した会話は同じファイルに続くので、始まった日ではなく発言の日で選ぶ（持ち主の発言が無い会話は始まった日）。
+    """期間（ローカルの日付、両端を含む）に持ち主の発言がある会話の (会話の ID, 始まり, パス, 期間の外にも続くか)。
+    再開した会話は同じファイルに続くので、始まった日ではなく持ち主の発言の日で選ぶ。持ち主の発言の無い会話は入れない。
+    期間の外にも続くかは、持ち主の発言と、Codex の答えや操作を含む記録の最初と最後の日付で見る。
     子のエージェントの会話と、include_exec でなければ codex exec の実行（人が返事をしない自動の実行。source が exec）は除く。
     同じ会話のファイルが複数あれば、最後に書かれたものを使う。with_unreadable なら、読めなかった記録のパスも返す
     （どの日の会話かも分からないので、黙って落とさずに知らせる）。"""
@@ -2008,9 +2013,18 @@ def week_sessions(home, since, until, with_unreadable=False, include_exec=False)
             latest[tid] = (first_ts, p)  # 後に書かれたファイルで上書き
     found = []
     for tid, (first_ts, p) in latest.items():
-        days = owner_days(p, ss.read_rollout_bytes(p), home) or {d for d in [_local_date(first_ts)] if d}
+        try:
+            data = ss.read_rollout_bytes(p)  # 最初に読んだ後に、移動や削除で読めなくなっていることもある
+        except Exception:
+            data = None
+        if data is None:
+            unreadable.append(p)
+            continue
+        days, first_day, last_day = activity_days(p, data, home)
         if any(since <= d <= until for d in days):
-            found.append((tid, first_ts, p, any(not since <= d <= until for d in days)))
+            outside = any(not since <= d <= until for d in days) or bool(first_day and first_day < since) or \
+                bool(last_day and last_day > until)
+            found.append((tid, first_ts, p, outside))
     sessions = sorted(found, key=lambda x: (x[1] or "", x[0]))
     return (sessions, unreadable) if with_unreadable else sessions
 
@@ -2099,7 +2113,8 @@ def build_week(home, since, until, include_exec=False):
             row["artifacts"] = [{"kind": a["kind"], "id": a["id"], "title": a["title"], "status": a["status"]} for a in report["artifacts"]]
         if ann:
             eff = effective_statuses(ann, overrides)
-            in_period = _in_period(report, _local_date(first_ts), since, until)
+            # revert でつないだ会話の始まりは、選んだ後半のファイルではなく、つないだ記録の始まり
+            in_period = _in_period(report, _local_date(report["session"]["started"] or first_ts), since, until)
             items = {"summary": ("（会話全体の要約）" if outside else "") + ann["summary"]["text"]}
             for r in filter(in_period, ann["requests"]):
                 items[r["id"]] = "依頼（%s）: %s" % (eff[r["id"]]["status"] if r["lifecycle"] != "取り下げ" else "取り下げ", r["text"])
