@@ -802,7 +802,7 @@ python -m unittest discover -s tests
 - CI（`.github/workflows/tests.yml`）が、PR と main への push のたびに、windows-2025（Windows PowerShell 5.1、Python 3.11）と ubuntu-24.04（PowerShell 7、Python 3.11）で全部のテストを流す。PR では PR の先端のコミットを確かめ、ログの `git rev-parse HEAD` に出る。
 - PowerShell が要るテスト（`tests/test_ado_ps1.py`、`tests/test_hook_command.py`）は、`powershell`（Windows PowerShell 5.1）があればそれを、無ければ `pwsh` を使い、どちらも無ければ飛ばす（`tests/powershell.py`）。手元で流すときはこれでよい。
 - 飛ばしたテストで通ったことにしないため、CI では環境変数で必須にする。`DEV_COM_REQUIRE_POWERSHELL=1` なら PowerShell が無いと読み込みの時点で落ち、`DEV_COM_EXPECT_POWERSHELL=5.1` なら版の Major.Minor が 5.1 でないか、版を取れないと落ちる。
-  5.1 で確かめたかは、skip の件数ではなく Windows のジョブが成功したことで見る。Windows では `test_hook_command.py` の 1 件と `InstallHooksJsonTest` の 2 件を設計どおり飛ばすので、skip は 0 件にならない。
+  5.1 で確かめたかは、skip の件数ではなく Windows のジョブが成功したことで見る。Windows でも `test_hook_command.py` の 1 件（POSIX でだけ作るフォルダの試験）などを設計どおり飛ばすので、skip は 0 件にならない。Ubuntu では Windows だけの `UnblockTest` を飛ばす。
 - `install.ps1` は、一時フォルダの HOME で流して確かめる（`tests/test_hook_command.py`。流す前に、子の PowerShell の `$HOME` がその一時フォルダになったことを確かめ、違えば本物の HOME では流さずに落ちる）。`hooks.json` の扱いは Ubuntu（PowerShell 7）と Windows（5.1）の両方、`Unblock-File` の対象と `-Force` の退避と `-WhatIf` は Windows で確かめる。
   Python から Windows PowerShell 5.1 を起動するときは、環境から `PSModulePath` を消す。PowerShell 7 から Python を挟んで起動すると PowerShell 7 のモジュールのパスが残り、`Microsoft.PowerShell.Utility` のコマンドが見つからなくなる（about_PSModulePath の「Starting Windows PowerShell from PowerShell 7」。ターミナルの PowerShell 7 から `powershell -File` で直接起動するときは起きない）。
   `-WhatIf` は何を置くかを見るだけで、コピーや退避が正しく動くかの検査の代わりにはならない。

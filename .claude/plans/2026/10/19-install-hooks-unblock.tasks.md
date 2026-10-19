@@ -110,6 +110,15 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - コミット: `fix(install): hooks.json の配列の値を展開せず、-Confirm で中の操作を聞き直さず、中身の比べ方を .NET の SHA256 にする (T08, T09, T10)`
   - 結果: red は上のとおり run 39191767307 で実測。Get-FileSha256 を足し、T07 の `$WhatIfPreference = $false` は消した。`grep -n "Get-FileHash" install.ps1` → 53 行目のコメントだけ。`grep -c "WhatIfPreference = " install.ps1` → 0
 
+- [x] T11: hooks.json の目印を、配列の階層の中でだけ探し、command_windows の欄も要確認にする
+  - 種別: 修正
+  - 計画: S2
+  - 依存: T08（直す読み方が要る）
+  - 変更: `install.ps1`
+  - red: `gh run view 39193337214 --log` → 両ジョブで、command_windows のあるハンドラー、ハンドラーの欄が配列でない、イベントの欄が配列でない、の 3 ケースが skipped ではなく unchanged と出て落ちる
+  - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。両ジョブでの成功は plan の A2 で見る
+  - コミット: `fix(install): hooks.json の目印を配列の中でだけ探し、command_windows も要確認にする (T11, T12)`
+  - 結果: red は上のとおり run 39193337214 で実測。Find-MarkedHandlers は UserPromptSubmit とその中の hooks が配列のときだけ探す。plain の判定に command_windows の欄が無いことを足した。`python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（手元）
 ## P3: 文書を合わせる
 
 install.ps1 の説明と docs/notes.md が、直した動きと確かめた範囲を書いている。
@@ -123,6 +132,16 @@ install.ps1 の説明と docs/notes.md が、直した動きと確かめた範�
   - コミット: `docs: install.ps1 の hooks.json と Unblock-File の動きと、確かめた範囲を書く (T05)`
   - 結果: `python3.11 -m unittest tests.test_layout` → 21 件 OK。`grep -n "Windows の \$HOME は環境変数で変えられない" tests/test_hook_command.py` → 何も出ず終了コード 1（T01 で skip の理由ごと消えている）。install.ps1 の冒頭の説明と docs/notes.md の hooks.json・Unblock-File・テスト・確かめていないこと を直した。install.ps1 は ASCII だけ
 
+- [x] T12: docs/notes.md の、Windows で InstallHooksJsonTest を飛ばすという古い説明を直す
+  - 種別: 修正
+  - 計画: S4
+  - 依存: T05（直す文書が要る）
+  - 変更: `docs/notes.md`
+  - red: `grep -n "InstallHooksJsonTest\` の 2 件を設計どおり飛ばす" docs/notes.md` → 805 行目に出る（Windows でも流すようにしたので誤り）
+  - 完了条件: `grep -n "InstallHooksJsonTest\` の 2 件を設計どおり飛ばす" docs/notes.md` → 何も出ない。`python3.11 -m unittest tests.test_layout` → OK
+  - コミット: `fix(install): hooks.json の目印を配列の中でだけ探し、command_windows も要確認にする (T11, T12)`
+  - 結果: `grep -n "InstallHooksJsonTest\` の 2 件を設計どおり飛ばす" docs/notes.md` → 直す前は 805 行目に出た（全差分のレビューの F3）、直した後は何も出ず終了コード 1。`python3.11 -m unittest tests.test_layout` → 21 件 OK
+
 ## 記録
 - 2026-10-19 / T01 / 完了条件の前: skip の件数は今と同じ、後: 今の 23 件に足した PowerShell の要る試験の数を足した件数。理由: PowerShell の要る試験を足すと、PowerShell の無い手元では skip が増えるため / plan は変えない
 - 2026-10-19 / T01 / 1012042 の CI（run 39189958694）: Ubuntu は #6 の目印のケースだけが意図どおり落ちた。Windows は `$HOME` の assert は通ったが、2 回目の install.ps1 が `Get-FileHash` を見つけられず止まり、直す前でも通るはずのケースまで落ちた / 試験の準備に、子の PowerShell で Get-FileHash が見つかるかの確かめを足し、見つからなければ試験の環境と元の環境の結果と PSModulePath を出して止めるようにした（T02 のコミットに入れた）。原因を確かめてから進め方を決める
@@ -133,3 +152,4 @@ install.ps1 の説明と docs/notes.md が、直した動きと確かめた範�
 - 2026-10-19 / T04 / Codex のタスクごとのレビュー（316b761）が、-Confirm で中の操作を断っても成功の結果を返す欠陥を読みで見つけた（F1）。受け入れ / 修正タスク T09 で直した。断る操作は CI で流せないので red は確かめていない
 - 2026-10-19 / T08, T09, T10 / Codex のタスクごとのレビュー（92a98f2）は指摘なし。CI（run 39192500270）で両ジョブ成功 / 受け取った
 - 2026-10-19 / T05 / 文書だけのタスクなので、タスクごとのレビューは省いた（全差分のレビューで見る）
+- 2026-10-19 / 全体 / Codex の全差分のレビュー（a0e3be1..bc9c809）が、command_windows の見落とし（F1）、配列でない欄の見落とし（F2）、notes.md の古い説明（F3）を読みで見つけた。すべて受け入れ / 試験を足して CI で red を確かめ（run 39193337214）、修正タスク T11・T12 で直した

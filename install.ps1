@@ -177,11 +177,14 @@ function Get-JsonProperty($object, [string]$name) {
 function Find-MarkedHandlers($config, [string]$marker) {
     # Every handler under hooks.UserPromptSubmit[].hooks[] whose statusMessage is the marker, before checking its shape,
     # so that a well-formed handler next to a broken one is seen as a duplicate.
+    # Codex reads both levels only as arrays, so a single object there is not a handler Codex would run.
     $found = @()
     $groups = Get-JsonProperty (Get-JsonProperty $config 'hooks') 'UserPromptSubmit'
-    foreach ($group in @(if ($null -ne $groups) { $groups })) {
+    if ($groups -isnot [array]) { return , $found }
+    foreach ($group in $groups) {
         $handlers = Get-JsonProperty $group 'hooks'
-        foreach ($handler in @(if ($null -ne $handlers) { $handlers })) {
+        if ($handlers -isnot [array]) { continue }
+        foreach ($handler in $handlers) {
             $status = Get-JsonProperty $handler 'statusMessage'
             if ($status -is [string] -and [string]::Equals($status, $marker, [StringComparison]::Ordinal)) { $found += , $handler }
         }
@@ -227,9 +230,11 @@ if (-not $hookCommand) {
         $type = Get-JsonProperty $handler 'type'
         $command = Get-JsonProperty $handler 'command'
         $plain = ($type -is [string]) -and [string]::Equals($type, 'command', [StringComparison]::Ordinal) -and
-            ($command -is [string]) -and -not $handler.PSObject.Properties['commandWindows']
+            ($command -is [string]) -and -not $handler.PSObject.Properties['commandWindows'] -and
+            -not $handler.PSObject.Properties['command_windows']
         if (-not $plain) {
-            # commandWindows overrides command on Windows; this installer never writes it, so a person added it.
+            # commandWindows (also read as command_windows) overrides command on Windows; this installer never
+            # writes it, so a person added it.
             Write-Host "skipped    $hooksJson  (the hirata-codex handler is not a plain command handler; check its type, command and commandWindows, then make it):"
             Write-Host $handlerLine
             $script:skipped++
