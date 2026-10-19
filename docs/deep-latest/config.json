@@ -1,0 +1,8 @@
+{
+  "runner": "claude",
+  "hosts": ["codex"],
+  "allow": ["AGENTS.md", "skills/**", "agents/**", "config/**"],
+  "markdown_body": true,
+  "default_branch": "main",
+  "ci_required": false
+}
