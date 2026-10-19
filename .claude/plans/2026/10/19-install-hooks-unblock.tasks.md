@@ -70,6 +70,15 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`git diff HEAD~1 --stat` → 変えたのは install.ps1 と tasks だけ。Windows のジョブでの成功は plan の A2 で見る
   - コミット: `fix(install): Unblock-File を今回入れた・一致した・置き換えた skill の配布物のファイルに限る (T04)`
 
+- [ ] T07: Windows PowerShell 5.1 の -WhatIf で、中身を比べる Get-FileHash に -WhatIf が効かないようにする
+  - 種別: 修正
+  - 計画: S5
+  - 依存: T02（直す前に落ちる -WhatIf の試験が要る）
+  - 変更: `install.ps1`
+  - red: `gh run view 39190779796 --log` → Windows の test_whatif_changes_nothing で、install.ps1 -Force -WhatIf が `The property 'Hash' cannot be found on this object` で終了コード 1
+  - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`git diff HEAD~1 --stat` → 変えたのは install.ps1 と tasks だけ。Windows のジョブでの成功は plan の A2 で見る
+  - コミット: `fix(install): -WhatIf でも中身の比べ方が Get-FileHash の値を受け取れるようにする (T07)`
+
 ## P3: 文書を合わせる
 
 install.ps1 の説明と docs/notes.md が、直した動きと確かめた範囲を書いている。
@@ -85,3 +94,5 @@ install.ps1 の説明と docs/notes.md が、直した動きと確かめた範�
 ## 記録
 - 2026-10-19 / T01 / 完了条件の前: skip の件数は今と同じ、後: 今の 23 件に足した PowerShell の要る試験の数を足した件数。理由: PowerShell の要る試験を足すと、PowerShell の無い手元では skip が増えるため / plan は変えない
 - 2026-10-19 / T01 / 1012042 の CI（run 39189958694）: Ubuntu は #6 の目印のケースだけが意図どおり落ちた。Windows は `$HOME` の assert は通ったが、2 回目の install.ps1 が `Get-FileHash` を見つけられず止まり、直す前でも通るはずのケースまで落ちた / 試験の準備に、子の PowerShell で Get-FileHash が見つかるかの確かめを足し、見つからなければ試験の環境と元の環境の結果と PSModulePath を出して止めるようにした（T02 のコミットに入れた）。原因を確かめてから進め方を決める
+- 2026-10-19 / A1 / 直す前のコード（4fef51a、run 39190779796）: 両ジョブで #6 の目印の 9 ケースが unchanged と出る今の判定で落ちた。Windows で #7 の test_only_installed_or_matching_package_files_are_unblocked が、利用者の cache.pyc の印が消えて落ちた。test_force_unblocks_the_new_copy_and_keeps_the_backup_marked は今のコードでも通った（守りの試験） / red を記録した
+- 2026-10-19 / T07 / 同じ run で test_whatif_changes_nothing が install.ps1 自体の -WhatIf の不具合で落ちた。持ち主が同じ PR で直す案を選んだ / plan に S5 を足し、修正タスク T07 を足した

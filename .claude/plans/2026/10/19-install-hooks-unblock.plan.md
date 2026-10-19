@@ -89,6 +89,7 @@ approved_at: 2026-10-19
 - S2: #6 の hooks.json の判定を直す
 - S3: #7 の Install-One の結果と Unblock-File の対象を直す
 - S4: 文書と skip の理由を直す
+- S5: Windows PowerShell 5.1 の -WhatIf で、中身を比べる Get-FileHash が値を返さず install.ps1 が止まる不具合を直す（2026-10-19 に持ち主が追加）
 
 ## 完了条件
 
@@ -108,3 +109,4 @@ approved_at: 2026-10-19
 なし
 
 ## 変更履歴
+- 2026-10-19 / S5 を足した / Windows の -WhatIf の試験で、入れ先に同名の skill があると Get-FileHash にも -WhatIf が効いて `The property 'Hash' cannot be found` で止まる既存の不具合が見つかった（run 39190779796） / Go 済み（持ち主が同じ PR で直す案を選んだ）
