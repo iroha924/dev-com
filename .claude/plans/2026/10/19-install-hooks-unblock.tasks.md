@@ -71,7 +71,7 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`git diff HEAD~1 --stat` → 変えたのは install.ps1 と tasks だけ。Windows のジョブでの成功は plan の A2 で見る
   - コミット: `fix(install): Unblock-File を今回入れた・一致した・置き換えた skill の配布物のファイルに限る (T04)`
 
-- [ ] T07: Windows PowerShell 5.1 の -WhatIf で、中身を比べる Get-FileHash に -WhatIf が効かないようにする
+- [x] T07: Windows PowerShell 5.1 の -WhatIf で、中身を比べる Get-FileHash に -WhatIf が効かないようにする
   - 種別: 修正
   - 計画: S5
   - 依存: T02（直す前に落ちる -WhatIf の試験が要る）
@@ -79,6 +79,7 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - red: `gh run view 39190779796 --log` → Windows の test_whatif_changes_nothing で、install.ps1 -Force -WhatIf が `The property 'Hash' cannot be found on this object` で終了コード 1
   - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`git diff HEAD~1 --stat` → 変えたのは install.ps1 と tasks だけ。Windows のジョブでの成功は plan の A2 で見る
   - コミット: `fix(install): -WhatIf でも中身の比べ方が Get-FileHash の値を受け取れるようにする (T07)`
+  - 結果: red は run 39190779796 の test_whatif_changes_nothing で実測。Get-TreeHash の中だけ `$WhatIfPreference = $false` にした（関数の中の変数なので、呼び出し元の -WhatIf は変わらない）。`python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（手元）。Windows での結果は plan の A2 で見る
 
 ## P3: 文書を合わせる
 

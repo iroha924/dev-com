@@ -50,6 +50,9 @@ function Get-SourceFiles([string]$root) {
 }
 
 function Get-TreeHash([string]$root) {
+    # Reading is not a change: under -WhatIf, Windows PowerShell 5.1's Get-FileHash would only report what it
+    # would do and return nothing.
+    $WhatIfPreference = $false
     $lines = foreach ($rel in (Get-SourceFiles $root)) {
         if ($rel -eq '') { $file = $root } else { $file = Join-Path $root $rel }
         $rel.Replace('\', '/') + '|' + (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
