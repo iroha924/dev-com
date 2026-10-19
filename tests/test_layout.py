@@ -229,11 +229,12 @@ KEY_LINE = re.compile(r"^( *)(- )?([A-Za-z0-9_-]+):(?: (.+))?$")
 ITEM_LINE = re.compile(r"^( *)- ([A-Za-z0-9_./-]+)$")
 PLAIN_VALUE = re.compile(r"""^(?:"[^"\\]*"|[^\s&*!%@`'"|>\[{\\#][^\\]*)$""")
 BLOCK_SCALAR = {"|", "|-", ">", ">-"}
-USES = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}  # \S+$")
+# owner/repo だけ。サブパスや . で始まる区切りは、actions/checkout/@ のように同じ action を別の綴りで指せるので許さない
+USES = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*@[0-9a-f]{40}  # \S+$")
 FORBIDDEN = [(re.compile(r"pull_request_target", re.I), "pull_request_target を使わない（fork の PR に書き込みの権限と secret が渡る）"),
              (re.compile(r"\bsecrets\b", re.I), "secret を使わない"),
              (re.compile(r"continue-on-error", re.I), "continue-on-error で落ちたテストを通さない"),
-             (re.compile(r"<<"), "マージキーを使わない"), (re.compile(r"\t"), "タブを使わない")]
+             (re.compile(r"\t"), "タブを使わない")]
 
 
 def workflow_keys(text):
@@ -250,6 +251,8 @@ def workflow_keys(text):
             block = None
         if not line.strip() or line.lstrip(" ").startswith("#"):
             continue
+        if "<<" in line:  # run: | の中のシェルのヒアドキュメントは除いて、YAML の構造の行でだけ見る
+            errors.append("%d: マージキーを使わない" % n)
         m = KEY_LINE.match(line)
         if m:
             col = len(m.group(1)) + (2 if m.group(2) else 0)
@@ -304,7 +307,7 @@ def workflow_errors(text):
             errors.append("%d: uses は owner/repo@<40 桁の SHA>  # <版> の形で固定する" % n)
         if key == "permissions" and (col != 0 or value is not None):
             errors.append("%d: permissions はトップレベルの 1 か所だけにする（ジョブで上書きしない）" % n)
-        if key == "uses" and (value or "").lower().startswith("actions/checkout@"):
+        if key == "uses" and (value or "").lower().split("@")[0] == "actions/checkout":
             with_i = next((keys.index(k) for k in step_siblings(keys, i) if k[2] == "with"), None)
             if with_i is None or ("persist-credentials", "false") not in [(k[2], k[3]) for k in children(keys, with_i)]:
                 errors.append("%d: actions/checkout の with: に persist-credentials: false を付ける（トークンを残さない）" % n)
@@ -367,6 +370,7 @@ class WorkflowTest(unittest.TestCase):
             ("文字列の中の persist-credentials", lambda w: w.replace(
                 "          persist-credentials: false\n",
                 "          persist-credentials: true\n        name: |\n          persist-credentials: false\n")),
+            ("末尾の / の checkout", lambda w: w.replace("actions/checkout@", "actions/checkout/@").replace("          persist-credentials: false\n", "")),
             ("値の下の深い行", lambda w: w.replace("  contents: read\n", "  contents: read\n    actions: write\n")),
             ("大文字の checkout", lambda w: w.replace("actions/checkout@", "Actions/Checkout@").replace("          persist-credentials: false\n", "")),
         ]
@@ -379,7 +383,9 @@ class WorkflowTest(unittest.TestCase):
     def test_the_check_accepts_plain_shell_and_comments(self):
         # run の中のシェルの * や、権限の中のコメントを、YAML の書き方の違反と取り違えない
         for name, w in (("シェルの *", GOOD_WORKFLOW.replace("      - run: python", "      - run: echo *test.py && python")),
-                        ("権限の中のコメント", GOOD_WORKFLOW.replace("  contents: read\n", "  contents: read\n  # 読むだけ\n"))):
+                        ("権限の中のコメント", GOOD_WORKFLOW.replace("  contents: read\n", "  contents: read\n  # 読むだけ\n")),
+                        ("run の中のヒアドキュメント", GOOD_WORKFLOW.replace("      - run: python -m unittest discover -s tests\n",
+                                                                     "      - run: |\n          cat <<EOF\n          hello\n          EOF\n"))):
             with self.subTest(name=name):
                 self.assertEqual(workflow_errors(w), [])
 

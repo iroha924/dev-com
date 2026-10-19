@@ -50,6 +50,16 @@ base: main
   - コミット: `test: workflow の検査を許す書き方だけの文法にし、引用符やエスケープですり抜けないようにする (T06)`
   - 結果: red は上のとおり failures=10 を実測。直した後 `python3.11 -m unittest tests.test_layout` → 21 件 OK。`workflow_errors` は `.github/workflows/tests.yml` に対して []
 
+- [x] T07: uses を owner/repo@<SHA> だけにして末尾の / や . の区切りの checkout ですり抜けないようにし、マージキーの検査を run: | の中のシェルに当てない
+  - 種別: 修正
+  - 計画: S3
+  - 依存: T06（直す文法が要る）
+  - 変更: `tests/test_layout.py`
+  - red: `python3.11 -m unittest tests.test_layout.WorkflowTest` → 直す前は、`actions/checkout/@` で persist-credentials を消した見本で違反が出ず、run: | の中の `cat <<EOF` の見本でマージキーの違反が出て、failures=2
+  - 完了条件: `python3.11 -m unittest tests.test_layout` → OK。`actions/checkout/./@`・`actions/./checkout@`・`./actions/checkout@`・`actions/checkout/sub@` はどれも違反になり、`.github/workflows/tests.yml` は違反 0
+  - コミット: `test: uses を owner/repo@<SHA> だけにし、マージキーの検査を run の中のシェルに当てない (T07)`
+  - 結果: red は上のとおり failures=2 を実測。直した後 `python3.11 -m unittest tests.test_layout` → 21 件 OK。4 つの別の綴りはどれも違反、構造の行の `<<` はマージキーの違反、`.github/workflows/tests.yml` は []
+
 ## P2: CI を入れ、Windows PowerShell 5.1 と PowerShell 7 で流す
 
 PR と main への push のたびに、両方のジョブで必須のテストが走ったことを CI のログで確かめられる。
@@ -89,3 +99,4 @@ docs/notes.md のテストの説明と「確かめていないこと」が、CI 
 - 2026-10-19 / T02 / Codex のタスクごとのレビュー（68ec44b）が、行で見る検査のすり抜け 4 件と誤検出 1 件を再現した（F1〜F5）。すべて受け入れ / 修正タスク T06 を足して直した
 - 2026-10-19 / T03 / Codex のレビュー（bbd7594）の 1 回目は、AGENTS.md の設定の案内で止まり covered が空だった。非対話の実行と依頼文に書いてやり直し、指摘なし / 受け取った
 - 2026-10-19 / T03, T04 / 完了条件を「PR の CI が通る」から、そのタスクのコミットで確かめられるものに変えた。T03 の前: 負の確かめの手順が版違いで落ちたことが出る、後: Windows に絶対パスと 5.1 の版が出る（負の確かめは A4）。T04 の前: `gh run view <run> --log` → 両ジョブが成功、後: TZ=UTC で手元のテストが通り、期待値を緩めていない（CI の成功は A4・A5）。T04 の変更欄の前: `tests/`、後: 2 ファイル。理由: CI の結果は push の後にしか分からず、チェックを付けるコミットの中で確かめられないため / plan の A4・A5 は変えない
+- 2026-10-19 / T06 / Codex のタスクごとのレビュー（712d288）が、末尾の / の checkout のすり抜けと、run の中のヒアドキュメントの誤検出を再現した。どちらも受け入れ / 修正タスク T07 を足して直した
