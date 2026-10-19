@@ -1229,7 +1229,8 @@ class WeekTest(_Base):
         self.write(T3, self.session(T3, "2026-10-20T01:00:00Z").text(), day="2026-10-20")  # 期間の外
         self.write(T4, Rollout(T4, source={"subagent": {"thread_spawn": {}}}, start="2026-10-12T02:00:00Z").text(), day="2026-10-12")
         self.write("55555555-5555-4555-8555-555555555555", Rollout("55555555-5555-4555-8555-555555555555", source="exec",
-                   start="2026-10-12T03:00:00Z").text(), day="2026-10-12")  # codex exec の実行は入れない
+                   start="2026-10-12T03:00:00Z").turn("t1").user("u1", "exec の依頼文").end("x").text(),
+                   day="2026-10-12")  # codex exec の実行は入れない（依頼文は持ち主の発言として残る）
         # T1 だけ会話ごとのレポートを作る
         rdir = os.path.join(self.tmp.name, "data", "session-report", T1)
         code, out, err = self.run_cli("extract", T1, "--out", rdir)
@@ -1333,6 +1334,124 @@ class WeekTest(_Base):
         finally:
             os.path.relpath = real
         self.assertTrue(view["tasks"][0]["sessions"][0]["href"].startswith("file://"))
+
+    def resumed(self, tid, days):
+        """days の各 UTC の時刻に、持ち主の発言 1 つと答えのターンを足していく 1 本の会話（再開も同じファイルに続く）。"""
+        r = Rollout(tid, start=days[0])
+        for n, start in enumerate(days, 1):
+            r.now = datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
+            r.turn("t%d" % n).user("u%d" % n, "%d 回目の依頼" % n).agent("a%d" % n, "%d 回目の答え" % n).end("答え")
+        self.write(tid, r.text(), day=days[0][:10])
+        return r
+
+    def annotate(self, tid, decisions):
+        """会話ごとのレポートを作り、decisions（{決定の ID: 根拠の発言の ID}）の追記を書く。"""
+        rdir = os.path.join(self.tmp.name, "data", "session-report", tid)
+        code, out, err = self.run_cli("extract", tid, "--out", rdir)
+        self.assertEqual(code, 0, err)
+        report = sr.read_json(os.path.join(rdir, "report.json"))
+        ev = [{"ref": "u1", "quote": "依頼"}]
+        users = [m["id"] for m in report["messages"] if m["kind"] == "user"]
+        ann = {"format_version": "1", "source_digest": report["digest"], "summary": {"text": "会話の要約", "evidence": ev},
+               "chapters": [], "questions": [], "lessons": [], "command_notes": [], "issues": [], "requests": [],
+               "owner_messages": {u: [d for d, at in decisions.items() if at == u] for u in users},
+               "decisions": [{"id": d, "text": "決定 %s" % d, "at": at, "by": "持ち主", "why": "", "alternatives": [],
+                              "supersedes": None, "evidence": [{"ref": at, "quote": "依頼"}]} for d, at in decisions.items()]}
+        with open(os.path.join(rdir, "annotations.json"), "w", encoding="utf-8") as f:
+            json.dump(ann, f, ensure_ascii=False)
+        self.assertEqual(sr.check_annotations(ann, report), [])
+
+    def week_of(self, since, until):
+        wdir = os.path.join(self.tmp.name, "week-%s" % since)
+        code, out, err = self.run_cli("week", "--since", since, "--until", until, "--dir", wdir)
+        self.assertEqual(code, 0, err)
+        week = sr.read_json(os.path.join(wdir, "week.json"))
+        with open(os.path.join(wdir, "week-input.md"), encoding="utf-8") as f:
+            return {s["id"]: s for s in week["sessions"]}, f.read()
+
+    def test_a_resumed_session_is_in_each_week_it_was_worked_on_with_only_that_weeks_items(self):
+        # 先週の金曜に始めて今週の月曜に再開した会話は、両方の週に出て、それぞれの週の項目だけを持つ（#13）
+        self.resumed(T1, ["2026-10-09T01:00:00Z", "2026-10-12T01:00:00Z"])
+        self.annotate(T1, {"D1": "u1", "D2": "u2"})
+        self.resumed(T2, ["2026-10-15T01:00:00Z", "2026-10-19T01:00:00Z"])  # 今週始めて翌週も続く
+        self.resumed(T3, ["2026-10-05T01:00:00Z"])  # 先週だけ
+        last, last_text = self.week_of("2026-10-05", "2026-10-11")
+        this, this_text = self.week_of("2026-10-12", "2026-10-18")
+        nxt, _ = self.week_of("2026-10-19", "2026-10-25")
+        self.assertEqual((sorted(last), sorted(this), sorted(nxt)), (sorted([T1, T3]), sorted([T1, T2]), [T2]))
+        self.assertEqual((sorted(last[T1]["items"]), sorted(this[T1]["items"])), (["D1", "summary"], ["D2", "summary"]))
+        self.assertIn("[%s:D2]" % T1, this_text)
+        self.assertNotIn("[%s:D1]" % T1, this_text)
+        self.assertTrue(this[T1]["outside_period"] and last[T1]["outside_period"])
+        self.assertFalse(last[T3]["outside_period"])
+        self.assertIn("会話全体の要約", this_text)
+
+    def test_the_week_boundary_is_the_local_midnight(self):
+        # TZ=JST-9 では、UTC 15:00 が日付の境目
+        self.resumed(T1, ["2026-10-11T14:30:00Z"])  # 10/11 23:30（先週）
+        self.resumed(T2, ["2026-10-11T15:30:00Z"])  # 10/12 00:30（今週）
+        this, _ = self.week_of("2026-10-12", "2026-10-18")
+        self.assertEqual(sorted(this), [T2])
+
+    def test_an_attachment_only_message_counts_as_the_owner_working(self):
+        r = Rollout(T1, start="2026-10-09T01:00:00Z").turn("t1").user("u1", "金曜の依頼").agent("a1", "答え").end("答え")
+        r.now = datetime.datetime(2026, 10, 12, 1, 0)
+        r.turn("t2").item({"type": "UserMessage", "id": "u2", "content": [{"type": "local_image", "path": "C:\\img\\x.png"}]})
+        r.agent("a2", "画像を見た").end("画像を見た")
+        self.write(T1, r.text(), day="2026-10-09")
+        this, _ = self.week_of("2026-10-12", "2026-10-18")
+        self.assertEqual(sorted(this), [T1])
+
+    def test_a_session_without_owner_messages_is_not_in_the_week(self):
+        r = Rollout(T1, start="2026-10-12T01:00:00Z").turn("t1").agent("a1", "持ち主の発言の無い記録").end("x")
+        self.write(T1, r.text(), day="2026-10-12")
+        this, _ = self.week_of("2026-10-12", "2026-10-18")
+        self.assertEqual(sorted(this), [])
+
+    def test_a_record_that_becomes_unreadable_is_reported_not_raised(self):
+        self.resumed(T1, ["2026-10-12T01:00:00Z"])
+        real, calls = sr.ss.read_rollout_bytes, []
+
+        def flaky(p):
+            calls.append(p)
+            if len(calls) > 1:
+                raise PermissionError("読み込みの途中で読めなくなった")
+            return real(p)
+        sr.ss.read_rollout_bytes = flaky
+        try:
+            sessions, unreadable = sr.week_sessions(self.home, "2026-10-12", "2026-10-18", with_unreadable=True)
+        finally:
+            sr.ss.read_rollout_bytes = real
+        self.assertEqual((sessions, len(unreadable)), ([], 1))
+
+    def test_an_item_without_a_time_follows_the_start_of_the_whole_reverted_session(self):
+        # revert の前半（10/9 に始まった）を、後半のファイル（10/12）がつないでいる。時刻の無い発言の項目は 10/9 の週
+        first = Rollout(T1, start="2026-10-09T01:00:00Z").turn("t1").user("u1", "前の依頼").end("前の答え")
+        u1 = next(n for n, l in enumerate(first.lines) if '"id": "u1"' in l)
+        item = json.loads(first.lines[u1])
+        del item["timestamp"]
+        first.lines[u1] = json.dumps(item, ensure_ascii=False)
+        prefix = self.write(T1, first.text(), day="2026-10-09")
+        cont = Rollout(T1, start="2026-10-12T01:00:00Z")
+        cont.lines[0] = line(cont.ts(), "session_meta", {"id": T1, "cwd": "C:\\w", "source": "cli", "history_base": {
+            "thread_id": T1, "end_byte_offset": len(first.text().encode("utf-8"))}})
+        cont.turn("t2").user("u2", "後の依頼").end("後の答え")
+        newer = self.write(T2, cont.text(), day="2026-10-12")
+        os.utime(prefix, (1000, 1000))
+        os.utime(newer, (2000, 2000))
+        self.annotate(T1, {"D1": "u1", "D2": "u2"})
+        this, _ = self.week_of("2026-10-12", "2026-10-18")
+        self.assertEqual(sorted(this[T1]["items"]), ["D2", "summary"])
+
+    def test_a_session_whose_answers_run_past_the_period_is_marked(self):
+        # 持ち主の発言は期間の最後の日（JST 10/18 23:56）、Codex の答えは翌週（10/19 00:05）
+        r = Rollout(T1, start="2026-10-18T14:56:00Z").turn("t1").user("u1", "最後の依頼")
+        r.now = datetime.datetime(2026, 10, 18, 15, 5)
+        r.agent("a1", "翌週に終わった").end("翌週に終わった")
+        self.write(T1, r.text(), day="2026-10-18")
+        this, text = self.week_of("2026-10-12", "2026-10-18")
+        self.assertTrue(this[T1]["outside_period"])
+        self.assertIn("期間の外にも続く会話", text)
 
     def test_week_detects_a_record_written_after_extract(self):
         # 抽出の後に同じ会話へ書き足されたら、古い追記を「追記あり」のまま使わない
