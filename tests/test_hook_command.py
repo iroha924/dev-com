@@ -214,6 +214,9 @@ class InstallHooksJsonTest(_InstallBase):
             ("command が 1 要素の配列", config(dict(good, command=[good["command"]]))),
             ("type が 1 要素の配列", config(dict(good, type=["command"]))),
             ("commandWindows あり", config(dict(good, commandWindows=good["command"]))),
+            ("command_windows あり（commandWindows の別名）", config(dict(good, command_windows='"C:\\old\\python.exe" "x.py"'))),
+            ("ハンドラーの欄が配列でない", json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": good}]}})),
+            ("イベントの欄が配列でない", json.dumps({"hooks": {"UserPromptSubmit": {"hooks": [good]}}})),
             ("目印が説明の文字列にあるだけ", json.dumps({"description": MARKER, "hooks": {}})),
         ]
         for name, text in cases:
