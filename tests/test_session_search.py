@@ -3165,5 +3165,28 @@ class SemanticLayerTest(unittest.TestCase):
             idx.close()
 
 
+class ReadonlyIndexPathTest(unittest.TestCase):
+    def test_readonly_opens_the_same_db_whatever_the_folder_name(self):
+        # # と ? は URI の区切りなので、そのまま埋め込むと別のファイルを開き、mode=ro も外れる
+        names = ["hash#dir", "空 白 日本語", "plain"] + ([] if os.name == "nt" else ["q?dir"])  # ? は Windows のフォルダ名に使えない
+        for name in names:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, name, "sessions.sqlite")
+                idx = ss.Index(path)
+                with idx.db:
+                    idx.db.execute("CREATE TABLE marker (x)")
+                    idx.db.execute("INSERT INTO marker VALUES (1)")
+                idx.close()
+                before = sorted(os.listdir(tmp)), sorted(os.listdir(os.path.dirname(path)))
+                ro = ss.Index(path, readonly=True)
+                try:
+                    self.assertEqual(ro.db.execute("SELECT x FROM marker").fetchall()[0][0], 1)
+                    for sql in ("CREATE TABLE other (x)", "INSERT INTO marker VALUES (2)"):
+                        with self.assertRaises(sqlite3.OperationalError):
+                            ro.db.execute(sql)
+                finally:
+                    ro.close()
+                self.assertEqual((sorted(os.listdir(tmp)), sorted(os.listdir(os.path.dirname(path)))), before)
+
 if __name__ == "__main__":
     unittest.main()

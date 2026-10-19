@@ -30,7 +30,7 @@ flowchart LR
         codex["親の Codex<br/>gpt-6.1-sol / gpt-6-luna"]
         agentsmd[/"AGENTS.md<br/>起動のたびに読む決まり"/]
         hook[["フック codex_status.py<br/>依頼のたびに利用状況を 1 行"]]
-        skills[("skill 17 個")]
+        skills[("skill 19 個")]
         child["子の Codex（custom agent 5 つ）<br/>親の会話を引き継がずに起動"]
         adops1["ado.ps1<br/>読む・承認付きで書く"]
         mcp["ADO の MCP<br/>読み取りに使える"]
@@ -102,7 +102,7 @@ flowchart TD
 
 ## 利用枠を節約する
 
-会社のアカウントは、利用枠が Plus 相当で小さい。利用枠には 5 時間ごとの枠と週ごとの枠があり、それぞれ決まった時刻にリセットされる（アカウントによっては片方だけ）。`[利用状況]` の行には見えている枠が全部出て、どちらかが 80% を超えると軽い設定を優先して案内する。消費はモデルで大きく違い、gpt-6-luna は gpt-6.1-sol の約 1/20 で済む（[前提にした事実](#前提にした事実)）。このパッケージは次の 3 つで節約する。
+会社のアカウントは、利用枠が Plus 相当で小さい。利用枠には 5 時間ごとの枠と週ごとの枠があり、それぞれ決まった時刻にリセットされる（アカウントによっては片方だけ）。`[利用状況]` の行には見えている枠が全部出て、どちらかが 80% を超えると軽い設定を優先して案内する。消費はモデルで大きく違う。gpt-6-luna の credits の単価は、入力と出力で gpt-6.1-sol の 1/20（キャッシュ済みの入力は 1/10）で、公式の目安では 5 時間に送れるメッセージがおよそ 20 倍になる。ただし credits の単価だけでは定額の枠の減り方は決まらず、会社の枠で実際に減る比は測っていない（[前提にした事実](#前提にした事実)）。このパッケージは次の 3 つで節約する。
 
 1. 親の Codex が、依頼ごとに設定の切り替えを案内する。AGENTS.md の「モデルと effort の案内」に従い、依頼を受けたら作業に手を付ける前に、勧める設定と今の設定を比べ、違えば止めて返答の最後にこの形で書く。依頼の途中では止めない。
    ```text
@@ -646,7 +646,7 @@ TOML でサンドボックスや承認の設定は上書きできず、親のも
 | Windows | 10 / 11 | |
 | PowerShell | ふだんのシェルは 7 でも 5.1 でもよい。**`ado.ps1` は、skill の手順では常に Windows PowerShell 5.1（`powershell`、Windows に標準で入っている）で起動する** | `$PSVersionTable.PSVersion`、`powershell -NoProfile -Command '$PSVersionTable.PSVersion'` |
 | Python | 3.11（確かめているのは 3.11 だけ）。`python` か `py -3` で起動できること | `python --version` |
-| Codex | 最低バージョンは未確認。手順 5 の `/skills` にこのパッケージの 17 個が出れば skill は足りている | `codex --version` |
+| Codex | 最低バージョンは未確認。手順 5 の `/skills` にこのパッケージの 19 個が出れば skill は足りている | `codex --version` |
 | モデル | サブエージェントのツールが v2 のもの（gpt-6.1-sol で確認）。`grill` などの子を起動する手順は v2 の書き方だけで書いてある | 手順 6 の後の、`$grill` の試し |
 | git | 作業リポジトリで使っているもの | `git --version` |
 
@@ -680,7 +680,7 @@ Microsoft Store の `python.exe`（`WindowsApps` の下にあるもの）は Sto
    ```
    PAT（Personal Access Token。ADO の画面で発行する、パスワードの代わりのトークン）で認証するときだけ、`ADO_AUTH` を `pat` にし、`ADO_PAT` に PAT を入れる。指定が無ければ Windows の統合認証（ログイン中のアカウント）を使う。
    **PAT はコマンドの引数やファイルに書かない。**環境変数の画面から入れるとよい。
-5. ターミナルと Codex を起動し直す。Codex の中で `/skills` を開き、このパッケージの 17 個（[一覧](../README.md#一覧)）があることを確かめる。
+5. ターミナルと Codex を起動し直す。Codex の中で `/skills` を開き、このパッケージの 19 個（[一覧](../README.md#一覧)）があることを確かめる。
    続けて `/hooks` を開き、`hirata-codex usage status` のフックを信頼する（信頼するまで動かない。もう一度信頼が要るのは `hooks.json` の定義が変わったときで、`-Force` でスクリプトだけを入れ直したときは要らない）。何か依頼して、Codex に「[利用状況] の行が見えるか」と聞くと確かめられる。
 6. 接続を確かめる。Codex に「ADO に接続できるか確かめて」と頼むか、自分で流す。
    ```powershell
@@ -784,8 +784,8 @@ sequenceDiagram
 - 更新: 新しいフォルダを持ち込み、`install.ps1 -Force` を流す。変わったものだけが置き換わり、元のものは `$HOME\.hirata-codex-backup\<日時>\` に残る。
   **`-Force` は `AGENTS.md` にも効く。**自分で書いた `~\.codex\AGENTS.md` を使っているなら、置き換わった後に退避先（`$HOME\.hirata-codex-backup\<日時>\.codex\AGENTS.md`）から戻すか、先に `-WhatIf` で何が置き換わるかを見る。
 - 削除: 次を消す。
-  - `$HOME\.agents\skills\` の下の 17 個のフォルダ（`ado`、`ci-failure-triage`、`code-comments`、`grill`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`review-triage`、`root-cause`、`session-search`、`sprint-report`、`work-item-ready`、`writing-quality`）
-  - 会話の検索の索引と専用の環境: `%LOCALAPPDATA%\hirata-codex\`（`sessions.sqlite`、`sessions.sqlite.key`、`venv\`、`models\`）
+  - `$HOME\.agents\skills\` の下の 19 個のフォルダ（`ado`、`ci-failure-triage`、`code-comments`、`deep-latest`、`grill`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`review-triage`、`root-cause`、`session-report`、`session-search`、`sprint-report`、`work-item-ready`、`writing-quality`）
+  - 会話の検索の索引と専用の環境、会話のレポート: `%LOCALAPPDATA%\hirata-codex\`（`sessions.sqlite`、`sessions.sqlite.key`、`venv\`、`models\`、`session-report\`）。skill のフォルダを消しても、ここに書いたデータは残る
   - `$HOME\.codex\agents\` の下の 5 つ（`change-risk-reviewer.toml`、`design-challenger.toml`、`incident-evidence-analyst.toml`、`prose-reviewer.toml`、`researcher.toml`。`CODEX_HOME` があればその下）
   - `$HOME\.codex\AGENTS.md`（このパッケージのものなら。`CODEX_HOME` があればその下）
   - `$HOME\.codex\hooks.json` の中の `"statusMessage": "hirata-codex usage status"` のハンドラーを先に消し、そのあと `$HOME\.codex\hooks\hirata-codex\` を消す（順番を逆にすると、残ったハンドラーが無いスクリプトを呼び、Python が終了コード 2 を返して依頼が止まる）。ハンドラーを消した後に `hooks.json` にほかのハンドラーが残っていなければ、ファイルごと消してよい
@@ -849,7 +849,7 @@ skill を足したり直したりしたら流す。`tests/test_layout.py` の一
 - Codex の custom agent は、ユーザーが頼んだとき、または AGENTS.md や skill の指示が求めたときに起動する。TOML に `sandbox_mode` や `approval_policy` を書いても親の設定は上書きされない。
   [Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)
 - `~/.codex/AGENTS.md` は毎回読まれる。[AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
-- 利用枠の消費はモデルで違う。credits の単価（100 万トークンあたり、入力 / キャッシュ済みの入力 / 出力）は、gpt-6.1-sol が 50 / 2.5 / 250、gpt-6-luna が 2.5 / 0.25 / 12.5。Plus 相当の 5 時間あたりの目安は、gpt-6.1-sol が 15〜160 メッセージ、gpt-6-luna が 350〜3,000 メッセージ。flexible pricing でない Enterprise は、多くの機能で Plus と同じ 1 人あたりの枠。[Pricing](https://learn.chatgpt.com/docs/pricing)、[Usage and cost](https://learn.chatgpt.com/docs/enterprise/chatgpt-work-usage-and-cost)
+- 利用枠の消費はモデルで違う。credits の単価（100 万トークンあたり、入力 / キャッシュ済みの入力 / 出力）は、gpt-6.1-sol が 50 / 2.5 / 250、gpt-6-luna が 2.5 / 0.25 / 12.5。Plus 相当の 5 時間あたりの目安は、gpt-6.1-sol が 15〜160 メッセージ、gpt-6-luna が 350〜3,000 メッセージ。同じページに「credits の単価だけでは、サブスクリプションに含まれる利用量は決まらない」とある（2026-10-19 に確認）。flexible pricing でない Enterprise は、多くの機能で Plus と同じ 1 人あたりの枠。[Pricing](https://learn.chatgpt.com/docs/pricing)、[Usage and cost](https://learn.chatgpt.com/docs/enterprise/chatgpt-work-usage-and-cost)
 - effort ごとの倍率は公表されていない。effort を上げるとトークンが増える。[Models](https://learn.chatgpt.com/docs/models)
 - Fast mode は、含まれている利用枠を 2.5 倍の速さで使う。[Speed](https://learn.chatgpt.com/docs/agent-configuration/speed)
 - プロンプトのキャッシュは、モデルや effort が変わると次の 1 回は効かない見込みが高い。[Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)（モデルは公式、effort は公式の説明と利用者の実測 [#42996](https://github.com/openai/codex/issues/42996)）

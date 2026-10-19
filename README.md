@@ -97,7 +97,7 @@ flowchart LR
 
 ## 利用枠
 
-- 会社のアカウントの利用枠は Plus 相当で小さい。gpt-6-luna は gpt-6.1-sol の約 1/20 で済む。
+- 会社のアカウントの利用枠は Plus 相当で小さい。gpt-6-luna の credits の単価は、入力と出力で gpt-6.1-sol の 1/20（キャッシュ済みの入力は 1/10）。会社の枠で実際に減る比は測っていない。
 - 依頼を受けると、Codex が勧めるモデルと effort を決め、今の設定と違えば止めて案内する（AGENTS.md の「モデルと effort の案内」）。
 - skill ごとの勧める設定は各 SKILL.md の冒頭の「推奨の設定」の行。表は [docs/notes.md の「利用枠を節約する」](docs/notes.md#利用枠を節約する)。
 

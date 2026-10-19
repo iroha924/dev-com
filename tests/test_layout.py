@@ -146,6 +146,20 @@ class SkillLayoutTest(unittest.TestCase):
             with self.subTest(skill=name):
                 self.assertRegex(table, r"\| \[`%s`\]\([^)]+\) \| skill \|" % re.escape(name))
 
+    def test_uninstall_lists_every_skill(self):
+        # 削除の手順の skill のフォルダの一覧が skills/ と同じ（足した skill を消し忘れて、Codex の候補に残さない）
+        notes = read(os.path.join(ROOT, "docs", "notes.md"))
+        line = next(l for l in notes.split("## 更新と削除", 1)[1].splitlines() if "$HOME\\.agents\\skills\\` の下" in l)
+        self.assertEqual(sorted(re.findall(r"`([\w-]+)`", line.split("の下", 1)[1])), skill_dirs())
+        self.assertEqual(int(re.search(r"の下の (\d+) 個", line).group(1)), len(skill_dirs()))
+
+    def test_skill_counts_match(self):
+        # 本文に書いた skill の個数が skills/ の数と同じ
+        for path in (os.path.join(ROOT, "README.md"), os.path.join(ROOT, "docs", "notes.md")):
+            for n in re.findall(r"(?:skill |`/skills`[^。|\n]*?)(\d+) 個", read(path)):
+                with self.subTest(path=os.path.basename(path), n=n):
+                    self.assertEqual(int(n), len(skill_dirs()))
+
     def test_referenced_scripts_exist(self):
         pattern = re.compile(r"\$HOME\\\.agents\\skills\\([\w-]+)\\scripts\\([\w.]+)")
         for path in markdown_files():

@@ -2004,7 +2004,8 @@ def week_sessions(home, since, until, with_unreadable=False, include_exec=False)
 
 
 def _session_state(tid):
-    """会話ごとのレポートの状態: (状態, report, annotations, overrides)。状態は 追記あり・追記なし・記録が変わった・未抽出。"""
+    """会話ごとのレポートの状態: (状態, report, annotations, overrides)。状態は 追記あり・追記なし・記録が変わった・未抽出
+    （週の材料では、追記ありでも元の記録と照らして 記録が変わった・元の記録を確かめられない に変わる）。"""
     d = report_dir(tid)
     rp, ap, op = (os.path.join(d, n) for n in ("report.json", "annotations.json", "overrides.json"))
     if not os.path.isfile(rp):
@@ -2023,6 +2024,24 @@ def _session_state(tid):
     if errors:
         return "追記なし", report, None, {}
     return "追記あり", report, ann, overrides
+
+
+def _source_state(report, path, home):
+    """report.json を作ったときに読んだ記録（sources）と今の記録を比べる。同じなら None、違えば 記録が変わった、
+    読めないか比べる材料が無ければ 元の記録を確かめられない。ファイルの場所が変わっても、中身が同じなら同じとみなす。"""
+    stored = report.get("sources")
+    try:
+        data = ss.read_rollout_bytes(path)
+    except Exception:
+        data = None
+    if data is None or not isinstance(stored, list) or not all(isinstance(s, dict) for s in stored):
+        return "元の記録を確かめられない"
+    _, now, missing = effective_record(path, data, home)
+    if missing:  # revert の前半を読み切れない。抽出のときから同じでも、前半が今の記録と同じかは分からない
+        return "元の記録を確かめられない"
+    if [(s.get("size"), s.get("sha256")) for s in stored] == [(s["size"], s["sha256"]) for s in now]:
+        return None
+    return "記録が変わった"
 
 
 def _wi_mentions(report, ann):
@@ -2044,7 +2063,9 @@ def build_week(home, since, until, include_exec=False):
     listed, unreadable = week_sessions(home, since, until, with_unreadable=True, include_exec=include_exec)
     for tid, first_ts, path in listed:
         state, report, ann, overrides = _session_state(tid)
-        row = {"id": tid, "state": state, "started": first_ts, "title": None, "work_items": [], "artifacts": [], "items": {},
+        if state == "追記あり":
+            state = _source_state(report, path, home) or state
+        row ={"id": tid, "state": state, "started": first_ts, "title": None, "work_items": [], "artifacts": [], "items": {},
                "report_html": os.path.join(report_dir(tid), "report.html")}
         if report:
             row["title"] = report["session"].get("title") or _clip(next((m["text"] for m in report["messages"] if m["kind"] == "user"), ""), 60)
@@ -2146,7 +2167,7 @@ def check_week(wann, week):
                        for a in sessions[sid]["artifacts"]):
                 errors.append("%s: 成果物 %s #%s が、このタスクの会話の成果物に無い" % (t["id"], dv["kind"], dv["id"]))
     for s in week["sessions"]:
-        if s["state"] in ("追記あり", "記録が変わった") and s["id"] not in covered:
+        if s["state"] in ("追記あり", "記録が変わった", "元の記録を確かめられない") and s["id"] not in covered:
             errors.append("%s: 週の会話がどのタスクにも入っていない。タスクの sessions に足す" % s["id"])
     for n, c in enumerate(wann["carry_over"]):
         if c["task"] is not None and c["task"] not in task_ids:

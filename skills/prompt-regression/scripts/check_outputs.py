@@ -2,6 +2,8 @@
 
 モデルは呼ばない。出力はプロジェクト側の実行手段で <outputs>/<case id>.txt に保存しておく。
 --baseline に変更前の出力ディレクトリを渡すと、変更前は通って変更後に落ちた条件（回帰）を分けて出す。
+変更後の出力が無いケースは、変更前に通っていた条件をすべて回帰に入れる。
+expect には走る条件を 1 つ以上書く（空の配列や json: false だけのケースは、cases ファイルの誤りとして止める）。
 
 cases ファイルの形:
 {
@@ -29,10 +31,36 @@ import re
 import sys
 
 KNOWN_CHECKS = {"must_include", "must_not_include", "regex", "json", "json_required_keys", "max_chars"}
+LIST_CHECKS = ("must_include", "must_not_include", "regex", "json_required_keys")
 
 
 class CasesError(Exception):
     pass
+
+
+def check_expect(cid, expect):
+    """expect の値の型を確かめ、実際に走る条件が 1 つも無ければ止める（何も確かめないケースは、空の出力でも通ってしまう）。"""
+    if not isinstance(expect, dict):
+        raise CasesError("%s: expect はオブジェクトにする" % cid)
+    unknown = set(expect) - KNOWN_CHECKS
+    if unknown:
+        raise CasesError("%s: 知らない条件 %s（綴りを確かめる）" % (cid, ", ".join(sorted(unknown))))
+    for key in LIST_CHECKS:
+        if key in expect and not (isinstance(expect[key], list) and all(isinstance(s, str) for s in expect[key])):
+            raise CasesError("%s: %s は文字列の配列にする" % (cid, key))
+    for pattern in expect.get("regex", []):
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            raise CasesError("%s: regex %r が正規表現として読めない（%s）" % (cid, pattern, e))
+    if "json" in expect and not isinstance(expect["json"], bool):
+        raise CasesError("%s: json は true か false にする" % cid)
+    if "max_chars" in expect:
+        m = expect["max_chars"]
+        if not isinstance(m, int) or isinstance(m, bool) or m < 0:
+            raise CasesError("%s: max_chars は 0 以上の整数にする" % cid)
+    if not (any(expect.get(key) for key in LIST_CHECKS) or expect.get("json") or "max_chars" in expect):
+        raise CasesError("%s: 走る条件が 1 つも無い（空の配列や json: false だけでは何も確かめない）" % cid)
 
 
 def load_cases(path):
@@ -43,15 +71,13 @@ def load_cases(path):
         raise CasesError("cases が空か、{\"cases\": [...]} の形ではない")
     ids = set()
     for c in cases:
-        cid = c.get("id")
+        cid = c.get("id") if isinstance(c, dict) else None
         if not isinstance(cid, str) or not re.match(r"^[A-Za-z0-9_.-]+$", cid):
             raise CasesError("id はファイル名に使える英数字・_ . - だけにする: %r" % cid)
         if cid in ids:
             raise CasesError("id が重複: %s" % cid)
         ids.add(cid)
-        unknown = set(c.get("expect", {})) - KNOWN_CHECKS
-        if unknown:
-            raise CasesError("%s: 知らない条件 %s（綴りを確かめる）" % (cid, ", ".join(sorted(unknown))))
+        check_expect(cid, c.get("expect", {}))
     return cases
 
 
@@ -116,6 +142,10 @@ def main(argv=None):
         before = run(cases, args.baseline)
         regressions = []
         for cid, r in after.items():
+            if r["missing"]:
+                # 変更後の出力が消えたら、変更前に通っていた条件はどれも落ちた扱いにする
+                regressions += [{"case": cid, "check": c["check"]} for c in before[cid]["checks"] if c["ok"]]
+                continue
             prev = {c["check"]: c["ok"] for c in before[cid]["checks"]}
             for c in r["checks"]:
                 if prev.get(c["check"]) is True and not c["ok"]:

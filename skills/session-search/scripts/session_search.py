@@ -27,6 +27,7 @@ import datetime
 import json
 import math
 import os
+import pathlib
 import re
 import sqlite3
 import subprocess
@@ -865,7 +866,7 @@ class Index:
         self.path = path
         self.readonly = readonly
         if readonly:
-            uri = "file:%s?mode=ro" % path.replace("\\", "/")
+            uri = pathlib.Path(path).as_uri() + "?mode=ro"  # # と ? はパーセントエンコードしないと URI の区切りになる
             self.db = sqlite3.connect(uri, uri=True, timeout=10)
         else:
             os.makedirs(os.path.dirname(path), exist_ok=True)
