@@ -223,42 +223,94 @@ class PowerShellFilesTest(unittest.TestCase):
 
 
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
-USES = re.compile(r"^\s*(- )?uses: [\w.-]+/[\w./-]+@[0-9a-f]{40}  # \S+$")
-# YAML のライブラリは使わず（標準ライブラリだけで動かす）、許す書き方を狭く決めて行で見る。アンカー・エイリアス・マージ・
-# フローの書き方は、行で見る検査をすり抜けるので使わない
-NOT_ALLOWED = [("pull_request_target", "pull_request_target を使わない（fork の PR に書き込みの権限と secret が渡る）"),
-               ("secrets.", "secret を使わない"), ("continue-on-error", "continue-on-error で落ちたテストを通さない"),
-               ("<<:", "マージキーを使わない"), ("\t", "タブを使わない")]
+# YAML のライブラリは使わず（標準ライブラリだけで動かす）、許す書き方を 1 行ずつの文法で狭く決め、それ以外は失敗にする。
+# 引用符やエスケープのキー、アンカー・エイリアス・フローの書き方は、行で見る検査をすり抜けるので許さない
+KEY_LINE = re.compile(r"^( *)(- )?([A-Za-z0-9_-]+):(?: (.+))?$")
+ITEM_LINE = re.compile(r"^( *)- ([A-Za-z0-9_./-]+)$")
+PLAIN_VALUE = re.compile(r"""^(?:"[^"\\]*"|[^\s&*!%@`'"|>\[{\\#][^\\]*)$""")
+BLOCK_SCALAR = {"|", "|-", ">", ">-"}
+USES = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}  # \S+$")
+FORBIDDEN = [(re.compile(r"pull_request_target", re.I), "pull_request_target を使わない（fork の PR に書き込みの権限と secret が渡る）"),
+             (re.compile(r"\bsecrets\b", re.I), "secret を使わない"),
+             (re.compile(r"continue-on-error", re.I), "continue-on-error で落ちたテストを通さない"),
+             (re.compile(r"<<"), "マージキーを使わない"), (re.compile(r"\t"), "タブを使わない")]
+
+
+def workflow_keys(text):
+    """workflow をキーの行の一覧 (行番号, キーの列, キー, 値) にする。2 つ目は違反の一覧。run: | の中身は行の一覧に入れない。"""
+    keys, errors, block = [], [], None
+    for n, line in enumerate(text.splitlines(), 1):
+        for pattern, why in FORBIDDEN:
+            if pattern.search(line):
+                errors.append("%d: %s" % (n, why))
+        indent = len(line) - len(line.lstrip(" "))
+        if block is not None:
+            if not line.strip() or indent > block:
+                continue
+            block = None
+        if not line.strip() or line.lstrip(" ").startswith("#"):
+            continue
+        m = KEY_LINE.match(line)
+        if m:
+            col = len(m.group(1)) + (2 if m.group(2) else 0)
+            value = m.group(4)
+            if value in BLOCK_SCALAR:
+                block = col
+            elif value is not None and not PLAIN_VALUE.match(value):
+                errors.append("%d: 値は引用符なしか、エスケープの無い \"...\" にする（アンカー・エイリアス・フローの書き方も使わない）" % n)
+            keys.append((n, col, m.group(3), value, bool(m.group(2))))
+        elif ITEM_LINE.match(line):
+            keys.append((n, len(ITEM_LINE.match(line).group(1)) + 2, None, ITEM_LINE.match(line).group(2), True))
+        else:
+            errors.append("%d: 許していない書き方（キー: 値、- キー: 値、- 値 のどれか）" % n)
+    for k, nxt in zip(keys, keys[1:]):
+        if k[2] is not None and k[3] is not None and k[3] not in BLOCK_SCALAR and nxt[1] > k[1]:
+            errors.append("%d: 値を書いたキーの下に、さらに深い行を書かない" % nxt[0])
+    return keys, errors
+
+
+def children(keys, i):
+    """keys[i] の直下のキー（keys[i] より深い列のうち、最初に出た列のもの）。keys[i] と同じか浅い列が出たら終わる。"""
+    out = []
+    for k in keys[i + 1:]:
+        if k[1] <= keys[i][1]:
+            break
+        if not out or k[1] == out[0][1]:
+            out.append(k)
+    return out
+
+
+def step_siblings(keys, i):
+    """keys[i] と同じ手順（- で始まる 1 つの項目）の、同じ列のキー。手順の中でなければ空。"""
+    col, start = keys[i][1], i
+    while not (keys[start][1] == col and keys[start][4]):
+        start -= 1
+        if start < 0 or keys[start][1] < col:
+            return []
+    out = [keys[start]]
+    for k in keys[start + 1:]:
+        if k[1] < col or (k[1] == col and k[4]):
+            break
+        if k[1] == col:
+            out.append(k)
+    return out
 
 
 def workflow_errors(text):
     """workflow の action の固定と権限の崩れ。違反の説明の一覧（空なら通る）。"""
-    lines = text.splitlines()
-    errors = []
-    for n, line in enumerate(lines, 1):
-        for word, why in NOT_ALLOWED:
-            if word in line:
-                errors.append("%d: %s" % (n, why))
-        if re.search(r"(^|\s)[&*][\w-]+|[:-] [\[{]", line):
-            errors.append("%d: アンカー・エイリアス・フローの書き方を使わない" % n)
-        if re.search(r"\buses\s*:", line) and not USES.match(line):
+    keys, errors = workflow_keys(text)
+    for i, (n, col, key, value, _) in enumerate(keys):
+        if key == "uses" and not USES.match(value or ""):
             errors.append("%d: uses は owner/repo@<40 桁の SHA>  # <版> の形で固定する" % n)
-        if re.search(r"\bpermissions\s*:", line) and line != "permissions:":
+        if key == "permissions" and (col != 0 or value is not None):
             errors.append("%d: permissions はトップレベルの 1 か所だけにする（ジョブで上書きしない）" % n)
-    tops = [n for n, line in enumerate(lines) if line == "permissions:"]
-    if len(tops) != 1 or lines[tops[0] + 1:tops[0] + 2] != ["  contents: read"] or \
-            (len(lines) > tops[0] + 2 and lines[tops[0] + 2].startswith(" ")):
+        if key == "uses" and (value or "").lower().startswith("actions/checkout@"):
+            with_i = next((keys.index(k) for k in step_siblings(keys, i) if k[2] == "with"), None)
+            if with_i is None or ("persist-credentials", "false") not in [(k[2], k[3]) for k in children(keys, with_i)]:
+                errors.append("%d: actions/checkout の with: に persist-credentials: false を付ける（トークンを残さない）" % n)
+    tops = [i for i, k in enumerate(keys) if k[2] == "permissions" and k[1] == 0]
+    if len(tops) != 1 or [(k[2], k[3]) for k in children(keys, tops[0])] != [("contents", "read")]:
         errors.append("permissions: トップレベルに 1 か所、中身は contents: read だけにする")
-    for n, line in enumerate(lines):
-        if re.match(r"^\s*(- )?uses: actions/checkout@", line):
-            col = line.index("uses:")
-            block = []
-            for nxt in lines[n + 1:]:
-                if nxt.strip() and len(nxt) - len(nxt.lstrip(" ")) < col:
-                    break
-                block.append(nxt)
-            if not any(re.match(r"^\s*persist-credentials: false$", b) for b in block):
-                errors.append("%d: actions/checkout に persist-credentials: false を付ける（トークンを残さない）" % (n + 1))
     return errors
 
 
@@ -305,12 +357,31 @@ class WorkflowTest(unittest.TestCase):
             ("continue-on-error", lambda w: w.replace("      - run:", "      - continue-on-error: true\n        run:")),
             ("アンカー", lambda w: w.replace("    steps:", "    steps: &s")),
             ("フロー", lambda w: w.replace("      - name: setup\n        uses:", "      - {name: setup, uses:")),
+            ("引用符の uses", lambda w: w.replace("        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0",
+                                                 '        "uses": actions/setup-python@v7')),
+            ("引用符の permissions", lambda w: w.replace("    runs-on:", '    "permissions": write-all\n    runs-on:')),
+            ("エスケープした禁止語", lambda w: w.replace("  pull_request:", '  "pull_request_targe\\u0074":')),
+            ("エスケープした secret", lambda w: w.replace("      - run: python", '      - env:\n          T: "${{ secrets\\u002eX }}"\n        run: python')),
+            ("空行の後の権限", lambda w: w.replace("  contents: read\n", "  contents: read\n\n  actions: write\n")),
+            ("コメントの後の権限", lambda w: w.replace("  contents: read\n", "  contents: read\n# x\n  actions: write\n")),
+            ("文字列の中の persist-credentials", lambda w: w.replace(
+                "          persist-credentials: false\n",
+                "          persist-credentials: true\n        name: |\n          persist-credentials: false\n")),
+            ("値の下の深い行", lambda w: w.replace("  contents: read\n", "  contents: read\n    actions: write\n")),
+            ("大文字の checkout", lambda w: w.replace("actions/checkout@", "Actions/Checkout@").replace("          persist-credentials: false\n", "")),
         ]
         for name, mutate in breaks:
             with self.subTest(name=name):
                 broken = mutate(GOOD_WORKFLOW)
                 self.assertNotEqual(broken, GOOD_WORKFLOW)
                 self.assertNotEqual(workflow_errors(broken), [])
+
+    def test_the_check_accepts_plain_shell_and_comments(self):
+        # run の中のシェルの * や、権限の中のコメントを、YAML の書き方の違反と取り違えない
+        for name, w in (("シェルの *", GOOD_WORKFLOW.replace("      - run: python", "      - run: echo *test.py && python")),
+                        ("権限の中のコメント", GOOD_WORKFLOW.replace("  contents: read\n", "  contents: read\n  # 読むだけ\n"))):
+            with self.subTest(name=name):
+                self.assertEqual(workflow_errors(w), [])
 
 
 if __name__ == "__main__":

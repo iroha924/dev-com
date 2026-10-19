@@ -40,6 +40,16 @@ base: main
   - コミット: `test: workflow の action の固定と権限を検査する (T02)`
   - 結果: `python3.11 -m unittest tests.test_layout` → 20 件 OK。WorkflowTest.test_the_check_catches_each_break で、見本の workflow を 11 通り（`@v7`、SHA の後の版の欠落、ジョブの `permissions: write-all`、`contents: write`、権限の追加、`persist-credentials: false` の欠落、`secrets.X`、`pull_request_target`、`continue-on-error`、アンカー、フローの書き方）に崩すと、それぞれ違反が出る。崩す前の見本は違反 0
 
+- [x] T06: workflow の検査を、許す書き方だけの 1 行ずつの文法にし、引用符・エスケープ・空行やコメントをはさんだ権限・文字列の中の persist-credentials・大文字の checkout ですり抜けないようにする
+  - 種別: 修正
+  - 計画: S3
+  - 依存: T02（直す検査が要る）
+  - 変更: `tests/test_layout.py`
+  - red: `python3.11 -m unittest tests.test_layout.WorkflowTest` → 直す前は、足した見本 8 件（引用符の uses・permissions、エスケープした禁止語・secret、空行やコメントの後の権限、文字列の中の persist-credentials、大文字の checkout）で違反が出ず、正しい見本 2 件（run の中のシェルの *、権限の中のコメント）で違反が出て、failures=10
+  - 完了条件: `python3.11 -m unittest tests.test_layout` → OK。足した見本と、値の下の深い行がそれぞれ違反になり、`.github/workflows/tests.yml` は違反 0
+  - コミット: `test: workflow の検査を許す書き方だけの文法にし、引用符やエスケープですり抜けないようにする (T06)`
+  - 結果: red は上のとおり failures=10 を実測。直した後 `python3.11 -m unittest tests.test_layout` → 21 件 OK。`workflow_errors` は `.github/workflows/tests.yml` に対して []
+
 ## P2: CI を入れ、Windows PowerShell 5.1 と PowerShell 7 で流す
 
 PR と main への push のたびに、両方のジョブで必須のテストが走ったことを CI のログで確かめられる。
@@ -74,3 +84,5 @@ docs/notes.md のテストの説明と「確かめていないこと」が、CI 
 
 ## 記録
 - 2026-10-19 / T01 / Codex のタスクごとのレビュー（06c40e8）は指摘なし。全テストは Codex の sandbox で流せず、手元で 446 件 OK を確かめた / 受け取った
+- 2026-10-19 / T02 / Codex のタスクごとのレビュー（68ec44b）が、行で見る検査のすり抜け 4 件と誤検出 1 件を再現した（F1〜F5）。すべて受け入れ / 修正タスク T06 を足して直した
+- 2026-10-19 / T03 / Codex のレビュー（bbd7594）の 1 回目は、AGENTS.md の設定の案内で止まり covered が空だった。非対話の実行と依頼文に書いてやり直し、指摘なし / 受け取った
