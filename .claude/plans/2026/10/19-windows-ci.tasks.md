@@ -22,7 +22,7 @@ base: main
 
 手元だけで完結する。CI が無くても、必須の指定で PowerShell が無い・版が違うときに落ち、workflow の固定と権限の崩れが落ちる。
 
-- [ ] T01: PowerShell の探し方を tests/powershell.py にまとめ、DEV_COM_REQUIRE_POWERSHELL と DEV_COM_EXPECT_POWERSHELL で必須と版を確かめる
+- [x] T01: PowerShell の探し方を tests/powershell.py にまとめ、DEV_COM_REQUIRE_POWERSHELL と DEV_COM_EXPECT_POWERSHELL で必須と版を確かめる
   - 種別: 追加
   - 計画: S1, S2
   - 依存: なし
@@ -30,6 +30,7 @@ base: main
   - red: `DEV_COM_REQUIRE_POWERSHELL=1 python3.11 -m unittest tests.test_ado_ps1 tests.test_hook_command` → 直す前は PowerShell の無い手元でも OK（skip で通る）
   - 完了条件: `DEV_COM_REQUIRE_POWERSHELL=1 python3.11 -m unittest tests.test_ado_ps1 tests.test_hook_command` → 0 以外で終わる。`python3.11 -m unittest tests.test_powershell` → OK。`python3.11 -m unittest discover -s tests` → OK、skip 23
   - コミット: `test: PowerShell の探し方をまとめ、CI の指定で不在と版違いを失敗にする (T01)`
+  - 結果: red は直す前に `DEV_COM_REQUIRE_POWERSHELL=1 python3.11 -m unittest tests.test_ado_ps1 tests.test_hook_command` → Ran 20、OK (skipped=20)、終了コード 0。直した後は同じコマンドが PowerShellError で終了コード 1。`python3.11 -m unittest tests.test_powershell` → OK（5 件）。`python3.11 -m unittest discover -s tests` → 446 件 OK、skipped=23。`DEV_COM_REQUIRE_POWERSHELL=1 python3.11 -m unittest discover -s tests` → test_ado_ps1・test_hook_command・test_powershell の読み込みが失敗し、FAILED (errors=3)
 - [ ] T02: tests/test_layout.py に workflow の固定と権限の検査を足す
   - 種別: 追加
   - 計画: S3

@@ -5,8 +5,8 @@
 
 import json
 import os
-import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -14,7 +14,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "skills", "ado", "scripts", "ado.ps1")
-POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import powershell  # noqa: E402
+
+POWERSHELL = powershell.PATH
 
 
 class Handler(BaseHTTPRequestHandler):
