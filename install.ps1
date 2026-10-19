@@ -76,53 +76,54 @@ function Copy-Tree([string]$from, [string]$to) {
 }
 
 function Install-One([string]$from, [string]$to) {
+    # Returns what happened: installed, unchanged, replaced, skipped (differs, kept) or whatif (not done).
     if (-not (Test-Path -LiteralPath $to)) {
-        if ($script:cmdlet.ShouldProcess($to, 'install')) {
-            Copy-Tree $from $to
-            Write-Host "installed  $to"
-        }
-        return
+        if (-not $script:cmdlet.ShouldProcess($to, 'install')) { return 'whatif' }
+        Copy-Tree $from $to
+        Write-Host "installed  $to"
+        return 'installed'
     }
     if ((Get-TreeHash $from) -eq (Get-TreeHash $to)) {
         Write-Host "unchanged  $to"
-        return
+        return 'unchanged'
     }
     if (-not $Force) {
         Write-Host "skipped    $to  (differs from this package; rerun with -Force to replace it, the old copy is backed up)"
         $script:skipped++
-        return
+        return 'skipped'
     }
-    if ($script:cmdlet.ShouldProcess($to, 'replace (old copy moved to backup)')) {
-        if ($to.StartsWith($HOME, [StringComparison]::OrdinalIgnoreCase)) {
-            $relative = $to.Substring($HOME.Length).TrimStart('\', '/')
-        } else {
-            $relative = ($to -replace '^[A-Za-z]:', '').TrimStart('\', '/')
-        }
-        $backup = Join-Path $backupRoot $relative
-        $parent = Split-Path -Parent $backup
-        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-        Move-Item -LiteralPath $to -Destination $backup
-        Copy-Tree $from $to
-        Write-Host "replaced   $to  (backup: $backup)"
+    if (-not $script:cmdlet.ShouldProcess($to, 'replace (old copy moved to backup)')) { return 'whatif' }
+    if ($to.StartsWith($HOME, [StringComparison]::OrdinalIgnoreCase)) {
+        $relative = $to.Substring($HOME.Length).TrimStart('\', '/')
+    } else {
+        $relative = ($to -replace '^[A-Za-z]:', '').TrimStart('\', '/')
     }
+    $backup = Join-Path $backupRoot $relative
+    $parent = Split-Path -Parent $backup
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    Move-Item -LiteralPath $to -Destination $backup
+    Copy-Tree $from $to
+    Write-Host "replaced   $to  (backup: $backup)"
+    return 'replaced'
 }
 
 Write-Host "Skills  -> $skillsHome"
+$skillResults = @{}
 foreach ($dir in (Get-ChildItem -LiteralPath (Join-Path $source 'skills') -Directory | Sort-Object Name)) {
-    Install-One $dir.FullName (Join-Path $skillsHome $dir.Name)
+    $skillResults[$dir.Name] = Install-One $dir.FullName (Join-Path $skillsHome $dir.Name)
 }
 
 Write-Host "Agents  -> $agentsHome"
 foreach ($file in (Get-ChildItem -LiteralPath (Join-Path $source 'agents') -Filter '*.toml' -File | Sort-Object Name)) {
-    Install-One $file.FullName (Join-Path $agentsHome $file.Name)
+    Install-One $file.FullName (Join-Path $agentsHome $file.Name) | Out-Null
 }
 
 Write-Host "AGENTS.md -> $codexHome"
-Install-One (Join-Path $source 'AGENTS.md') (Join-Path $codexHome 'AGENTS.md')
+Install-One (Join-Path $source 'AGENTS.md') (Join-Path $codexHome 'AGENTS.md') | Out-Null
 
 $hookScript = Join-Path (Join-Path (Join-Path $codexHome 'hooks') 'hirata-codex') 'codex_status.py'
 Write-Host "Hook    -> $hookScript"
-Install-One (Join-Path (Join-Path $source 'hooks') 'codex_status.py') $hookScript
+Install-One (Join-Path (Join-Path $source 'hooks') 'codex_status.py') $hookScript | Out-Null
 
 # The hook needs a real Python; the Microsoft Store stub under WindowsApps only opens the Store.
 $python = Get-Command python -ErrorAction SilentlyContinue
@@ -236,14 +237,19 @@ if (-not $hookCommand) {
 }
 
 # Files copied from a zip or a download carry the "from the internet" mark, which blocks scripts.
-# Only this package's skill folders are touched; other skills under the same folder keep their mark.
+# The mark is removed only from this package's files in the skills that now match it (installed, unchanged
+# or replaced). A skill kept because it differs, files someone added next to ours (such as .pyc), and other
+# skills under the same folder keep their mark.
 if (-not $WhatIfPreference -and [Environment]::OSVersion.Platform -eq 'Win32NT') {
     foreach ($dir in (Get-ChildItem -LiteralPath (Join-Path $source 'skills') -Directory)) {
+        if (@('installed', 'unchanged', 'replaced') -notcontains $skillResults[$dir.Name]) { continue }
         $target = Join-Path $skillsHome $dir.Name
-        try {
-            Get-ChildItem -LiteralPath $target -Recurse -File -ErrorAction SilentlyContinue | Unblock-File
-        } catch {
-            Write-Host "Unblock-File failed for ${target}: $($_.Exception.Message)"
+        foreach ($rel in (Get-SourceFiles $dir.FullName)) {
+            try {
+                Unblock-File -LiteralPath (Join-Path $target $rel)
+            } catch {
+                Write-Host "Unblock-File failed for $(Join-Path $target $rel): $($_.Exception.Message)"
+            }
         }
     }
 }

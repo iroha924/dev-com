@@ -62,7 +62,7 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`git diff HEAD~1 --stat` → 変えたのは install.ps1 と tasks だけ。両ジョブでの成功は plan の A2 で見る
   - コミット: `fix(install): hooks.json の目印のハンドラーの定義を比べ、違えば書き換えずに案内する (T03)`
   - 結果: red は run 39190779796 で、両ジョブの #6 の目印の 9 ケースが unchanged と出て落ちたことを実測。`python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（手元）。install.ps1 は ASCII だけ。直したコードの両ジョブでの結果は plan の A2 で見る
-- [ ] T04: Install-One の結果と配布物の一覧で Unblock-File の対象を決める
+- [x] T04: Install-One の結果と配布物の一覧で Unblock-File の対象を決める
   - 種別: 修正
   - 計画: S3
   - 依存: T02（直す前に落ちる試験が要る）
@@ -70,6 +70,7 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - red: `gh run view <run> --log-failed` → T02 の CI で、skipped の skill と cache.pyc の印が消えて落ちる
   - 完了条件: `python3.11 -m unittest discover -s tests` → OK（手元）。`git diff HEAD~1 --stat` → 変えたのは install.ps1 と tasks だけ。Windows のジョブでの成功は plan の A2 で見る
   - コミット: `fix(install): Unblock-File を今回入れた・一致した・置き換えた skill の配布物のファイルに限る (T04)`
+  - 結果: red は run 39190779796 の test_only_installed_or_matching_package_files_are_unblocked で、利用者の cache.pyc の印が消えて落ちたことを実測。Install-One が installed / unchanged / replaced / skipped / whatif を返し、skill のループだけで受け取る（ほかは `| Out-Null`）。Unblock-File は、結果が installed・unchanged・replaced の skill の Get-SourceFiles の各ファイルにだけ -LiteralPath でかける。`python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（手元）。Windows での結果は plan の A2 で見る
 
 - [x] T07: Windows PowerShell 5.1 の -WhatIf で、中身を比べる Get-FileHash に -WhatIf が効かないようにする
   - 種別: 修正
