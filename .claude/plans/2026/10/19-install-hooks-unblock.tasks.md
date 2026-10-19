@@ -30,13 +30,14 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
   - 完了条件: `python3.11 -m unittest discover -s tests` → OK、skip は今の 23 件に、足した PowerShell の要る試験の数を足した件数（手元。PowerShell が無いので該当の試験は skip）。CI で意図した理由で落ちることは plan の A1 で見る
   - コミット: `test: install.ps1 を一時フォルダの HOME で流す試験を Windows でも流し、hooks.json の command の違いのケースを足す (T01)`
   - 結果: `python3.11 -m unittest discover -s tests` → 451 件 OK、skipped=25（23 件に、足した InstallHooksJsonTest の 2 件）。InstallHooksJsonTest は Windows でも流れるように POSIX だけの skip を外し、流す前に子の PowerShell の `$HOME` が一時フォルダであることを assert する。直す前のコードで落ちることは CI で確かめる（plan の A1）
-- [ ] T02: #7 の Zone.Identifier の試験を Windows に足す
+- [x] T02: #7 の Zone.Identifier の試験を Windows に足す
   - 種別: 追加
   - 計画: S1
   - 依存: T01（一時フォルダの HOME で install.ps1 を流す準備が要る）
   - 変更: `tests/test_hook_command.py`
   - 完了条件: `python3.11 -m unittest discover -s tests` → OK、skip の件数は今と同じ（手元）。CI で意図した理由で落ちることは plan の A1 で見る
   - コミット: `test: Unblock-File が skip した skill と配布物でないファイルに触れないことを Windows で確かめる試験を足す (T02)`
+  - 結果: `python3.11 -m unittest discover -s tests` → 454 件 OK、skipped=28（足した UnblockTest の 3 件が Windows だけ）。印は plan の Set-Content -Stream ではなく、Python で `<file>:Zone.Identifier` に書く（同じ代替データストリーム）。Copy-Item で印が写る対照は setUp で確かめる。直す前のコードで落ちることは CI で確かめる（plan の A1）
 
 ## P2: install.ps1 を直す
 
@@ -73,3 +74,4 @@ install.ps1 の説明と docs/notes.md が、直した動きと確かめた範�
 
 ## 記録
 - 2026-10-19 / T01 / 完了条件の前: skip の件数は今と同じ、後: 今の 23 件に足した PowerShell の要る試験の数を足した件数。理由: PowerShell の要る試験を足すと、PowerShell の無い手元では skip が増えるため / plan は変えない
+- 2026-10-19 / T01 / 1012042 の CI（run 39189958694）: Ubuntu は #6 の目印のケースだけが意図どおり落ちた。Windows は `$HOME` の assert は通ったが、2 回目の install.ps1 が `Get-FileHash` を見つけられず止まり、直す前でも通るはずのケースまで落ちた / 試験の準備に、子の PowerShell で Get-FileHash が見つかるかの確かめを足し、見つからなければ試験の環境と元の環境の結果と PSModulePath を出して止めるようにした（T02 のコミットに入れた）。原因を確かめてから進め方を決める

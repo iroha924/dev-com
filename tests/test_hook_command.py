@@ -4,6 +4,7 @@ Codex はフックを、セッションのシェルで起動する（PowerShell 
 ここでは、Windows 向けの形を PowerShell の -Command と、cmd の代わりのシェル（POSIX では sh -c、Windows では cmd /C）の両方から流す。
 """
 
+import glob
 import json
 import os
 import shutil
@@ -137,6 +138,15 @@ class _InstallBase(unittest.TestCase):
         # 本物の HOME へ入れないため、向けられなければここで止める
         self.assertEqual(os.path.normcase(r.stdout.strip()), os.path.normcase(self.home), r.stderr)
         self.hooks_json = os.path.join(self.codex_home, "hooks.json")
+        # install.ps1 は中身を Get-FileHash で比べる。子の PowerShell で見つからなければ、どの環境で見つかるかを添えて止める
+        probe = "(Get-Command Get-FileHash -ErrorAction SilentlyContinue).Source; $env:PSModulePath"
+        found = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", probe],
+                               capture_output=True, encoding="utf-8", env=self.env)
+        if "Microsoft.PowerShell.Utility" not in found.stdout:
+            plain = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", probe],
+                                   capture_output=True, encoding="utf-8")
+            self.fail("試験の環境の PowerShell に Get-FileHash が無い:\n%s%s\n元の環境では:\n%s%s"
+                      % (found.stdout, found.stderr, plain.stdout, plain.stderr))
 
     def install(self, *args, script=INSTALL):
         argv = [POWERSHELL, "-NoProfile", "-NonInteractive"]
@@ -222,3 +232,113 @@ class InstallHooksJsonTest(_InstallBase):
         self.assertNotIn("is not active yet", out)
         with open(self.hooks_json, encoding="utf-8", newline="") as f:
             self.assertEqual(f.read(), text)
+
+
+def zone(path):
+    return path + ":Zone.Identifier"
+
+
+def mark(path):
+    """ダウンロードしたファイルに付く印（NTFS の代替データストリーム Zone.Identifier）を付ける。"""
+    with open(zone(path), "w", encoding="ascii") as f:
+        f.write("[ZoneTransfer]\nZoneId=3\n")
+
+
+def has_mark(path):
+    try:
+        with open(zone(path), encoding="ascii") as f:
+            return "ZoneId=3" in f.read()
+    except OSError:
+        return False
+
+
+@unittest.skipUnless(POWERSHELL and os.name == "nt", "Zone.Identifier（NTFS の代替データストリーム）は Windows でだけ作れる")
+class UnblockTest(_InstallBase):
+    """install.ps1 の Unblock-File が、今回入れた・一致した・置き換えた skill の配布物のファイルだけから印を消すこと。"""
+
+    CHANGED = "\n利用者が直した行\n"
+
+    def setUp(self):
+        super().setUp()
+        # 印の付いた配布元（zip から展開した状態）を一時フォルダに作る。リポジトリのファイルには触らない
+        self.src = os.path.join(self.tmp.name, "src")
+        ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+        for name in ("skills", "agents", "hooks"):
+            shutil.copytree(os.path.join(ROOT, name), os.path.join(self.src, name), ignore=ignore)
+        for name in ("install.ps1", "AGENTS.md"):
+            shutil.copy(os.path.join(ROOT, name), self.src)
+        self.script = os.path.join(self.src, "install.ps1")
+        self.names = sorted(os.listdir(os.path.join(self.src, "skills")))
+        for root, _, files in os.walk(os.path.join(self.src, "skills")):
+            for f in files:
+                mark(os.path.join(root, f))
+        self.skills_home = os.path.join(self.home, ".agents", "skills")
+        # 入れた先で印が消えたことを Unblock-File の働きと読むには、コピーで印が写ることが前提になる
+        first = os.path.join(self.src, "skills", self.names[0], "SKILL.md")
+        control = os.path.join(self.tmp.name, "control.md")
+        r = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
+                            "Copy-Item -LiteralPath %s -Destination %s" % (ps_quote(first), ps_quote(control))],
+                           capture_output=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(has_mark(first) and has_mark(control), "Copy-Item で印が写らない")
+
+    def skill_md(self, name, base=None):
+        return os.path.join(base or self.skills_home, name, "SKILL.md")
+
+    def place(self, name, changed=False):
+        """入れ先に、配布元と同じ（changed なら SKILL.md を 1 か所変えた）skill を置き、全ファイルに印を付ける。"""
+        dest = os.path.join(self.skills_home, name)
+        shutil.copytree(os.path.join(self.src, "skills", name), dest)
+        if changed:
+            with open(os.path.join(dest, "SKILL.md"), "a", encoding="utf-8") as f:
+                f.write(self.CHANGED)
+        for root, _, files in os.walk(dest):
+            for f in files:
+                mark(os.path.join(root, f))
+        return dest
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_only_installed_or_matching_package_files_are_unblocked(self):
+        fresh, same, differs = self.names[:3]
+        same_dir = self.place(same)
+        pyc = os.path.join(same_dir, "cache.pyc")  # 利用者の手元で増えたファイル。比べていないので解除しない
+        with open(pyc, "wb") as f:
+            f.write(b"\0")
+        mark(pyc)
+        self.place(differs, changed=True)
+        other = os.path.join(self.skills_home, "zz-not-in-this-package", "SKILL.md")
+        os.makedirs(os.path.dirname(other))
+        with open(other, "w", encoding="utf-8") as f:
+            f.write("別の配布元")
+        mark(other)
+        self.install(script=self.script)
+        self.assertTrue(os.path.isfile(self.skill_md(fresh)))
+        self.assertFalse(has_mark(self.skill_md(fresh)), "installed の印が消えていない")
+        self.assertFalse(has_mark(self.skill_md(same)), "unchanged の印が消えていない")
+        self.assertTrue(has_mark(pyc), "配布物でない cache.pyc の印が消えた")
+        self.assertTrue(self.read(self.skill_md(differs)).endswith(self.CHANGED))
+        self.assertTrue(has_mark(self.skill_md(differs)), "skipped（中身の違う skill）の印が消えた")
+        self.assertTrue(has_mark(other), "この配布物に無い skill の印が消えた")
+
+    def test_force_unblocks_the_new_copy_and_keeps_the_backup_marked(self):
+        name = self.names[2]
+        self.place(name, changed=True)
+        self.install("-Force", script=self.script)
+        self.assertEqual(self.read(self.skill_md(name)), self.read(self.skill_md(name, os.path.join(self.src, "skills"))))
+        self.assertFalse(has_mark(self.skill_md(name)), "replaced の新しいファイルの印が消えていない")
+        backups = glob.glob(os.path.join(self.home, ".hirata-codex-backup", "*", ".agents", "skills", name, "SKILL.md"))
+        self.assertEqual(len(backups), 1, backups)
+        self.assertTrue(self.read(backups[0]).endswith(self.CHANGED))
+        self.assertTrue(has_mark(backups[0]), "退避した古いファイルの印が消えた")
+
+    def test_whatif_changes_nothing(self):
+        name = self.names[2]
+        self.place(name, changed=True)
+        self.install("-Force", "-WhatIf", script=self.script)
+        self.assertTrue(self.read(self.skill_md(name)).endswith(self.CHANGED))
+        self.assertTrue(has_mark(self.skill_md(name)))
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".hirata-codex-backup")))
+        self.assertFalse(os.path.exists(self.skill_md(self.names[0])))
