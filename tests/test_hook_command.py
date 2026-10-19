@@ -211,6 +211,8 @@ class InstallHooksJsonTest(_InstallBase):
             ("正しい 1 件と type 違いの目印", config(good, dict(good, type="prompt"))),
             ("type 違い", config(dict(good, type="prompt"))),
             ("command が文字列でない", config(dict(good, command=["python", "x.py"]))),
+            ("command が 1 要素の配列", config(dict(good, command=[good["command"]]))),
+            ("type が 1 要素の配列", config(dict(good, type=["command"]))),
             ("commandWindows あり", config(dict(good, commandWindows=good["command"]))),
             ("目印が説明の文字列にあるだけ", json.dumps({"description": MARKER, "hooks": {}})),
         ]
