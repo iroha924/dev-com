@@ -114,13 +114,14 @@ Windows で一時フォルダの HOME と Zone.Identifier の対照を確かめ�
 
 install.ps1 の説明と docs/notes.md が、直した動きと確かめた範囲を書いている。
 
-- [ ] T05: install.ps1 の冒頭の説明と docs/notes.md を直す
+- [x] T05: install.ps1 の冒頭の説明と docs/notes.md を直す
   - 種別: 変更
   - 計画: S4
   - 依存: T03（書く動きが要る）, T04（書く動きが要る）
   - 変更: `install.ps1`, `docs/notes.md`
   - 完了条件: `python3.11 -m unittest tests.test_layout` → OK。`grep -n "Windows の \$HOME は環境変数で変えられない" tests/test_hook_command.py` → 何も出ない
   - コミット: `docs: install.ps1 の hooks.json と Unblock-File の動きと、確かめた範囲を書く (T05)`
+  - 結果: `python3.11 -m unittest tests.test_layout` → 21 件 OK。`grep -n "Windows の \$HOME は環境変数で変えられない" tests/test_hook_command.py` → 何も出ず終了コード 1（T01 で skip の理由ごと消えている）。install.ps1 の冒頭の説明と docs/notes.md の hooks.json・Unblock-File・テスト・確かめていないこと を直した。install.ps1 は ASCII だけ
 
 ## 記録
 - 2026-10-19 / T01 / 完了条件の前: skip の件数は今と同じ、後: 今の 23 件に足した PowerShell の要る試験の数を足した件数。理由: PowerShell の要る試験を足すと、PowerShell の無い手元では skip が増えるため / plan は変えない

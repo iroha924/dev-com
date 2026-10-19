@@ -669,11 +669,11 @@ Microsoft Store の `python.exe`（`WindowsApps` の下にあるもの）は Sto
    | `agents\<名前>.toml` | `$HOME\.codex\agents\<名前>.toml`（`CODEX_HOME` があればその下） |
    | `AGENTS.md` | `$HOME\.codex\AGENTS.md`（同上） |
    | `hooks\codex_status.py` | `$HOME\.codex\hooks\hirata-codex\codex_status.py`（同上） |
-   | （作る）`hooks.json` | `$HOME\.codex\hooks.json`（同上）。**すでにあれば触らない**（`-Force` でも）。ほかのフックが入っているかもしれないため。そのときは足す行が表示されるので、自分で `hooks.UserPromptSubmit` に足す |
+   | （作る）`hooks.json` | `$HOME\.codex\hooks.json`（同上）。**すでにあれば触らない**（`-Force` でも）。ほかのフックが入っているかもしれないため。中に `hirata-codex usage status` のハンドラーがあれば、その command を今回のものと比べ、同じなら unchanged（定義が同じというだけで、有効か・信頼したかは `/hooks` で見る）、違えば今と新しい command を並べて表示する。差し替えたら `/hooks` で信頼し直す。ハンドラーが無い・2 つある・形が違う（`commandWindows` があるなど）・JSON として読めない、のときは足す行が表示されるので、自分で `hooks.UserPromptSubmit` を直す |
 
    - 同じ名前で中身の違うものがすでにあれば、上書きせずに `skipped` と表示する。
    - 置き換えたいときだけ `-Force` を付ける。元のものは `$HOME\.hirata-codex-backup\<日時>\` へ退避される。skill のフォルダの外に置くので、Codex が同じ skill を 2 回読み込むことは無い。
-   - zip などで持ち込むと付く「インターネットから来た」印（あるとスクリプトが止められる）を、`install.ps1` が入れた skill のフォルダのファイルからだけ外す（`Unblock-File`）。ほかの skill には触れない。
+   - zip などで持ち込むと付く「インターネットから来た」印（あるとスクリプトが止められる）を、`install.ps1` が今回入れた・中身が同じと確かめた・置き換えた skill の、このパッケージのファイルからだけ外す（`Unblock-File`）。中身が違うので残した skill、そのフォルダに自分で足したファイル（`.pyc` など）、ほかの skill には触れない。
 4. ADO の Collection の URL を、ユーザーの環境変数に入れる（1 回だけ）。
    ```powershell
    [Environment]::SetEnvironmentVariable('ADO_COLLECTION_URL', 'https://<サーバー>/tfs/<Collection>', 'User')
@@ -803,14 +803,15 @@ python -m unittest discover -s tests
 - PowerShell が要るテスト（`tests/test_ado_ps1.py`、`tests/test_hook_command.py`）は、`powershell`（Windows PowerShell 5.1）があればそれを、無ければ `pwsh` を使い、どちらも無ければ飛ばす（`tests/powershell.py`）。手元で流すときはこれでよい。
 - 飛ばしたテストで通ったことにしないため、CI では環境変数で必須にする。`DEV_COM_REQUIRE_POWERSHELL=1` なら PowerShell が無いと読み込みの時点で落ち、`DEV_COM_EXPECT_POWERSHELL=5.1` なら版の Major.Minor が 5.1 でないか、版を取れないと落ちる。
   5.1 で確かめたかは、skip の件数ではなく Windows のジョブが成功したことで見る。Windows では `test_hook_command.py` の 1 件と `InstallHooksJsonTest` の 2 件を設計どおり飛ばすので、skip は 0 件にならない。
-- `install.ps1` で確かめているのは、POSIX の PowerShell 7 で `hooks.json` を 1 度だけ作り、既存のものに触らないこと（`InstallHooksJsonTest` の 2 件、Ubuntu のジョブ）だけ。Windows での skill のコピー・退避・`Unblock-File` は確かめていない。
+- `install.ps1` は、一時フォルダの HOME で流して確かめる（`tests/test_hook_command.py`。流す前に、子の PowerShell の `$HOME` がその一時フォルダになったことを確かめ、違えば本物の HOME では流さずに落ちる）。`hooks.json` の扱いは Ubuntu（PowerShell 7）と Windows（5.1）の両方、`Unblock-File` の対象と `-Force` の退避と `-WhatIf` は Windows で確かめる。
+  Python から Windows PowerShell 5.1 を起動するときは、環境から `PSModulePath` を消す。PowerShell 7 から Python を挟んで起動すると PowerShell 7 のモジュールのパスが残り、`Microsoft.PowerShell.Utility` のコマンドが見つからなくなる（about_PSModulePath の「Starting Windows PowerShell from PowerShell 7」。ターミナルの PowerShell 7 から `powershell -File` で直接起動するときは起きない）。
   `-WhatIf` は何を置くかを見るだけで、コピーや退避が正しく動くかの検査の代わりにはならない。
 
 | ファイル | 見ているもの |
 |---|---|
 | `tests/test_scripts.py` | Python スクリプト 6 本とフック（`hooks/codex_status.py`）の動作。フックは、壊れた入力や読めない記録でも終了コード 0 で「不明」と出すこと |
 | `tests/test_ado_ps1.py` | `ado.ps1` を手元の偽サーバーに向けて流し、送り先の制限・承認のハッシュ・Content-Type・拒否のときに送っていないことを確かめる。PowerShell が無ければ飛ばす |
-| `tests/test_hook_command.py` | フックのコマンドを実際にシェルから流す（PowerShell の `-Command` と、cmd の代わりのシェル）。空白・日本語・引用符を含むパス、`-EncodedCommand` の形でスクリプトが無くても依頼を止めないこと、`install.ps1` が `hooks.json` を 1 度だけ作り、既存のもの（空のものも含む）に触らないこと。PowerShell が無ければ飛ばす |
+| `tests/test_hook_command.py` | フックのコマンドを実際にシェルから流す（PowerShell の `-Command` と、cmd の代わりのシェル）。空白・日本語・引用符を含むパス、`-EncodedCommand` の形でスクリプトが無くても依頼を止めないこと、`install.ps1` が `hooks.json` を 1 度だけ作り、既存のものに触らず、目印のハンドラーの定義の違いを見分けること、`Unblock-File` が今回の対象だけから印を外すこと（Windows だけ）。PowerShell が無ければ飛ばす |
 | `tests/test_powershell.py` | PowerShell の探し方が、必須の指定で不在・版違い・版を取れないときに落ち、指定が無ければ飛ばすこと |
 | `tests/test_layout.py` | 各 skill の形（名前と説明、説明の合計が 6,000 文字以内か、手動だけの skill の一覧と `openai.yaml` が合うか、SKILL.md が参照するスクリプトとリンクと agent があるか、**子を起動する段落ごとに `fork_turns: "none"` があるか**、description が YAML で途中で切れない書き方か、コードフェンスが正しく閉じているか）、agent の形、.ps1 が ASCII だけか、workflow の action が SHA で固定され、権限が `contents: read` だけか |
 
@@ -882,7 +883,7 @@ skill を足したり直したりしたら流す。`tests/test_layout.py` の一
 2026-10-16 時点。
 
 - Windows PowerShell 5.1 で確かめたのは、CI の windows-2025（5.1.26100、英語のロケール）で流すテストまで（2026-10-19）。**会社 PC の日本語のロケール（cp932）では流していない。**
-  `install.ps1` を Windows で流すこと（コピー・退避・`Unblock-File`）は確かめていない。
+  `install.ps1` は CI の Windows で一時フォルダの HOME で流して確かめた（2026-10-19）が、会社 PC の実際のホームと、`-Confirm` で中の確認を断る操作は確かめていない。
 - 会社の ADO Server にはまだ繋いでいない。統合認証が通るか、`previewRun` で本当にビルドが作られないか、`rev` の条件で更新が止まるかは、実際のサーバーで確かめる必要がある。
 - 公式の資料で確かめられなかった API の仕様と、skill 側の扱い:
 

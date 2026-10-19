@@ -10,7 +10,12 @@
     hooks\codex_status.py -> <CODEX_HOME>\hooks\hirata-codex\codex_status.py
   and writes <CODEX_HOME>\hooks.json for that hook when no hooks.json exists yet. An existing
   hooks.json is never changed, not even with -Force, because it may hold other hooks; the lines
-  to add are printed instead. Codex runs the hook only after you trust it in /hooks.
+  to add are printed instead. If it already has the hirata-codex handler, its command is compared
+  with the one this run would write, and both are printed when they differ. Codex runs the hook
+  only after you trust it in /hooks, and again after its command changes.
+
+  On Windows, the "downloaded from the internet" mark is removed only from this package's files in
+  the skills installed, found unchanged or replaced in this run.
 
   A target that already exists with different content is left alone unless -Force is given.
   With -Force the old copy is moved to $HOME\.hirata-codex-backup\<timestamp>\ first. The backup
