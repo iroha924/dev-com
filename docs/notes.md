@@ -30,7 +30,7 @@ flowchart LR
         codex["親の Codex<br/>gpt-6.1-sol / gpt-6-luna"]
         agentsmd[/"AGENTS.md<br/>起動のたびに読む決まり"/]
         hook[["フック codex_status.py<br/>依頼のたびに利用状況を 1 行"]]
-        skills[("skill 17 個")]
+        skills[("skill 19 個")]
         child["子の Codex（custom agent 5 つ）<br/>親の会話を引き継がずに起動"]
         adops1["ado.ps1<br/>読む・承認付きで書く"]
         mcp["ADO の MCP<br/>読み取りに使える"]
@@ -646,7 +646,7 @@ TOML でサンドボックスや承認の設定は上書きできず、親のも
 | Windows | 10 / 11 | |
 | PowerShell | ふだんのシェルは 7 でも 5.1 でもよい。**`ado.ps1` は、skill の手順では常に Windows PowerShell 5.1（`powershell`、Windows に標準で入っている）で起動する** | `$PSVersionTable.PSVersion`、`powershell -NoProfile -Command '$PSVersionTable.PSVersion'` |
 | Python | 3.11（確かめているのは 3.11 だけ）。`python` か `py -3` で起動できること | `python --version` |
-| Codex | 最低バージョンは未確認。手順 5 の `/skills` にこのパッケージの 17 個が出れば skill は足りている | `codex --version` |
+| Codex | 最低バージョンは未確認。手順 5 の `/skills` にこのパッケージの 19 個が出れば skill は足りている | `codex --version` |
 | モデル | サブエージェントのツールが v2 のもの（gpt-6.1-sol で確認）。`grill` などの子を起動する手順は v2 の書き方だけで書いてある | 手順 6 の後の、`$grill` の試し |
 | git | 作業リポジトリで使っているもの | `git --version` |
 
@@ -680,7 +680,7 @@ Microsoft Store の `python.exe`（`WindowsApps` の下にあるもの）は Sto
    ```
    PAT（Personal Access Token。ADO の画面で発行する、パスワードの代わりのトークン）で認証するときだけ、`ADO_AUTH` を `pat` にし、`ADO_PAT` に PAT を入れる。指定が無ければ Windows の統合認証（ログイン中のアカウント）を使う。
    **PAT はコマンドの引数やファイルに書かない。**環境変数の画面から入れるとよい。
-5. ターミナルと Codex を起動し直す。Codex の中で `/skills` を開き、このパッケージの 17 個（[一覧](../README.md#一覧)）があることを確かめる。
+5. ターミナルと Codex を起動し直す。Codex の中で `/skills` を開き、このパッケージの 19 個（[一覧](../README.md#一覧)）があることを確かめる。
    続けて `/hooks` を開き、`hirata-codex usage status` のフックを信頼する（信頼するまで動かない。もう一度信頼が要るのは `hooks.json` の定義が変わったときで、`-Force` でスクリプトだけを入れ直したときは要らない）。何か依頼して、Codex に「[利用状況] の行が見えるか」と聞くと確かめられる。
 6. 接続を確かめる。Codex に「ADO に接続できるか確かめて」と頼むか、自分で流す。
    ```powershell
@@ -784,8 +784,8 @@ sequenceDiagram
 - 更新: 新しいフォルダを持ち込み、`install.ps1 -Force` を流す。変わったものだけが置き換わり、元のものは `$HOME\.hirata-codex-backup\<日時>\` に残る。
   **`-Force` は `AGENTS.md` にも効く。**自分で書いた `~\.codex\AGENTS.md` を使っているなら、置き換わった後に退避先（`$HOME\.hirata-codex-backup\<日時>\.codex\AGENTS.md`）から戻すか、先に `-WhatIf` で何が置き換わるかを見る。
 - 削除: 次を消す。
-  - `$HOME\.agents\skills\` の下の 17 個のフォルダ（`ado`、`ci-failure-triage`、`code-comments`、`grill`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`review-triage`、`root-cause`、`session-search`、`sprint-report`、`work-item-ready`、`writing-quality`）
-  - 会話の検索の索引と専用の環境: `%LOCALAPPDATA%\hirata-codex\`（`sessions.sqlite`、`sessions.sqlite.key`、`venv\`、`models\`）
+  - `$HOME\.agents\skills\` の下の 19 個のフォルダ（`ado`、`ci-failure-triage`、`code-comments`、`deep-latest`、`grill`、`incident-report`、`pipeline-change-check`、`pr-evidence-pack`、`pr-review-assist`、`prompt-lint`、`prompt-regression`、`python-change-check`、`review-triage`、`root-cause`、`session-report`、`session-search`、`sprint-report`、`work-item-ready`、`writing-quality`）
+  - 会話の検索の索引と専用の環境、会話のレポート: `%LOCALAPPDATA%\hirata-codex\`（`sessions.sqlite`、`sessions.sqlite.key`、`venv\`、`models\`、`session-report\`）。skill のフォルダを消しても、ここに書いたデータは残る
   - `$HOME\.codex\agents\` の下の 5 つ（`change-risk-reviewer.toml`、`design-challenger.toml`、`incident-evidence-analyst.toml`、`prose-reviewer.toml`、`researcher.toml`。`CODEX_HOME` があればその下）
   - `$HOME\.codex\AGENTS.md`（このパッケージのものなら。`CODEX_HOME` があればその下）
   - `$HOME\.codex\hooks.json` の中の `"statusMessage": "hirata-codex usage status"` のハンドラーを先に消し、そのあと `$HOME\.codex\hooks\hirata-codex\` を消す（順番を逆にすると、残ったハンドラーが無いスクリプトを呼び、Python が終了コード 2 を返して依頼が止まる）。ハンドラーを消した後に `hooks.json` にほかのハンドラーが残っていなければ、ファイルごと消してよい
