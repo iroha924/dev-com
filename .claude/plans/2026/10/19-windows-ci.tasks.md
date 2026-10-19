@@ -82,6 +82,16 @@ PR と main への push のたびに、両方のジョブで必須のテスト�
   - コミット: `test: Windows で落ちたテストの組み立てを直す (T04)`
   - 結果: red は run 39185321545 で、Ubuntu 1 件・Windows 5 件。Ubuntu と Windows の test_week_keeps_the_state_when_the_record_is_unchanged は、CLI の子（TZ を渡す）と同じプロセスの build_week（ランナーは UTC）の digest を比べていた。Windows の test_view_contents・test_input_orders_messages_and_operations は TZ=Asia/Tokyo を C ランタイムが読めず、時刻が 10:12 ではなく 02:12。test_attachments_keep_only_names は JSON の中の \\ を消せず Users が残った。test_run_eval_mixtures_and_home は 8.3 形式の一時フォルダ（RUNNER~1）と realpath の食い違い。直す前の手元で `TZ=UTC python3.11 -m unittest tests.test_session_report` → test_week_keeps_the_state_when_the_record_is_unchanged が FAIL を再現。直した後は `TZ=UTC python3.11 -m unittest tests.test_session_report tests.test_session_search` → 320 件 OK、`python3.11 -m unittest discover -s tests` → 449 件 OK、skip 23。Windows の 3 件は手元で再現できず、CI（plan の A4・A5）で確かめる
 
+- [x] T08: 週のテストで、CLI が保存した week.json と week-input.md どうしを比べる形に戻し、保存の欠けや食い違いを見つけられるようにする
+  - 種別: 修正
+  - 計画: S5
+  - 依存: T04（直す比べ方が要る）
+  - 変更: `tests/test_session_report.py`
+  - red: `python3.11 -I <scratchpad>/t08_red.py tests` → 直す前は、make_week が保存した week.json の digest と week-input.md を壊しても、test_week_keeps_the_state_when_the_record_is_unchanged と test_week_detects_a_record_written_after_extract がどちらも ok（見つけた件数 0）
+  - 完了条件: 同じ red のコマンド → 2 件とも FAIL（見つけた件数 2）。`python3.11 -m unittest tests.test_session_report.WeekTest` と `TZ=UTC python3.11 -m unittest tests.test_session_report.WeekTest` → どちらも OK
+  - コミット: `test: 週のテストで CLI が保存した出力どうしを比べ、保存の欠けを見逃さないようにする (T08)`
+  - 結果: red は見つけた件数 0 を実測。直した後は見つけた件数 2、WeekTest は JST と TZ=UTC のどちらでも 10 件 OK。`python3.11 -m unittest discover -s tests` → 449 件 OK、skip 23
+
 ## P3: 文書を CI で確かめた事実に合わせる
 
 docs/notes.md のテストの説明と「確かめていないこと」が、CI で確かめた範囲と未確認の範囲を分けて書いている。
@@ -104,3 +114,4 @@ docs/notes.md のテストの説明と「確かめていないこと」が、CI 
 - 2026-10-19 / T03, T04 / Codex のタスクごとのレビュー（2445bdf）は指摘なし / 受け取った
 - 2026-10-19 / T07 / Codex のタスクごとのレビュー（b08c8e6）は指摘なし。`actions/checkout.git@` のような綴りを GitHub が actions/checkout として読むかは Codex も確かめられず、今の検査はこの綴りの persist-credentials を見ない（未確認として残す） / 受け取った
 - 2026-10-19 / T05 / 文書だけのタスクなので、タスクごとのレビューは省いた（全差分のレビューで見る）
+- 2026-10-19 / 全体 / Codex の全差分のレビュー（f95e354..cab5ddb）が、T04 の直しで週のテストが CLI の保存した出力を比べなくなったことを再現した（F1）。受け入れ / 修正タスク T08 を足して直した
